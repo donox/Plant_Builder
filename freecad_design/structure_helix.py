@@ -2,7 +2,9 @@ import numpy as np
 import csv
 from .wafer import Wafer
 from .segment import Segment
+from .wafer import Wafer
 import re
+import Part
 
 
 def structure_dummy():
@@ -10,7 +12,7 @@ def structure_dummy():
     return
 
 
-class Structure(object):
+class Structure_Helix(object):
     def __init__(self, App, lcs_file_name):
         self.app = App
         self.doc = App.ActiveDocument
@@ -18,6 +20,13 @@ class Structure(object):
         self.lcs_writer = csv.writer(self.lcs_file)
         self.segment_list = []
         self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", "All LCS")
+        # The assumption is that a single Structure creates a single fused result such as a helix
+        # There is also an LCS that is the last location of the structure (position of the top ellipse
+        # for a helix).
+        self.result = None
+        self.wafer_list = []
+        self.result_LCS_base = None
+        self.result_LCS_top = None
 
     def add_segment(self, outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count):
         seg = Segment(lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count)
@@ -26,8 +35,6 @@ class Structure(object):
     def write_instructions(self):
         lcs_temp = self.doc.addObject('PartDesign::CoordinateSystem', 'LCS')  # Used to write file of positions
         lcs_temp.Visibility = False
-        lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', "lcs_top")
-        lcs_base = self.doc.addObject('PartDesign::CoordinateSystem', "lcs_base")   # Should be same as fuse placement
         self.lcs_group.addObjects([lcs_temp])
         total_wafer_count = -1
 
@@ -38,8 +45,6 @@ class Structure(object):
                 total_wafer_count += 1
                 e_name = 'e' + str(total_wafer_count)
                 self.lcs_writer.writerow([e_name, lcs_temp.Placement])
-                if j == 0:
-                    lcs_base.Placement = lcs_temp.Placement
                 e_name += '_top'
                 self.lift_lcs(lcs_temp, segment.lift_angle, segment.helix_radius, segment.outside_height)
                 lcs_temp.Placement.Matrix.rotateZ(segment.rotation_angle)    # This makes rotation occur within a wafer
@@ -62,42 +67,42 @@ class Structure(object):
         """Create structure from I/O stream or file"""
         with open(csv_file, newline='') as infile:
             reader = csv.reader(infile)
-            wafer_list = []
             last_location = None
+            first_location = None
             while True:
                 p1, p1_place = next(reader)
                 if p1 == "Done":
                     break
-                place = self.make_placement(p1_place)
-                loft_name = "l" + p1
+                place1 = self.make_placement(p1_place)
+                p2, p2_place = next(reader)
+                place2 = self.make_placement(p2_place)
+                lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', p2 + "lcs")
+                lcs2.Placement = place2
                 lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', p1 + "lcs")
-                lcs1.Placement = place
+                self.lcs_group.addObjects([lcs1, lcs2])
+                if not first_location:
+                    first_location = lcs1
+                lcs1.Placement = place1
                 if not show_lcs:
                     lcs1.Visibility = False
-                e1 = self.make_ellipse(p1, major_radius, minor_radius, lcs1, False, False)
-                p2, p2_place = next(reader)
-                place = self.make_placement(p2_place)
-                lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', p2 + "lcs")
-                lcs2.Placement = place
-                self.lcs_group.addObjects([lcs1, lcs2])
-                if not show_lcs:
                     lcs2.Visibility = False
-                e2 = self.make_ellipse(p1, major_radius, minor_radius, lcs2, False, False)
-                last_location = e2.Placement
-                wafer = self.doc.addObject('Part::Loft', loft_name)
-                wafer.Sections = [e1, e2]
-                wafer.Solid = True
-                wafer.Visibility = True
-                wafer_list.append(wafer)
+                wafer_name = "w" + p1
+                wafer = Wafer(self.app)
+                wafer.make_wafer_from_lcs(lcs1, lcs2, minor_radius, wafer_name)
+                print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
+                self.wafer_list.append(wafer)
             fuse = self.doc.addObject("Part::MultiFuse", "FusedResult")
-            fuse.Shapes = wafer_list
+            fuse.Shapes = [x.wafer for x in self.wafer_list]
             fuse.Visibility = True
             fuse.ViewObject.DisplayMode = "Shaded"
             self.app.activeDocument().recompute()
+            self.result = fuse
+            self.result_LCS_top = lcs2
+            self.result_LCS_base = first_location
             return fuse, last_location
 
     def make_cut_list(self, cuts_file):
-        # THIS HAS TO BE BASED ON SEGMENTS
+        # TODO: THIS HAS TO BE BASED ON SEGMENTS
         cuts_file.write("Cutting order:\n\n\n")
         parm_str = f"Lift Angle: {np.rad2deg(self.lift_angle)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
@@ -158,3 +163,63 @@ class Structure(object):
             e2_ctr = self.app.activeDocument().addObject('PartDesign::CoordinateSystem',  name + "lcs")
             e2_ctr.Placement = e2.Placement
         return e2
+
+    def rotate_vertically(self):
+
+        # Set top location before rotation, but relocate to account for position of base moved to 0,0,0
+        # print_placement("LCS_TOP (before)", self.result_LCS_top)
+        box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
+        box_y = self.result_LCS_top.Placement.Base.y - self.result_LCS_base.Placement.Base.y
+        box_z = self.result_LCS_top.Placement.Base.z - self.result_LCS_base.Placement.Base.z
+
+        # Rotate result by specified amount
+        v1 = self.result_LCS_base.Placement.Base
+        v2 = self.result_LCS_top.Placement.Base
+        rot_center = v1
+        # self.rotate_about_axis(self.result_LCS_base, v1, v2, 45, rot_center)
+        # self.rotate_about_axis(self.result_LCS_top, v1, v2, 45, rot_center)
+        # self.rotate_about_axis(self.result_LCS_base, v1, v2, 45, rot_center)  # Why duplicate above ???????
+
+        # Rotate result to place vertically on each axis.  This requires only two rotations in x and y.
+        # This does not seem to work....  is box_diag correct (it's ignoring negative portion of values)
+        x_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_y ** 2))
+        self.result.Placement.Matrix.rotateX(x_ang)
+        self.result_LCS_top.Placement.Matrix.rotateX(x_ang)
+        # self.result_LCS_base.Placement.Matrix.rotateX(x_ang)
+        y_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_x ** 2))
+        # self.result.Placement.Matrix.rotateY(y_ang)
+        self.result_LCS_top.Placement.Matrix.rotateY(y_ang)
+        print(f"Rotate X: {np.rad2deg(x_ang)}, Y: {np.rad2deg(y_ang)}")
+        # self.result_LCS_base.Placement.Matrix.rotateY(y_ang)
+
+        for wafer in self.wafer_list:
+            wafer.rotate_to_vertical(x_ang, y_ang)
+
+    def rotate_about_axis(self, obj, v1, v2, angle, rot_center):
+        """Rotate an object about an axis defined by two vectors by a specified angle. """
+        axis = self.app.Vector(v2 - v1)
+        line = Part.LineSegment()
+        line.StartPoint = v1
+        line.EndPoint = v2
+        objln = self.doc.addObject("Part::Feature", "Line")
+        objln.Shape = line.toShape()
+        objln.ViewObject.LineColor = (204.0, 170.0, 34.0)
+        objln2 = self.doc.addObject("Part::Feature", "Line")
+        objln2.Shape = line.toShape()
+        objln2.ViewObject.LineColor = (104.0, 100.0, 134.0)
+
+        rot = self.app.Rotation(axis, angle)
+        obj_base = obj.Placement.Base
+        print(f"Obj: {obj_base}, CTR: {rot_center}")
+        new_place = self.app.Placement(obj_base, rot, rot_center)
+        obj.Placement = new_place
+
+        objln.Placement = new_place
+        rot = self.app.Rotation(axis, 15)
+        obj_base = obj.Placement.Base
+        print(f"Obj: {obj_base}, CTR2: {rot_center}")
+        new_place = self.app.Placement(obj_base, rot, rot_center)
+        objln2.Placement = new_place
+
+        
+        self.doc.recompute()

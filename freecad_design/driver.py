@@ -7,7 +7,13 @@ import FreeCAD
 import numpy as np
 import csv
 import re
-from .structure import Structure
+from .structure_helix import Structure_Helix
+from .wafer import Wafer
+from .draw_lines import DrawLines
+
+
+
+
 
 # Now on github as plant-builder
 class Driver(object):
@@ -31,6 +37,11 @@ class Driver(object):
         self.do_trace = None
         self._set_up_trace()
 
+    def _gobj(self):     # Can't reference App in FreeCAD
+        def gobj(name):
+            objs = App.activeDocument.getObjectsByLabel(name)[0]
+            return objs
+
     def workflow(self):
         # Remove existing objects
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
@@ -45,6 +56,23 @@ class Driver(object):
             cuts_file_name = self.get_parm("cuts_file")
             cuts_file = open(cuts_file_name, "w+")
             helix.make_cut_list(cuts_file)
+        helix.rotate_vertically()
+
+        # # Draw some lines
+        # drawer = DrawLines(self.App, self.doc)
+        # v1 = self.App.Vector(0, 0, 0)
+        # v2 = self.App.Vector(10, 20, 90)
+        # angle = 30
+        # axis = self.App.Vector(0, 0, 1)
+        # ln = drawer.draw_line(v1, v2, angle, axis, "foo")
+        # angle = 75
+        # ln2 = drawer.draw_line(v1, v2, angle, axis, "bar")
+        # drawer.get_angles(ln)
+
+        # # make single wafer
+        # wafer = Wafer(self.App)
+        # wafer.make_wafer_from_lcs(helix.result_LCS_base, helix.result_LCS_top,
+        #                           self.get_parm("cylinder_diameter"), "foo")
 
     def _set_up_trace(self):
         self.trace_file_name = self.parent_parms.get("trace_file")
@@ -66,7 +94,7 @@ class Driver(object):
         print(f"Major: {major_radius}, Minor: {minor_radius}, Lift: {np.rad2deg(lift_angle)}")
         wafer_count = self.get_parm("wafer_count")
         show_lcs = Driver.make_tf("show_lcs", self.parent_parms)
-        helix = Structure(self.App, lcs_file_name)
+        helix = Structure_Helix(self.App, lcs_file_name)
         helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
         helix.write_instructions()
         helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
