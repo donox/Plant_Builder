@@ -12,9 +12,6 @@ from .wafer import Wafer
 from .draw_lines import DrawLines
 
 
-
-
-
 # Now on github as plant-builder
 class Driver(object):
 
@@ -27,7 +24,7 @@ class Driver(object):
         self.parent_parms = self.parent_assembly.getObjectsByLabel(master_spreadsheet)
         if self.parent_parms:
             self.parent_parms = self.parent_parms[0]
-            self.get_parm = self.handle_spreadsheet(self.parent_parms)
+            self.get_parm = self.handle_spreadsheet(self.parent_parms)   # Function to retrieve a specific parameter
         else:
             raise ValueError(f"Spreadsheet {master_spreadsheet} not found")
 
@@ -42,37 +39,45 @@ class Driver(object):
             objs = App.activeDocument.getObjectsByLabel(name)[0]
             return objs
 
+    def _get_workflow(self):
+        return self.get_parm("workflow")
+
     def workflow(self):
-        # Remove existing objects
-        do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
-        remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
-        if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
-            doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+")  # obj names start with l,e,L,E
-            for item in doc_list:
-                if item.Label != 'Parms_Master':
-                    self.doc.removeObject(item.Label)
-        helix = self.build_helix()
-        if do_cuts:
-            cuts_file_name = self.get_parm("cuts_file")
-            cuts_file = open(cuts_file_name, "w+")
-            helix.make_cut_list(cuts_file)
-        helix.rotate_vertically()
+        case = self._get_workflow()
 
-        # # Draw some lines
-        # drawer = DrawLines(self.App, self.doc)
-        # v1 = self.App.Vector(0, 0, 0)
-        # v2 = self.App.Vector(10, 20, 90)
-        # angle = 30
-        # axis = self.App.Vector(0, 0, 1)
-        # ln = drawer.draw_line(v1, v2, angle, axis, "foo")
-        # angle = 75
-        # ln2 = drawer.draw_line(v1, v2, angle, axis, "bar")
-        # drawer.get_angles(ln)
+        if case == "helix":
+            # Remove existing objects
+            do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
+            remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
+            if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
+                doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+")  # obj names start with l,e,L,E
+                for item in doc_list:
+                    if item.Label != 'Parms_Master':
+                        self.doc.removeObject(item.Label)
+            helix = self.build_helix()
+            if do_cuts:
+                cuts_file_name = self.get_parm("cuts_file")
+                cuts_file = open(cuts_file_name, "w+")
+                helix.make_cut_list(cuts_file)
+            helix.rotate_vertically()
 
-        # # make single wafer
-        # wafer = Wafer(self.App)
-        # wafer.make_wafer_from_lcs(helix.result_LCS_base, helix.result_LCS_top,
-        #                           self.get_parm("cylinder_diameter"), "foo")
+        if case == "draw_lines":
+            # Draw some lines
+            drawer = DrawLines(self.App, self.doc)
+            v1 = self.App.Vector(0, 0, 0)
+            v2 = self.App.Vector(10, 20, 90)
+            angle = 30
+            axis = self.App.Vector(0, 0, 1)
+            ln = drawer.draw_line(v1, v2, angle, axis, "foo")
+            angle = 75
+            ln2 = drawer.draw_line(v1, v2, angle, axis, "bar")
+            drawer.get_angles(ln)
+
+        if case == "make_wafer":
+            # make single wafer
+            wafer = Wafer(self.App)
+            wafer.make_wafer_from_lcs(helix.result_LCS_base, helix.result_LCS_top,
+                                      self.get_parm("cylinder_diameter"), "foo")
 
     def _set_up_trace(self):
         self.trace_file_name = self.parent_parms.get("trace_file")
@@ -97,7 +102,10 @@ class Driver(object):
         helix = Structure_Helix(self.App, lcs_file_name)
         helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
         helix.write_instructions()
-        helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
+        fused_result, last_loc = helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
+        print(f"Before: {fused_result.Placement.toMatrix()}")
+        fused_result.Placement.Matrix.rotateX(np.deg2rad(30))
+        print(f"After: {fused_result.Placement.toMatrix()}")
         return helix
 
     def handle_spreadsheet(self, sheet):

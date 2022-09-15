@@ -89,7 +89,7 @@ class Structure_Helix(object):
                 wafer_name = "w" + p1
                 wafer = Wafer(self.app)
                 wafer.make_wafer_from_lcs(lcs1, lcs2, minor_radius, wafer_name)
-                print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
+                # print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
                 self.wafer_list.append(wafer)
             fuse = self.doc.addObject("Part::MultiFuse", "FusedResult")
             fuse.Shapes = [x.wafer for x in self.wafer_list]
