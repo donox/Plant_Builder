@@ -59,7 +59,10 @@ class Driver(object):
                 cuts_file_name = self.get_parm("cuts_file")
                 cuts_file = open(cuts_file_name, "w+")
                 helix.make_cut_list(cuts_file)
+            print(f"Before: {helix.result.Placement.toMatrix()}, Name: {helix.result.Name}")
+            # helix.Placement.Matrix.rotateX(np.deg2rad(30))   # TESTING
             helix.rotate_vertically()
+            print(f"After: {helix.result.Placement.toMatrix()}")
 
         if case == "draw_lines":
             # Draw some lines
@@ -103,9 +106,9 @@ class Driver(object):
         helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
         helix.write_instructions()
         fused_result, last_loc = helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
-        print(f"Before: {fused_result.Placement.toMatrix()}")
-        fused_result.Placement.Matrix.rotateX(np.deg2rad(30))
-        print(f"After: {fused_result.Placement.toMatrix()}")
+        # print(f"Before: {fused_result.Placement.toMatrix()}, Name: {fused_result.Name}")
+        # fused_result.Placement.Matrix.rotateX(np.deg2rad(30))   # TESTING
+        # print(f"After: {fused_result.Placement.toMatrix()}")
         return helix
 
     def handle_spreadsheet(self, sheet):

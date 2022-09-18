@@ -39,7 +39,6 @@ class Wafer(object):
         e_normal = e_edge.normalAt(0)   # normal to edge lies in plane of the ellipse
         self.angle = 90 - np.rad2deg(e_normal.getAngle(self.app.Vector(0, 0, 1)))
         # print(f"{e_edge} at angle: {self.angle}")
-
         self.wafer = self.app.activeDocument().addObject('Part::Loft', wafer_name)
         self.wafer.Sections = [e1, e2]
         self.wafer.Solid = True

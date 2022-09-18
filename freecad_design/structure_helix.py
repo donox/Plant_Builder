@@ -33,7 +33,7 @@ class Structure_Helix(object):
         self.segment_list.append(seg)
 
     def write_instructions(self):
-        lcs_temp = self.doc.addObject('PartDesign::CoordinateSystem', 'LCS')  # Used to write file of positions
+        lcs_temp = self.doc.addObject("PartDesign::CoordinateSystem", "LCS_Global")  # Used to write file of positions
         lcs_temp.Visibility = False
         self.lcs_group.addObjects([lcs_temp])
         total_wafer_count = -1
@@ -165,35 +165,32 @@ class Structure_Helix(object):
         return e2
 
     def rotate_vertically(self):
-
         # Set top location before rotation, but relocate to account for position of base moved to 0,0,0
         # print_placement("LCS_TOP (before)", self.result_LCS_top)
         box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
         box_y = self.result_LCS_top.Placement.Base.y - self.result_LCS_base.Placement.Base.y
         box_z = self.result_LCS_top.Placement.Base.z - self.result_LCS_base.Placement.Base.z
 
-        # Rotate result by specified amount
-        v1 = self.result_LCS_base.Placement.Base
-        v2 = self.result_LCS_top.Placement.Base
-        rot_center = v1
-        # self.rotate_about_axis(self.result_LCS_base, v1, v2, 45, rot_center)
-        # self.rotate_about_axis(self.result_LCS_top, v1, v2, 45, rot_center)
-        # self.rotate_about_axis(self.result_LCS_base, v1, v2, 45, rot_center)  # Why duplicate above ???????
-
         # Rotate result to place vertically on each axis.  This requires only two rotations in x and y.
-        # This does not seem to work....  is box_diag correct (it's ignoring negative portion of values)
-        x_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_y ** 2))
-        self.result.Placement.Matrix.rotateX(x_ang)
+        # Unclear why np.pi is different for x and y axes.
+        x_ang = np.pi / 2 - np.arcsin(box_z / np.sqrt(box_z ** 2 + box_y ** 2))
+        # self.result.Placement.Matrix.rotateX(x_ang)
         self.result_LCS_top.Placement.Matrix.rotateX(x_ang)
-        # self.result_LCS_base.Placement.Matrix.rotateX(x_ang)
-        y_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_x ** 2))
+        self.result_LCS_base.Placement.Matrix.rotateX(x_ang)
+
+        box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
+        box_z = self.result_LCS_top.Placement.Base.z - self.result_LCS_base.Placement.Base.z
+        y_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_x ** 2)) - np.pi / 2
         # self.result.Placement.Matrix.rotateY(y_ang)
         self.result_LCS_top.Placement.Matrix.rotateY(y_ang)
+        self.result_LCS_base.Placement.Matrix.rotateY(y_ang)
+
+        # print(f"In Structure: {self.result.Placement}")
         print(f"Rotate X: {np.rad2deg(x_ang)}, Y: {np.rad2deg(y_ang)}")
-        # self.result_LCS_base.Placement.Matrix.rotateY(y_ang)
 
         for wafer in self.wafer_list:
             wafer.rotate_to_vertical(x_ang, y_ang)
+        self.app.ang = (np.rad2deg(x_ang), np.rad2deg(y_ang))
 
     def rotate_about_axis(self, obj, v1, v2, angle, rot_center):
         """Rotate an object about an axis defined by two vectors by a specified angle. """
@@ -221,5 +218,5 @@ class Structure_Helix(object):
         new_place = self.app.Placement(obj_base, rot, rot_center)
         objln2.Placement = new_place
 
-        
         self.doc.recompute()
+
