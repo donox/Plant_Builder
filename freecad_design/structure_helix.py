@@ -33,6 +33,9 @@ class Structure_Helix(object):
         self.segment_list.append(seg)
 
     def write_instructions(self):
+        # In principle, this should not be necessary, but combining with the actual construction seems to
+        # have some sort of interaction at a lower level of structure.  This separates the specification of the
+        # placements from the construction of the wafers themselves.
         lcs_temp = self.doc.addObject("PartDesign::CoordinateSystem", "LCS_Global")  # Used to write file of positions
         lcs_temp.Visibility = False
         self.lcs_group.addObjects([lcs_temp])
@@ -152,6 +155,7 @@ class Structure_Helix(object):
         :param minor_radius:  float -> ellipse minor axis / 2
         :param lcs: properly oriented lcs at center of ellipse
         :param trace_file: file_ptr -> open file pointer for tracing or None if no tracing
+        :param show_lcs:  boolean, add an LCS on top surface of ellipse
         :return: resultant ellipse
         """
         e2 = self.app.activeDocument().addObject('Part::Ellipse', name)

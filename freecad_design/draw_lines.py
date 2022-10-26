@@ -16,7 +16,7 @@ class DrawLines(object):
 
     def draw_line(self, line_start, line_end, angle, axis, name):
         # place is Placement Base, angle is a rotation, length in mm
-        print(f"\nLine: {line_start} - {line_end}")
+        # print(f"\nLine: {line_start} - {line_end}")
         ls = Part.makeLine(line_start, line_end)
         s = self.doc.addObject("Part::Feature", name)
         if angle:
@@ -25,41 +25,93 @@ class DrawLines(object):
             new_place = self.app.Placement(obj_base, rot, obj_base)
             ls.Placement = new_place
         s.Shape = ls
-        basemat = ls.Placement.Base
-        basemat = [basemat.x, basemat.y, basemat.z]
-        basemat = [np.round(x, 2) for x in basemat]
-        rotmat = ls.Placement.Rotation.toMatrix().A
-        rotmat = [np.round(xx, 2) for xx in rotmat]
-        print(f"Location: {basemat}")
-        print(f"Rotation X: {rotmat[0:4]}")
-        print(f"Rotation Y: {rotmat[4:8]}")
-        print(f"Rotation Z: {rotmat[8:12]}")
-        print(f"Rotation +: {rotmat[12:16]}")
-        xy_ang = np.round(np.rad2deg(np.arcsin(line_end[2]/ls.Length)), 2)
-        print(f"Angle to XY: {xy_ang}")
-        self.doc.recompute()
+        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name + "_lcs")
+        lcs2.Placement = ls.Placement
+        lcs2.Support = [(s, 'Vertex2')]     # Move LCS to end of line by attaching and translating
+        lcs2.MapMode = 'Translate'
+        # Rotate LCS2 so that z-axis is in direction of line
+        self.rotate_lcs_to_line(lcs2, line_start, line_end)
+        lcs3 = self.doc.addObject('PartDesign::CoordinateSystem', name + "_lcs_pre")
+        lcs3.Placement = ls.Placement
+        lcs3.Support = [(s, 'Vertex2')]     # Move LCS to end of line by attaching and translating
+        lcs3.MapMode = 'Translate'
         return s
 
-    def get_angles(self, line):
-        """Determine angle between a line (or object) and the z-axis
+    def rotate_lcs_to_line(self, lcs, line_start, line_end):
+        """Align LCS such that z-axis is along line, positive from start to end."""
+        vx = self.app.Vector(1, 0, 0)
+        vy = self.app.Vector(0, 1, 0)
+        vz = self.app.Vector(0, 0, 1)
+        del_x = line_end.x - line_start.x
+        del_y = line_end.y - line_start.y
+        del_z = line_end.z - line_start.z
+        line_vector = self.app.Vector(del_x, del_y, del_z)
+        y_rot = np.arccos(del_x / np.sqrt(del_y ** 2 + del_z ** 2))
+        x_rot = np.arccos(del_y / np.sqrt(del_x ** 2 + del_z ** 2))
+        *axis, angle = DrawLines.euler_yzx_to_axis_angle(x_rot, y_rot, 0)
 
-        Extra the yaw from the rotation matrix.  We excerpt from code in
-        https://stackoverflow.com/questions/15022630/how-to-calculate-the-angle-from-rotation-matrix"""
-        z_ang, y_ang, x_ang = line.Placement.Rotation.toEulerAngles("YawPitchRoll")
-        shape = line.Shape
-        line_start = np.round(shape.FirstParameter, 2)
-        line_end = np.round(shape.LastParameter, 2)
-        xr = np.deg2rad(x_ang)
-        line_len = np.round(line.Shape.Length, 2)
-        x_loc = np.round(line_len * np.sin(xr), 2)
-        print(f"Edge: {line_start} - {line_end}, Len: {line_len}, XLOC: {x_loc}")
-        print(f"Angles: X: {np.round(x_ang, 2)}, Y: {np.round(y_ang, 2)}, Z: {np.round(z_ang, 2)}")
-        circle = self.doc.addObject("Part::Circle", "x-circ")
-        circle.Radius = 1
-        circle.Placement = self.app.Placement(self.app.Vector(x_loc, 0, 0), self.app.Rotation(0, 0, 0))
-        box = self.doc.addObject("Part::Box", "origin")
-        box.Length = 1
-        box.Height = 1
-        box.Width = 1
-        box.Placement = self.app.Placement(self.app.Vector(0, 0, 0), self.app.Rotation(0, 0, 0))
-        return x_ang, y_ang, z_ang
+        lcs.Placement.Rotation = self.app.Rotation(self.app.Vector(*axis), angle)
+        # lcs.Placement.Matrix.rotateX(y_rot)
+        # newplace = self.app.Placement(lcs.Placement.Base, rot)
+        # lcs.Placement = newplace
+        print(f"Unit Vector: {axis}, Angle: {angle}")
+        print(f"X, Y: {np.rad2deg(x_rot)}, {np.rad2deg(y_rot)}")
+        print(f"Angles: X: {np.rad2deg(vx.getAngle(line_vector))}, Y: {np.rad2deg(vy.getAngle(line_vector))}, Z: {np.rad2deg(vz.getAngle(line_vector))}")
+        return
+
+    def get_end_of_line(self, line):
+        """Determine endpoint of an arbitrary line."""
+        # This may not work (not properly tested)
+        start = line.Placement.Base
+        z_ang, y_ang, x_ang = line.Placement.Rotation.toEulerAngles("zyx")
+        line_len = line.Length
+        x_pos = line_len * np.cos(np.deg2rad(x_ang)) + start.x
+        y_pos = line_len * np.cos(np.deg2rad(y_ang)) + start.y
+        z_pos = line_len * np.cos(np.deg2rad(z_ang)) + start.z
+        app_x = self.app.Vector(x_pos, y_pos, z_pos)
+        print(f"End Pos: {app_x}")
+        return app_x
+
+    def make_placement(self, place_str):
+        """Read FreeCAD (printed) Placement as string and convert to Placement."""
+        vectors = re.findall(r'\(.+?\)', place_str)
+        if len(vectors) < 2:
+            print(f"FOUND BAD PLACEMENT: {place_str}")
+            return
+        pos = eval("self.app.Vector" + vectors[0])
+        rot = eval("self.app.Rotation" + vectors[1])
+        new_place = self.app.Placement(pos, rot)
+        return new_place
+
+    @staticmethod
+    def euler_yzx_to_axis_angle(x_e_r, y_e_r, z_e_r, normalize=True):
+        x_e = np.deg2rad(x_e_r)
+        y_e = np.deg2rad(y_e_r)
+        z_e = np.deg2rad(z_e_r)
+        c1 = np.cos(z_e / 2)
+        s1 = np.sin(z_e / 2)
+        c2 = np.cos(x_e / 2)
+        s2 = np.sin(x_e / 2)
+        c3 = np.cos(y_e / 2)
+        s3 = np.sin(y_e / 2)
+        c1c2 = c1 * c2
+        s1s2 = s1 * s2
+        w = c1c2 * c3 - s1s2 * s3
+        x = c1c2 * s3 + s1s2 * c3
+        y = s1 * c2 * c3 + c1 * s2 * s3
+        z = c1 * s2 * c3 - s1 * c2 * s3
+        angle = 2 * np.arccos(w)
+        if normalize:
+            norm = x * x + y * y + z * z
+            if norm < 0.001:
+                # when all euler angles are zero angle =0 so
+                # we can set axis to anything to avoid divide by zero
+                x = 1
+                y = 0
+                z = 0
+            else:
+                norm = np.sqrt(norm)
+                x /= norm
+                y /= norm
+                z /= norm
+        return x, y, z, np.rad2deg(angle)

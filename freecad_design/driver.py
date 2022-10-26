@@ -45,42 +45,64 @@ class Driver(object):
     def workflow(self):
         case = self._get_workflow()
 
+        # remove existing objects
+        remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
+        do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
+        if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
+            doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+|f.+")  # obj names start with l,e,L,E
+            for item in doc_list:
+                if item.Label != 'Parms_Master':
+                    self.doc.removeObject(item.Label)
+
         if case == "helix":
-            # Remove existing objects
-            do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
-            remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
-            if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
-                doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+")  # obj names start with l,e,L,E
-                for item in doc_list:
-                    if item.Label != 'Parms_Master':
-                        self.doc.removeObject(item.Label)
-            helix = self.build_helix()
+            pass_nbr = 0
+            helix = self.build_helix(pass_nbr)
             if do_cuts:
                 cuts_file_name = self.get_parm("cuts_file")
                 cuts_file = open(cuts_file_name, "w+")
                 helix.make_cut_list(cuts_file)
-            print(f"Before: {helix.result.Placement.toMatrix()}, Name: {helix.result.Name}")
-            # helix.Placement.Matrix.rotateX(np.deg2rad(30))   # TESTING
             helix.rotate_vertically()
-            print(f"After: {helix.result.Placement.toMatrix()}")
+
+        if case == "multi":
+            pass_nbr = 0
+            while pass_nbr < 2:
+                pass_nbr += 1
+                helix = self.build_helix(pass_nbr)
+                if do_cuts:
+                    cuts_file_name = self.get_parm("cuts_file")
+                    cuts_file = open(cuts_file_name, "w+")
+                    helix.make_cut_list(cuts_file)
 
         if case == "draw_lines":
-            # Draw some lines
             drawer = DrawLines(self.App, self.doc)
-            v1 = self.App.Vector(0, 0, 0)
-            v2 = self.App.Vector(10, 20, 90)
-            angle = 30
+            p2 = "e_base_lcs"
+            p2_place = "Placement [Pos=(0.0,0.0,0.0), Yaw-Pitch-Roll=(0.0,0.0,0.0)]"
+            place2 = drawer.make_placement(p2_place)
+            lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', p2 + "_lcs")
+            lcs2.Placement = place2
+            # Draw some lines
+            v1 = self.App.Vector(110, 5, 25)
+            v2 = self.App.Vector(40, 20, 30)
+            angle = None
             axis = self.App.Vector(0, 0, 1)
-            ln = drawer.draw_line(v1, v2, angle, axis, "foo")
-            angle = 75
-            ln2 = drawer.draw_line(v1, v2, angle, axis, "bar")
-            drawer.get_angles(ln)
+            ln = drawer.draw_line(v1, v2, angle, axis, "e_foo")
 
         if case == "make_wafer":
             # make single wafer
+            v1 = self.App.Vector(0, 0, 10)
+            v2 = self.App.Vector(15, 40, 50)
+            v3 = self.App.Vector(35, 60, 80)
+            lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', "pos1_lcs")
+            lcs1.Placement.Base = v1
+            lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', "pos2_lcs")
+            lcs2.Placement.Base = v2
             wafer = Wafer(self.App)
-            wafer.make_wafer_from_lcs(helix.result_LCS_base, helix.result_LCS_top,
-                                      self.get_parm("cylinder_diameter"), "foo")
+            wafer.make_wafer_from_lcs(lcs1, lcs2, self.get_parm("cylinder_diameter"), "foo")
+            wafer.wafer.Visibility = False
+            lcs1.Visibility = False
+            lcs2.Visibility = False
+            drawer = DrawLines(self.App, self.doc)
+            drawer.draw_line(lcs2.Placement.Base, v3, None, None, "L1")
 
     def _set_up_trace(self):
         self.trace_file_name = self.parent_parms.get("trace_file")
@@ -91,7 +113,7 @@ class Driver(object):
         else:
             self.trace_file = None
 
-    def build_helix(self):
+    def build_helix(self, pass_nbr):
         lcs_file_name = self.get_parm("lcs_file")
         outside_height = self.get_parm("outside_height")
         cylinder_diameter = self.get_parm("cylinder_diameter")
