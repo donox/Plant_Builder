@@ -1,10 +1,12 @@
 import numpy as np
-
+import time
 
 class Wafer(object):
 
-    def __init__(self, app):
+    def __init__(self, app, gui, parm_set):
         self.app = app
+        self.gui = gui
+        self.parm_set = parm_set
         self.outside_height = None
         self.lift_angle = None
         self.rotation_angle = None
@@ -25,12 +27,12 @@ class Wafer(object):
 
         # create a cylinder between lcs1 and lcs2 with the cylinder axis
         # along the path between the origin points of the lcs's
-        e1 = self.app.activeDocument().addObject('Part::Ellipse', "e1")
+        e1 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
         e1.Placement = lcs1.Placement
         e1.MinorRadius = self.cylinder_radius
         e1.MajorRadius = self.cylinder_radius
         e1.Visibility = False
-        e2 = self.app.activeDocument().addObject('Part::Ellipse', "e2")
+        e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e2")
         e2.Placement = lcs2.Placement
         e2.MinorRadius = self.cylinder_radius
         e2.MajorRadius = self.cylinder_radius  # TODO: Need to account for lift angle

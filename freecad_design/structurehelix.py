@@ -5,21 +5,23 @@ from .segment import Segment
 from .wafer import Wafer
 import re
 import Part
-
+import FreeCAD
 
 def structure_dummy():
     # print(f"structure_dummy called")
     return
 
 
-class Structure_Helix(object):
-    def __init__(self, App, lcs_file_name):
-        self.app = App
+class StructureHelix(object):
+    def __init__(self, App, Gui, parm_set, lcs_file_name, position_offset):
+        self.gui = Gui
         self.doc = App.ActiveDocument
+        self.parm_set = parm_set
+        self.position_offset = position_offset      # displacement on x axis of all elements
         self.lcs_file = open(lcs_file_name, "w+")
         self.lcs_writer = csv.writer(self.lcs_file)
         self.segment_list = []
-        self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", "All LCS")
+        self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", parm_set + "All_LCS")
         # The assumption is that a single Structure creates a single fused result such as a helix
         # There is also an LCS that is the last location of the structure (position of the top ellipse
         # for a helix).
@@ -27,8 +29,11 @@ class Structure_Helix(object):
         self.wafer_list = []
         self.result_LCS_base = None
         self.result_LCS_top = None
+        self.named_result_LCS_top = None        # LCS with segment name appended
 
     def add_segment(self, outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count):
+        """Add this helix as a segment to the list of segments."""
+        # ##This appears broken - are segments part of a helix or vice versa
         seg = Segment(lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count)
         self.segment_list.append(seg)
 
@@ -36,7 +41,7 @@ class Structure_Helix(object):
         # In principle, this should not be necessary, but combining with the actual construction seems to
         # have some sort of interaction at a lower level of structure.  This separates the specification of the
         # placements from the construction of the wafers themselves.
-        lcs_temp = self.doc.addObject("PartDesign::CoordinateSystem", "LCS_Global")  # Used to write file of positions
+        lcs_temp = self.doc.addObject("PartDesign::CoordinateSystem", self.parm_set + "LCS_Global")  # Used to write file of positions
         lcs_temp.Visibility = False
         self.lcs_group.addObjects([lcs_temp])
         total_wafer_count = -1
@@ -57,13 +62,13 @@ class Structure_Helix(object):
 
     def lift_lcs(self, lcs, lift_angle, helix_radius, outside_height):
         if lift_angle == 0:
-            lcs.Placement.Base = lcs.Placement.Base + self.app.Vector(0, 0, outside_height)
+            lcs.Placement.Base = lcs.Placement.Base + FreeCAD.Vector(0, 0, outside_height)
             return
-        translate_vector = self.app.Vector(-helix_radius, 0, 0)
+        translate_vector = FreeCAD.Vector(-helix_radius, 0, 0)
         lcs.Placement.Base = lcs.Placement.Base + translate_vector
         pm = lcs.Placement.toMatrix()
         pm.rotateY(lift_angle)
-        lcs.Placement = self.app.Placement(pm)
+        lcs.Placement = FreeCAD.Placement(pm)
         lcs.Placement.Base = lcs.Placement.Base - translate_vector
 
     def create_structure(self, major_radius, minor_radius, csv_file, show_lcs):
@@ -79,9 +84,9 @@ class Structure_Helix(object):
                 place1 = self.make_placement(p1_place)
                 p2, p2_place = next(reader)
                 place2 = self.make_placement(p2_place)
-                lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', p2 + "lcs")
+                lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + p2 + "lcs")
                 lcs2.Placement = place2
-                lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', p1 + "lcs")
+                lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + p1 + "lcs")
                 self.lcs_group.addObjects([lcs1, lcs2])
                 if not first_location:
                     first_location = lcs1
@@ -89,17 +94,20 @@ class Structure_Helix(object):
                 if not show_lcs:
                     lcs1.Visibility = False
                     lcs2.Visibility = False
-                wafer_name = "w" + p1
-                wafer = Wafer(self.app)
+                wafer_name = self.parm_set + "w" + p1
+                wafer = Wafer(FreeCAD, self.gui, self.parm_set)
                 wafer.make_wafer_from_lcs(lcs1, lcs2, minor_radius, wafer_name)
                 # print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
                 self.wafer_list.append(wafer)
-            fuse = self.doc.addObject("Part::MultiFuse", "FusedResult")
+            fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
             fuse.Shapes = [x.wafer for x in self.wafer_list]
             fuse.Visibility = True
             fuse.ViewObject.DisplayMode = "Shaded"
-            self.app.activeDocument().recompute()
+            FreeCAD.activeDocument().recompute()
             self.result = fuse
+            self.named_result_LCS_top = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_top")
+            self.named_result_LCS_top.Placement = lcs2.Placement
+            self.named_result_LCS_top.Visibility = False
             self.result_LCS_top = lcs2
             self.result_LCS_base = first_location
             return fuse, last_location
@@ -136,13 +144,15 @@ class Structure_Helix(object):
         self.cuts_file.close()
 
     def make_placement(self, place_str):
+        """Create a placement as read from file."""
         vectors = re.findall(r'\(.+?\)', place_str)
         if len(vectors) < 2:
             print(f"FOUND BAD PLACEMENT: {place_str}")
             return
-        pos = eval("self.app.Vector" + vectors[0])
-        rot = eval("self.app.Rotation" + vectors[1])
-        newplace = self.app.Placement(pos, rot)
+        pos = eval("FreeCAD.Vector" + vectors[0])
+        pos[0] += self.position_offset
+        rot = eval("FreeCAD.Rotation" + vectors[1])
+        newplace = FreeCAD.Placement(pos, rot)
         return newplace
 
     def make_ellipse(self, name, major_radius, minor_radius, lcs, trace_file, show_lcs):
@@ -158,13 +168,13 @@ class Structure_Helix(object):
         :param show_lcs:  boolean, add an LCS on top surface of ellipse
         :return: resultant ellipse
         """
-        e2 = self.app.activeDocument().addObject('Part::Ellipse', name)
+        e2 = FreeCAD.activeDocument().addObject('Part::Ellipse', self.parm_set + name)
         e2.MajorRadius = major_radius
         e2.MinorRadius = minor_radius
         e2.Placement = lcs.Placement
         e2.Visibility = False
         if show_lcs and not name.endswith('top'):
-            e2_ctr = self.app.activeDocument().addObject('PartDesign::CoordinateSystem',  name + "lcs")
+            e2_ctr = FreeCAD.activeDocument().addObject('PartDesign::CoordinateSystem',  self.parm_set + name + "lcs")
             e2_ctr.Placement = e2.Placement
         return e2
 
@@ -180,6 +190,7 @@ class Structure_Helix(object):
         x_ang = np.pi / 2 - np.arcsin(box_z / np.sqrt(box_z ** 2 + box_y ** 2))
         # self.result.Placement.Matrix.rotateX(x_ang)
         self.result_LCS_top.Placement.Matrix.rotateX(x_ang)
+        self.named_result_LCS_top.Placement.Matrix.rotateX(x_ang)
         self.result_LCS_base.Placement.Matrix.rotateX(x_ang)
 
         box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
@@ -187,6 +198,7 @@ class Structure_Helix(object):
         y_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_x ** 2)) - np.pi / 2
         # self.result.Placement.Matrix.rotateY(y_ang)
         self.result_LCS_top.Placement.Matrix.rotateY(y_ang)
+        self.named_result_LCS_top.Placement.Matrix.rotateY(y_ang)
         self.result_LCS_base.Placement.Matrix.rotateY(y_ang)
 
         # print(f"In Structure: {self.result.Placement}")
@@ -194,32 +206,32 @@ class Structure_Helix(object):
 
         for wafer in self.wafer_list:
             wafer.rotate_to_vertical(x_ang, y_ang)
-        self.app.ang = (np.rad2deg(x_ang), np.rad2deg(y_ang))
+        FreeCAD.ang = (np.rad2deg(x_ang), np.rad2deg(y_ang))
 
     def rotate_about_axis(self, obj, v1, v2, angle, rot_center):
         """Rotate an object about an axis defined by two vectors by a specified angle. """
-        axis = self.app.Vector(v2 - v1)
+        axis = FreeCAD.Vector(v2 - v1)
         line = Part.LineSegment()
         line.StartPoint = v1
         line.EndPoint = v2
-        objln = self.doc.addObject("Part::Feature", "Line")
+        objln = self.doc.addObject("Part::Feature", self.parm_set + "Line")
         objln.Shape = line.toShape()
         objln.ViewObject.LineColor = (204.0, 170.0, 34.0)
-        objln2 = self.doc.addObject("Part::Feature", "Line")
+        objln2 = self.doc.addObject("Part::Feature", self.parm_set + "Line")
         objln2.Shape = line.toShape()
         objln2.ViewObject.LineColor = (104.0, 100.0, 134.0)
 
-        rot = self.app.Rotation(axis, angle)
+        rot = FreeCAD.Rotation(axis, angle)
         obj_base = obj.Placement.Base
         print(f"Obj: {obj_base}, CTR: {rot_center}")
-        new_place = self.app.Placement(obj_base, rot, rot_center)
+        new_place = FreeCAD.Placement(obj_base, rot, rot_center)
         obj.Placement = new_place
 
         objln.Placement = new_place
-        rot = self.app.Rotation(axis, 15)
+        rot = FreeCAD.Rotation(axis, 15)
         obj_base = obj.Placement.Base
         print(f"Obj: {obj_base}, CTR2: {rot_center}")
-        new_place = self.app.Placement(obj_base, rot, rot_center)
+        new_place = FreeCAD.Placement(obj_base, rot, rot_center)
         objln2.Placement = new_place
 
         self.doc.recompute()
