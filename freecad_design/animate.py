@@ -8,9 +8,12 @@ def reset():
 
 
 def update():
+    FreeCAD.animation_count += 1
     FreeCAD.animation_update()
     # update the scene
     Gui.updateGui()
+    if FreeCAD.animation_count >= 21:
+        stopper()
 
 
 def stopper():
@@ -20,11 +23,12 @@ def stopper():
 FreeCAD.stopper = stopper
 
 try:
+    # for j in range(10):
+    #     update()
     timer = QtCore.QTimer()
     # connect timer event to function "update"
     timer.timeout.connect(update)
-    # start the timer to trigger "update" every 10 ms
-    timer.start(50)
+    timer.start(100)
     if not timer.isActive():
         print("NOT RUNNING")
 except Exception as e:

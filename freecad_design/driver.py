@@ -13,9 +13,7 @@ import sys
 import tokenize
 from .structurehelix import StructureHelix
 from .wafer import Wafer
-from .draw_lines import DrawLines
-from PySide import QtCore
-from math import sin, cos, radians
+
 
 # Now on github as plant-builder
 class Driver(object):
@@ -39,6 +37,7 @@ class Driver(object):
         self.do_trace = None
         self._set_up_trace()
         self.get_object_by_label = self._gobj()
+        FreeCAD.gobj = self.get_object_by_label         # simplify getting things in console
         self.parm_set = self.get_parm("set_name")
         print(f"Parameter Set: {self.parm_set}")
         self.position_offset = self.get_parm("position_offset")
@@ -99,21 +98,26 @@ class Driver(object):
                         self.doc.removeObject(item.Label)
                     except:
                         pass
-        if not do_cuts:
+        if not do_cuts and (case == "helix" or case == "animate"):
             doc_list = self.doc.findObjects(Name=self.parm_set + ".+")  # remove prior occurrence of set being built
             for item in doc_list:
                 if item.Label != 'Parms_Master':
                     self.doc.removeObject(item.Label)
 
         if case == "helix":
-            print(f"Working parameter set: {self.parm_set}")
-            helix = self.build_helix(self.parm_set)
-            if do_cuts:
-                cuts_file_name = self.get_parm("cuts_file")
-                cuts_file = open(cuts_file_name, "w+")
-                helix.make_cut_list(cuts_file)
-            helix.rotate_vertically()
-            self.align_segments()
+            self.make_helix()
+
+        if case == "animate":
+            self.make_helix()
+            h1 = self.get_object_by_label("s1_FusedResult")
+            h2 = self.get_object_by_label("s2_FusedResult")
+            l1 = self.get_object_by_label("s1_lcs_top")
+            l2 = self.get_object_by_label("s2_lcs_base")
+            tr = self.make_transform_align(l2, l1)
+            print(f"H1: {h1.Placement}\nH2: {h2.Placement}\nTR: {tr}")
+            FreeCAD.tr = tr
+            h2.Placement = tr.multiply(h1.Placement)
+            # self.animate()
 
         if case == "make_wafer":
             # make single wafer
@@ -131,21 +135,6 @@ class Driver(object):
             lcs2.Visibility = False
             drawer = DrawLines(self.App, self.doc)
             drawer.draw_line(lcs2.Placement.Base, v3, None, None, self.parm_set + "L1")
-
-        if case == "draw_lines":
-            # Used only as test
-            drawer = DrawLines(self.App, self.doc)
-            p2 = "e_base_lcs"
-            p2_place = "Placement [Pos=(0.0,0.0,0.0), Yaw-Pitch-Roll=(0.0,0.0,0.0)]"
-            place2 = drawer.make_placement(p2_place)
-            lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', p2 + "_lcs")
-            lcs2.Placement = place2
-            # Draw some lines
-            v1 = self.App.Vector(110, 5, 25)
-            v2 = self.App.Vector(40, 20, 30)
-            angle = None
-            axis = self.App.Vector(0, 0, 1)
-            ln = drawer.draw_line(v1, v2, angle, axis, "e_foo")
 
         if case == "other":
             lcs = self.doc.getObjectsByLabel("LCS")[0]
@@ -172,25 +161,54 @@ class Driver(object):
             rot = self.App.Rotation(norm_axis, zhat, lcs_axis, 'ZYX')
             cube.Placement = self.App.Placement(a, rot)
 
-        if case == "animate":
-            # driver_animate implements the animation increments and is problem specific
-            # animate implements the timer and calls to update in QTCore
-            #    This occurs because of the access to FreeCAD's environment and the inability of
-            #    the QT timer to deal with a procedure name embedded in another procedure
-            file_path = '/home/don/FreecadProjects/Macros/PyMacros/Plant_Builder/freecad_design/driver_animate.py'
-            module_name = 'driver_animate'
-            spec = importlib.util.spec_from_file_location(module_name, file_path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+    def make_helix(self):
+        do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
+        print(f"Working parameter set: {self.parm_set}")
+        helix = self.build_helix(self.parm_set)
+        if do_cuts:
+            cuts_file_name = self.get_parm("cuts_file")
+            cuts_file = open(cuts_file_name, "w+")
+            helix.make_cut_list(cuts_file)
+        # helix.rotate_vertically()
+        # self.align_segments()
 
-            file_path = '/home/don/FreecadProjects/Macros/PyMacros/Plant_Builder/freecad_design/animate.py'
-            module_name = 'animate'
-            spec = importlib.util.spec_from_file_location(module_name, file_path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
 
+    def make_transform_align(self, helix_1, helix_2):
+        l1 = helix_1.Placement
+        l2 = helix_2.Placement
+        tr = l1.inverse().multiply(l2)
+        FreeCAD.align = tr
+        return tr
+
+    def animate(self):
+        helix = self.get_object_by_label("s2_FusedResult")
+        lcs1 = self.get_object_by_label("s1_lcs_top")
+        lcs2 = self.get_object_by_label("s2_lcs_top")
+        if not helix or not lcs1 or not lcs2:
+            print("Failed to find object")
+            return
+        # else:
+        #     print(f"{helix.Placement, lcs1.Placement, lcs2.Placement}")
+
+        # driver_animate implements the animation increments and is problem specific
+        # animate implements the timer and calls to update in QTCore
+        #    This occurs because of the access to FreeCAD's environment and the inability of
+        #    the QT timer to deal with a procedure name embedded in another procedure
+
+        file_path = '/home/don/FreecadProjects/Macros/PyMacros/Plant_Builder/freecad_design/driver_animate.py'
+        module_name = 'driver_animate'
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        drive_animation = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = drive_animation
+        spec.loader.exec_module(drive_animation)
+        rotate_cube = drive_animation.RotateCube(lcs1, helix, lcs2)
+
+        file_path = '/home/don/FreecadProjects/Macros/PyMacros/Plant_Builder/freecad_design/animate.py'
+        module_name = 'animate'
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
 
     def align_segments(self):
         """Align existing segments end-to-end."""
@@ -209,58 +227,7 @@ class Driver(object):
 
     def move_and_rotate_segment(self, base_lcs, segment, segment_top_lcs):
         """Rotate a segment and its top_lcs such that it is aligned with the base_lcs (top from prior segment"""
-        App = self.App
-        doc = self.doc
-        # obj = doc.getObject("BaseFeature")
-        # shp = obj.Shape
-        # n1 = shp.Curve.Direction
-        n1 = base_lcs.Placement.Rotation.Axis
-        zhat = App.Vector(0, 0, 1)
-        # a = shp.Vertexes[1].Point
-        a = base_lcs.Placement.Base
-        rot = App.Rotation(n1.cross(zhat), zhat, n1, 'ZXY')
-        pl = App.Placement(a, rot)
-        # lcs = doc.getObject('Body').newObject('PartDesign::CoordinateSystem', 'Local_CS')
-        # lcs.Placement = pl
-        segment.Placement = pl
-
-        # zhat = self.App.Vector(0, 0, 1)
-        # direction = base_lcs.Placement.Rotation.multVec(zhat)
-        # print(f"LCS Direction: {direction}, Angle: {np.rad2deg(zhat.getAngle(direction))}, Euler: {base_lcs.Placement.Rotation.toEulerAngles('ZXY')}")
-        # seg_dir = segment.Placement.Rotation.multVec(zhat)
-        # print(f"Seg Direction: {seg_dir}, Angle: {np.rad2deg(zhat.getAngle(seg_dir))} Euler: {segment.Placement.Rotation.toEulerAngles('ZXY')}")
-        # rot = self.App.Rotation(seg_dir.cross(direction), zhat, seg_dir, 'ZXY')
-        # place = self.App.Placement(base_lcs.Placement.Base, rot)
-        # segment.Placement = place
-        # segment_top_lcs.Placement.Rotation = rot
-
-    def makeRotatingPlacement(self, axis_origin, axis_dir, angle):
-        """From https://forum.freecadweb.org/viewtopic.php?t=16110"""
-        App = self.App     # local copy
-        OZ = App.Vector(0, 0, 1)
-
-        # We want one Placement object that will accomplish a rotation about the given axis
-        #
-        # Our goal can be achieved in a succession of steps
-        # 1) Map from local coordinates to global
-        # 2) Perform the rotation in the global coordinate system
-        # 3) Map the result back to the local coordinate system
-        #
-
-        # 3) This Placement defines the origin and "z" axis of the local coordinate system
-        # It can also be thought of as a map into the local system.
-        map_to_local = App.Placement(axis_origin, App.Rotation(OZ, axis_dir))
-
-        # 1) The inverse will take objects in the local system and map them to the global
-        # system : center at origin, oriented along the Z axis
-        map_to_global = map_to_local.inverse()
-
-        #  2) This Placement works in the global system to rotate by angle theta around z axis
-        global_rotate = App.Placement(App.Vector(0, 0, 0), App.Rotation(angle, 0, 0))
-
-        result = map_to_local.multiply(global_rotate.multiply(map_to_global))
-
-        return result
+        return
 
     def _set_up_trace(self):
         self.trace_file_name = self.parent_parms.get("trace_file")

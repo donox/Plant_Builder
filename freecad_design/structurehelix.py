@@ -7,10 +7,6 @@ import re
 import Part
 import FreeCAD
 
-def structure_dummy():
-    # print(f"structure_dummy called")
-    return
-
 
 class StructureHelix(object):
     def __init__(self, App, Gui, parm_set, lcs_file_name, position_offset):
@@ -30,6 +26,7 @@ class StructureHelix(object):
         self.result_LCS_base = None
         self.result_LCS_top = None
         self.named_result_LCS_top = None        # LCS with segment name appended
+        self.named_result_LCS_base = None
 
     def add_segment(self, outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count):
         """Add this helix as a segment to the list of segments."""
@@ -103,13 +100,17 @@ class StructureHelix(object):
             fuse.Shapes = [x.wafer for x in self.wafer_list]
             fuse.Visibility = True
             fuse.ViewObject.DisplayMode = "Shaded"
+            fuse.Placement = first_location.Placement      # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             FreeCAD.activeDocument().recompute()
             self.result = fuse
             self.named_result_LCS_top = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_top")
             self.named_result_LCS_top.Placement = lcs2.Placement
-            self.named_result_LCS_top.Visibility = False
+            self.named_result_LCS_top.Visibility = True             # !!!!!!!!!!!!!!!!!!!!!
             self.result_LCS_top = lcs2
             self.result_LCS_base = first_location
+            self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_base")
+            self.named_result_LCS_base.Placement = first_location.Placement
+            self.named_result_LCS_base.Visibility = True
             return fuse, last_location
 
     def make_cut_list(self, cuts_file):
