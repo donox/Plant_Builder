@@ -13,6 +13,7 @@ import sys
 import tokenize
 from .structurehelix import StructureHelix
 from .wafer import Wafer
+from .segment import Segment
 
 
 # Now on github as plant-builder
@@ -28,50 +29,50 @@ class Driver(object):
         self.parent_parms = self.parent_assembly.getObjectsByLabel(master_spreadsheet)
         if self.parent_parms:
             self.parent_parms = self.parent_parms[0]
-            self.get_parm, self.set_parm = self.handle_spreadsheet(self.parent_parms)   # Functions to handle parameters
+            self.get_parm, self.set_parm = self.handle_spreadsheet(self.parent_parms)  # Functions to handle parameters
         else:
             raise ValueError(f"Spreadsheet {master_spreadsheet} not found")
+        self.segment_list = []
         # trace parms
         self.trace_file_name = None
         self.trace_file = None
         self.do_trace = None
         self._set_up_trace()
         self.get_object_by_label = self._gobj()
-        FreeCAD.gobj = self.get_object_by_label         # simplify getting things in console
-        self.parm_set = self.get_parm("set_name")
-        print(f"Parameter Set: {self.parm_set}")
+        FreeCAD.gobj = self.get_object_by_label  # simplify getting things in console
         self.position_offset = self.get_parm("position_offset")
         # sequence_list is a string member of the property list associated with the master spreadsheet.
         # The syntax of the sequence list is:
         # "xx_yy_... where xx_ is of the form "sd_" for d as a digit(s) with the order of the
         # elements giving the prepended string naming the segment or LCS (top or bottom) in the ordered
         # set of segments defining the resultant structure.  The last element is the name for the current sequence.
-        self.sequence_list = self.get_sequence_property()
-        if self.sequence_list:
-            self.current_sequence_name = self.sequence_list[-1]
-        else:
-            self.current_sequence_name = None
+        # self.sequence_list = self.get_sequence_property()
+        # if self.sequence_list:
+        #     self.current_sequence_name = self.sequence_list[-1]
+        # else:
+        #     self.current_sequence_name = None
 
-    def get_sequence_property(self):
-        """Get list of items giving sequence of segments in overall design."""
-        try:
-            seq_string = self.get_parm("seg_sequence")
-            if seq_string is not None:
-                seq_list = seq_string.split("_")[0:-1]
-            else:
-                seq_list = []
-            return seq_list
-        except Exception as e:
-            print(f"Failed to get/find Sequence Item: {e.args}")
+    # def get_sequence_property(self):
+    #     """Get list of items giving sequence of segments in overall design."""
+    #     try:
+    #         seq_string = self.get_parm("seg_sequence")
+    #         if seq_string is not None:
+    #             seq_list = seq_string.split("_")[0:-1]
+    #         else:
+    #             seq_list = []
+    #         return seq_list
+    #     except Exception as e:
+    #         print(f"Failed to get/find Sequence Item: {e.args}")
 
-    def add_sequence_property(self, element):
-        """Add an element to existing sequence list and update spreadsheet."""
-        self.sequence_list.append(element + "_")
-        seq_content = "_".join(self.sequence_list)
-        self.set_parm("seg_sequence", seq_content)
+    # def add_sequence_property(self, element):
+    #     """Add an element to existing sequence list and update spreadsheet."""
+    #     self.sequence_list.append(element + "_")
+    #     seq_content = "_".join(self.sequence_list)
+    #     self.set_parm("seg_sequence", seq_content)
 
     def _gobj(self):
         """Function to get an object by label in FreeCAD"""
+
         def gobj(name):
             obj = self.App.ActiveDocument.getObjectsByLabel(name)
             if obj:
@@ -79,6 +80,7 @@ class Driver(object):
             else:
                 obj = None
             return obj
+
         return gobj
 
     def _get_workflow(self):
@@ -98,11 +100,16 @@ class Driver(object):
                         self.doc.removeObject(item.Label)
                     except:
                         pass
-        if not do_cuts and (case == "helix" or case == "animate"):
-            doc_list = self.doc.findObjects(Name=self.parm_set + ".+")  # remove prior occurrence of set being built
-            for item in doc_list:
-                if item.Label != 'Parms_Master':
-                    self.doc.removeObject(item.Label)
+        # if not do_cuts and (case == "helix" or case == "animate" or "segments"):
+        #     doc_list = self.doc.findObjects(Name=self.parm_set + ".+")  # remove prior occurrence of set being built
+        #     for item in doc_list:
+        #         if item.Label != 'Parms_Master':
+        #             self.doc.removeObject(item.Label)
+
+        if case == "segments":
+            # This case reads the descriptor file and build multiple segments
+            self.build_from_file()
+            self.relocate_segments()
 
         if case == "helix":
             self.make_helix()
@@ -133,38 +140,26 @@ class Driver(object):
             wafer.wafer.Visibility = False
             lcs1.Visibility = False
             lcs2.Visibility = False
-            drawer = DrawLines(self.App, self.doc)
-            drawer.draw_line(lcs2.Placement.Base, v3, None, None, self.parm_set + "L1")
 
         if case == "other":
-            lcs = self.doc.getObjectsByLabel("LCS")[0]
-            cube = self.doc.getObjectsByLabel("Cube")[0]
+            pass
 
-            def animate_OLD():
-                print("X")
-                cube.Placement.Base.x += 1
-                cube.ViewObject.show()
-                self.Gui.updateGui()
-            lcs_axis = lcs.Placement.Rotation.Axis
-            cube_axis = cube.Placement.Rotation.Axis
-            angle = lcs_axis.getAngle(cube_axis)
-            print(f"LCS: {np.round(lcs_axis, decimals=3)}, cube: {np.round(cube_axis, decimals=3)}, angle: {np.round(np.rad2deg(angle), decimals=3)}")
-            cube.ViewObject.Visibility = True
-            cube.ViewObject.show()
-
-            zhat = self.App.Vector(0, 0, 1)
-            # a = shp.Vertexes[1].Point
-            a = lcs.Placement.Base
-            a = self.App.Vector(2, 3, 4)
-            norm_axis = cube_axis.cross(lcs_axis)
-            print(f"NORM: {np.round(np.rad2deg(norm_axis), decimals=3)}")
-            rot = self.App.Rotation(norm_axis, zhat, lcs_axis, 'ZYX')
-            cube.Placement = self.App.Placement(a, rot)
+    def relocate_segments(self):
+        """Relocate segments end to end."""
+        first = True
+        compound_transform = None
+        for segment in self.segment_list:
+            if first:
+                first = False
+                compound_transform = segment.get_transform_to_top()
+            else:
+                segment.move_to_top(compound_transform)
+                compound_transform = compound_transform.multiply(segment.get_transform_to_top())
 
     def make_helix(self):
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
         print(f"Working parameter set: {self.parm_set}")
-        helix = self.build_helix(self.parm_set)
+        helix = self.build_helix_OLD(self.parm_set)
         if do_cuts:
             cuts_file_name = self.get_parm("cuts_file")
             cuts_file = open(cuts_file_name, "w+")
@@ -172,12 +167,35 @@ class Driver(object):
         # helix.rotate_vertically()
         # self.align_segments()
 
+    def build_from_file(self):
+        """Read file and build multiple segments"""
 
-    def make_transform_align(self, helix_1, helix_2):
-        l1 = helix_1.Placement
-        l2 = helix_2.Placement
+        with open(self.get_parm("description_file"), "r") as csvfile:
+            reader = csv.reader(csvfile)
+            for line in reader:
+                if not line[0] == 'type':
+                    # print(f"LINE: {line}")
+                    new_line = []
+                    for item in line:           # space in 'name' was an issue, get all spaces to be sure
+                        new_line.append(item.strip())
+                    # type, lift, rotate, count, name, height, cylinder, show lcs, build segment
+                    segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
+                    show_lcs, build_segment = new_line
+                    show_lcs = Driver.convert_tf(show_lcs)
+                    temp_file = self.get_parm("lcs_file") + "/" + name + ".txt"
+                    if Driver.convert_tf(build_segment):
+                        new_segment = Segment(name, lift_angle, rotate_angle, outside_height, cylinder_diameter,
+                                              wafer_count, show_lcs, temp_file)
+                        helix = new_segment.build_helix()
+                        self.segment_list.append(new_segment)
+
+    @staticmethod
+    def make_transform_align(object_1, object_2):
+        """Create transform that will move an object by the same relative positions of two input objects"""
+        l1 = object_1.Placement
+        l2 = object_2.Placement
         tr = l1.inverse().multiply(l2)
-        FreeCAD.align = tr
+        # FreeCAD.align = tr        # make available to console
         return tr
 
     def animate(self):
@@ -212,20 +230,20 @@ class Driver(object):
 
     def align_segments(self):
         """Align existing segments end-to-end."""
-        return                  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        return  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         segments = []
         segment_tops = []
         for item in self.sequence_list:
             segments.append(self.get_object_by_label(item + "_FusedResult"))
             segment_tops.append(self.get_object_by_label(item + "_lcs_top"))
         if len(segment_tops) > 1:
-            for i in range(len(segment_tops)-2):
+            for i in range(len(segment_tops) - 2):
                 # align segment "si_" and "si+1_"
                 top = segment_tops[i]
-                print(f"Segments: {top.Label}, {segment_tops[i+1].Label}")
-                self.move_and_rotate_segment(top, segments[i+1], segment_tops[i+1])
+                print(f"Segments: {top.Label}, {segment_tops[i + 1].Label}")
+                self.move_and_rotate_segment(segment[i], segments[i + 1])
 
-    def move_and_rotate_segment(self, base_lcs, segment, segment_top_lcs):
+    def move_and_rotate_segment(self, segment_1, segment_2):
         """Rotate a segment and its top_lcs such that it is aligned with the base_lcs (top from prior segment"""
         return
 
@@ -238,7 +256,7 @@ class Driver(object):
         else:
             self.trace_file = None
 
-    def build_helix(self, parm_set):
+    def build_helix_OLD(self, parm_set):
         lcs_file_name = self.get_parm("lcs_file")
         outside_height = self.get_parm("outside_height")
         cylinder_diameter = self.get_parm("cylinder_diameter")
@@ -276,8 +294,9 @@ class Driver(object):
                     self.trace_file.write(f"Parameter: {parm_name} set with value: {new_value}\n")
                 return parm_value
             except Exception as e:
-                print(f"Exception {e} writing to spreadsheet for value: {new_name}")
+                print(f"Exception {e} writing to spreadsheet for value: {parm_name}")
                 raise e
+
         return get_parm, set_parm
 
     @staticmethod
@@ -292,3 +311,10 @@ class Driver(object):
         except Exception as e:
             print(f"Exception: {e} on reference to {variable_name}")
             raise e
+
+    @staticmethod
+    def convert_tf(value):
+        if value.strip() == 'True':
+            return True
+        else:
+            return False

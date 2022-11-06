@@ -1,23 +1,32 @@
 import numpy as np
 import csv
 from .wafer import Wafer
-from .segment import Segment
+from .segmentold import SegmentOLD
 from .wafer import Wafer
 import re
 import Part
 import FreeCAD
+from .driver import Driver
+
 
 
 class StructureHelix(object):
-    def __init__(self, App, Gui, parm_set, lcs_file_name, position_offset):
+    def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset):
         self.gui = Gui
         self.doc = App.ActiveDocument
+        self.parent_segment = parent_segment
         self.parm_set = parm_set
         self.position_offset = position_offset      # displacement on x axis of all elements
         self.lcs_file = open(lcs_file_name, "w+")
         self.lcs_writer = csv.writer(self.lcs_file)
-        self.segment_list = []
         self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", parm_set + "All_LCS")
+
+        ps = self.parent_segment
+        self.wafer_count = ps.get_wafer_count()
+        self.lift_angle = ps.get_lift_angle()
+        self.rotation_angle = ps.get_rotation_angle()
+        self.helix_radius = ps.get_helix_radius()
+        self.outside_height = ps.get_outside_height()
         # The assumption is that a single Structure creates a single fused result such as a helix
         # There is also an LCS that is the last location of the structure (position of the top ellipse
         # for a helix).
@@ -27,12 +36,7 @@ class StructureHelix(object):
         self.result_LCS_top = None
         self.named_result_LCS_top = None        # LCS with segment name appended
         self.named_result_LCS_base = None
-
-    def add_segment(self, outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count):
-        """Add this helix as a segment to the list of segments."""
-        # ##This appears broken - are segments part of a helix or vice versa
-        seg = Segment(lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count)
-        self.segment_list.append(seg)
+        self.transform_to_top = None   # transform that will move LCS at base to conform to LCS at top
 
     def write_instructions(self):
         # In principle, this should not be necessary, but combining with the actual construction seems to
@@ -42,22 +46,21 @@ class StructureHelix(object):
         lcs_temp.Visibility = False
         self.lcs_group.addObjects([lcs_temp])
         total_wafer_count = -1
-
-        for segment in self.segment_list:
-            for j in range(segment.wafer_count):
-                # print(f"LA: {np.rad2deg(segment.lift_angle)}, RA: {np.rad2deg(segment.rotation_angle)}")
-                # for wafers with twist between wafers rather than within wafer, change position of rotation below.
-                total_wafer_count += 1
-                e_name = 'e' + str(total_wafer_count)
-                self.lcs_writer.writerow([e_name, lcs_temp.Placement])
-                e_name += '_top'
-                self.lift_lcs(lcs_temp, segment.lift_angle, segment.helix_radius, segment.outside_height)
-                lcs_temp.Placement.Matrix.rotateZ(segment.rotation_angle)    # This makes rotation occur within a wafer
-                self.lcs_writer.writerow([e_name, lcs_temp.Placement])
+        for j in range(self.parent_segment.get_wafer_count()):
+            # print(f"LA: {np.rad2deg(segment.lift_angle)}, RA: {np.rad2deg(segment.rotation_angle)}")
+            # for wafers with twist between wafers rather than within wafer, change position of rotation below.
+            total_wafer_count += 1
+            e_name = 'e' + str(total_wafer_count)
+            self.lcs_writer.writerow([e_name, lcs_temp.Placement])
+            e_name += '_top'
+            self.lift_lcs(lcs_temp, self.lift_angle, self.helix_radius, self.outside_height)
+            lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)    # This makes rotation occur within a wafer
+            self.lcs_writer.writerow([e_name, lcs_temp.Placement])
         self.lcs_writer.writerow(["Done", "Done"])
         self.lcs_file.close()
 
     def lift_lcs(self, lcs, lift_angle, helix_radius, outside_height):
+        # print(f"LIFT ANGLE: {lift_angle}, {helix_radius}, {outside_height}")
         if lift_angle == 0:
             lcs.Placement.Base = lcs.Placement.Base + FreeCAD.Vector(0, 0, outside_height)
             return
@@ -96,6 +99,8 @@ class StructureHelix(object):
                 wafer.make_wafer_from_lcs(lcs1, lcs2, minor_radius, wafer_name)
                 # print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
                 self.wafer_list.append(wafer)
+            if not first_location:
+                raise ValueError(f"File {csv_file} apparently missing content")
             fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
             fuse.Shapes = [x.wafer for x in self.wafer_list]
             fuse.Visibility = True
@@ -108,10 +113,20 @@ class StructureHelix(object):
             self.named_result_LCS_top.Visibility = True             # !!!!!!!!!!!!!!!!!!!!!
             self.result_LCS_top = lcs2
             self.result_LCS_base = first_location
-            self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_base")
+            new_name = self.parm_set + "lcs_base"
+            self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', new_name)
             self.named_result_LCS_base.Placement = first_location.Placement
             self.named_result_LCS_base.Visibility = True
+            self.transform_to_top = Driver.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
             return fuse, last_location
+
+    def move_content(self, transform):
+        pl = self.result.Placement
+        self.result.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+        pl = self.named_result_LCS_top.Placement
+        self.named_result_LCS_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+        pl = self.named_result_LCS_base.Placement
+        self.named_result_LCS_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
 
     def make_cut_list(self, cuts_file):
         # TODO: THIS HAS TO BE BASED ON SEGMENTS
