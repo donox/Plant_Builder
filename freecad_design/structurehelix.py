@@ -6,15 +6,15 @@ from .wafer import Wafer
 import re
 import Part
 import FreeCAD
-from .driver import Driver
 
 
 
 class StructureHelix(object):
-    def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset):
+    def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset, trace=None):
         self.gui = Gui
         self.doc = App.ActiveDocument
         self.parent_segment = parent_segment
+        self.trace = trace
         self.parm_set = parm_set
         self.position_offset = position_offset      # displacement on x axis of all elements
         self.lcs_file = open(lcs_file_name, "w+")
@@ -37,6 +37,8 @@ class StructureHelix(object):
         self.named_result_LCS_top = None        # LCS with segment name appended
         self.named_result_LCS_base = None
         self.transform_to_top = None   # transform that will move LCS at base to conform to LCS at top
+
+        from .driver import Driver
 
     def write_instructions(self):
         # In principle, this should not be necessary, but combining with the actual construction seems to
@@ -117,8 +119,11 @@ class StructureHelix(object):
             self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', new_name)
             self.named_result_LCS_base.Placement = first_location.Placement
             self.named_result_LCS_base.Visibility = True
-            self.transform_to_top = Driver.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
+            self.transform_to_top = StructureHelix.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
             return fuse, last_location
+
+    def get_segment_objects(self):
+        return self.result, self.named_result_LCS_base, self.named_result_LCS_top, self.transform_to_top
 
     def move_content(self, transform):
         pl = self.result.Placement
@@ -251,4 +256,14 @@ class StructureHelix(object):
         objln2.Placement = new_place
 
         self.doc.recompute()
+
+    @staticmethod
+    def make_transform_align(object_1, object_2):
+        """Create transform that will move an object by the same relative positions of two input objects"""
+        l1 = object_1.Placement
+        l2 = object_2.Placement
+        tr = l1.inverse().multiply(l2)
+        print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
+        # make available to console
+        return tr
 
