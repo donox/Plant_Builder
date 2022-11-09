@@ -98,7 +98,7 @@ class Segment(object):
         doc_list = doc.findObjects(Name=name)  # remove prior occurrence of set being built
         for item in doc_list:
             if item.Label != 'Parms_Master':
-                doc.removeObject(item.Label)
+                doc.removeObject(item.Name)
 
     def build_helix(self):
         position_offset = 0         # TODO: Remove???

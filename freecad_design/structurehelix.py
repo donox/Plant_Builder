@@ -103,11 +103,17 @@ class StructureHelix(object):
                 self.wafer_list.append(wafer)
             if not first_location:
                 raise ValueError(f"File {csv_file} apparently missing content")
-            fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
-            fuse.Shapes = [x.wafer for x in self.wafer_list]
+            if len(self.wafer_list) > 1:
+                fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
+                fuse.Shapes = [x.wafer for x in self.wafer_list]
+            elif len(self.wafer_list) == 1:
+                fuse = self.wafer_list[0].wafer
+                fuse.Label = self.parm_set + "FusedResult"
+            else:
+                raise ValueError("Zero Length Wafer List when building helix")
             fuse.Visibility = True
             fuse.ViewObject.DisplayMode = "Shaded"
-            fuse.Placement = first_location.Placement      # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            fuse.Placement = first_location.Placement  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             FreeCAD.activeDocument().recompute()
             self.result = fuse
             self.named_result_LCS_top = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_top")
@@ -118,7 +124,7 @@ class StructureHelix(object):
             new_name = self.parm_set + "lcs_base"
             self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', new_name)
             self.named_result_LCS_base.Placement = first_location.Placement
-            self.named_result_LCS_base.Visibility = True
+            self.named_result_LCS_base.Visibility = False
             self.transform_to_top = StructureHelix.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
             return fuse, last_location
 
