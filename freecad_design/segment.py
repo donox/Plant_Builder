@@ -6,11 +6,11 @@ import FreeCAD
 import FreeCADGui
 
 
-
 class Segment(object):
     def __init__(self, prefix, lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count, show_lcs,
-                 temp_file):
+                 temp_file, to_build, trace=None):
         self.prefix = prefix + "_"
+        self.trace = trace
         self.lift_angle = np.deg2rad(float(lift_angle))
         self.rotation_angle = np.deg2rad(float(rotation_angle))
         self.outside_height = float(outside_height)
@@ -22,9 +22,16 @@ class Segment(object):
         self.temp_file = temp_file
         self.helix = None
         self.segment_type = None
+        self.to_build = to_build    # if False, use existing structure
+
+        self.segment_object = None
+        self.lcs_base = None
+        self.lcs_top = None
+        self.transform_to_top = None
 
         self.get_wafer_parameters()
-        self.remove_prior_version()
+        if self.to_build:
+            self.remove_prior_version()
 
     def get_wafer_count(self):
         return self.wafer_count
@@ -55,15 +62,32 @@ class Segment(object):
             self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(self.lift_angle)
 
     def get_transform_to_top(self):
-        if self.segment_type == 'helix' and self.helix:
-            return self.helix.transform_to_top
+        if (self.segment_type == 'helix' and self.helix) or not self.to_build:
+            return self.transform_to_top
         else:
             raise ValueError("Segment has no valid transform to top")
 
+    def move_content(self, transform):
+        # return
+        pl = self.segment_object.Placement
+        self.segment_object.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+        pl = self.lcs_top.Placement
+        self.lcs_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+        pl = self.lcs_base.Placement
+        self.lcs_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+        # print(f"LABELS: {self.segment_object.Label}, {self.lcs_base.Label}, {self.lcs_top.Label}")
+        self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
+
+    def move_content_to_zero(self, transform):
+        """Relocate to a zero base corresponding to a new build.  Transform is lcs_base.inverse()"""
+        self.move_content(transform)
+
     def move_to_top(self, transform):
         """Apply transform to reposition segment."""
-        if self.segment_type == 'helix' and self.helix:
-            self.helix.move_content(transform)
+        if (self.segment_type == 'helix' and self.helix) or not self.to_build:
+            # print(f"BEFORE: {self.segment_object.Label}, {self.segment_object.Placement}")
+            self.move_content(transform)
+            # print(f"AFTER: {self.segment_object.Label}, {self.segment_object.Placement}")
         else:
             raise ValueError("Segment has no valid content to transform")
 
@@ -74,7 +98,7 @@ class Segment(object):
         doc_list = doc.findObjects(Name=name)  # remove prior occurrence of set being built
         for item in doc_list:
             if item.Label != 'Parms_Master':
-                doc.removeObject(item.Label)
+                doc.removeObject(item.Name)
 
     def build_helix(self):
         position_offset = 0         # TODO: Remove???
@@ -87,6 +111,69 @@ class Segment(object):
         fused_result, last_loc = helix.create_structure(major_radius, minor_radius, self.temp_file, self.show_lcs)
         self.helix = helix
         self.segment_type = "helix"
+        fuse, base, top, transform = helix.get_segment_objects()
+        self.segment_object = fuse
+        self.lcs_base = base
+        self.lcs_top = top
+        self.transform_to_top = transform
+        if self.trace:
+            self.trace("BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
         return helix
+
+    def reconstruct_helix(self):
+        """Reconstruct existing helix from model tree."""
+        try:
+            self.segment_type = "existing"
+            doc = FreeCAD.activeDocument()
+            self.lcs_top = doc.getObjectsByLabel(self.prefix + "lcs_top")[0]
+            self.lcs_base = doc.getObjectsByLabel(self.prefix + "lcs_base")[0]
+            self.segment_object = doc.getObjectsByLabel(self.prefix + "FusedResult")[0]
+            self.transform_to_top = Segment.make_transform_align(self.lcs_base, self.lcs_top)
+            self.move_content_to_zero(self.lcs_base.Placement.inverse())
+            if self.trace:
+                self.trace("RE-BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
+
+        except Exception as e:
+            raise ValueError(f"Failed to Reconstruct Segment: {e.args}")
+
+    def make_cut_list(self, segment_no, cuts_file):
+        parm_str = f"\n\nCut list for segment: {segment_no}\n"
+        parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
+        parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
+        parm_str += f"Outside Wafer Height: {np.round(self.outside_height / 25.4, 2)} in\n"
+        parm_str += f"Inside Wafer Height: {np.round(self.inside_height / 25.4, 2)} in\n"
+        parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter / 25.4, 2)} in\n"
+        parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
+        cuts_file.write(parm_str)
+        cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
+        nbr_rotations = int(360 / np.rad2deg(self.rotation_angle))
+        step_size = nbr_rotations / 2 - 1
+        current_position = 0
+        s1 = "Step: "
+        s2 = " at position: "
+        for i in range(self.wafer_count):
+            str1 = str(i)
+            if len(str1) == 1:
+                str1 = s1 + ' ' + str1
+            else:
+                str1 = s1 + str1
+            str2 = str(current_position)
+            if len(str2) == 1:
+                str2 = s2 + ' ' + str2
+            else:
+                str2 = s2 + str2
+            cuts_file.write(f"{str1} {str2};    Done: _____\n")
+            current_position = int((current_position + step_size) % nbr_rotations)
+
+    @staticmethod
+    def make_transform_align(object_1, object_2):
+        """Create transform that will move an object by the same relative positions of two input objects"""
+        l1 = object_1.Placement
+        l2 = object_2.Placement
+        tr = l1.inverse().multiply(l2)
+        # print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
+        return tr
+
+
 
 

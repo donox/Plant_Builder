@@ -3,10 +3,11 @@ import time
 
 class Wafer(object):
 
-    def __init__(self, app, gui, parm_set):
+    def __init__(self, app, gui, parm_set, wafer_type="EE"):
         self.app = app
         self.gui = gui
         self.parm_set = parm_set
+        self.wafer_type = wafer_type
         self.outside_height = None
         self.lift_angle = None
         self.rotation_angle = None
@@ -27,15 +28,37 @@ class Wafer(object):
 
         # create a cylinder between lcs1 and lcs2 with the cylinder axis
         # along the path between the origin points of the lcs's
-        e1 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
+        wafer_1 = self.wafer_type[0]
+        wafer_2 = self.wafer_type[1]
+        if wafer_1 == 'E':
+            e1 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
+            e1.MinorRadius = self.cylinder_radius
+            if self.lift_angle:
+                e1.MajorRadius = self.cylinder_radius / np.cos(self.lift_angle)
+            else:
+                e1.MajorRadius = self.cylinder_radius
+        elif wafer_1 == 'C':
+            print(f"Make Circle 1")
+            e1 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
+            e1.Radius = self.cylinder_radius
+        else:
+            raise ValueError(f"Unrecognized Wafer Type: {wafer_1}")
         e1.Placement = lcs1.Placement
-        e1.MinorRadius = self.cylinder_radius
-        e1.MajorRadius = self.cylinder_radius
         e1.Visibility = False
-        e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e2")
+        if wafer_2 == 'E':
+            e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
+            e2.MinorRadius = self.cylinder_radius
+            if self.lift_angle:
+                e2.MajorRadius = self.cylinder_radius / np.cos(self.lift_angle)
+            else:
+                e2.MajorRadius = self.cylinder_radius
+        elif wafer_2 == 'C':
+            print(f"Make Circle 2")
+            e2 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
+            e2.Radius = self.cylinder_radius
+        else:
+            raise ValueError(f"Unrecognized Wafer Type: {wafer_2}")
         e2.Placement = lcs2.Placement
-        e2.MinorRadius = self.cylinder_radius
-        e2.MajorRadius = self.cylinder_radius  # TODO: Need to account for lift angle
         e2.Visibility = False
         e_edge = e2.Shape.Edges[0]
         e_normal = e_edge.normalAt(0)   # normal to edge lies in plane of the ellipse

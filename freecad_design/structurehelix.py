@@ -6,15 +6,15 @@ from .wafer import Wafer
 import re
 import Part
 import FreeCAD
-from .driver import Driver
 
 
 
 class StructureHelix(object):
-    def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset):
+    def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset, trace=None):
         self.gui = Gui
         self.doc = App.ActiveDocument
         self.parent_segment = parent_segment
+        self.trace = trace
         self.parm_set = parm_set
         self.position_offset = position_offset      # displacement on x axis of all elements
         self.lcs_file = open(lcs_file_name, "w+")
@@ -38,6 +38,8 @@ class StructureHelix(object):
         self.named_result_LCS_base = None
         self.transform_to_top = None   # transform that will move LCS at base to conform to LCS at top
 
+        from .driver import Driver
+
     def write_instructions(self):
         # In principle, this should not be necessary, but combining with the actual construction seems to
         # have some sort of interaction at a lower level of structure.  This separates the specification of the
@@ -46,16 +48,27 @@ class StructureHelix(object):
         lcs_temp.Visibility = False
         self.lcs_group.addObjects([lcs_temp])
         total_wafer_count = -1
-        for j in range(self.parent_segment.get_wafer_count()):
+        wc = self.parent_segment.get_wafer_count()
+        for j in range(wc):
             # print(f"LA: {np.rad2deg(segment.lift_angle)}, RA: {np.rad2deg(segment.rotation_angle)}")
             # for wafers with twist between wafers rather than within wafer, change position of rotation below.
             total_wafer_count += 1
             e_name = 'e' + str(total_wafer_count)
             self.lcs_writer.writerow([e_name, lcs_temp.Placement])
             e_name += '_top'
-            self.lift_lcs(lcs_temp, self.lift_angle, self.helix_radius, self.outside_height)
-            lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)    # This makes rotation occur within a wafer
-            self.lcs_writer.writerow([e_name, lcs_temp.Placement])
+            if j == 0:
+                self.lift_lcs(lcs_temp, self.lift_angle/2, self.helix_radius, self.outside_height)
+                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle/2)    # This makes rotation occur within a wafer
+                self.lcs_writer.writerow([e_name, lcs_temp.Placement, "CE"])
+            elif j == wc - 1:
+                self.lift_lcs(lcs_temp, self.lift_angle/2, self.helix_radius, self.outside_height)
+                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle/2)  # This makes rotation occur within a wafer
+                self.lcs_writer.writerow([e_name, lcs_temp.Placement, "EC"])
+            else:
+                self.lift_lcs(lcs_temp, self.lift_angle, self.helix_radius, self.outside_height)
+                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)  # This makes rotation occur within a wafer
+                self.lcs_writer.writerow([e_name, lcs_temp.Placement, "EE"])
+
         self.lcs_writer.writerow(["Done", "Done"])
         self.lcs_file.close()
 
@@ -82,7 +95,7 @@ class StructureHelix(object):
                 if p1 == "Done":
                     break
                 place1 = self.make_placement(p1_place)
-                p2, p2_place = next(reader)
+                p2, p2_place, p2_type = next(reader)
                 place2 = self.make_placement(p2_place)
                 lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + p2 + "lcs")
                 lcs2.Placement = place2
@@ -95,17 +108,23 @@ class StructureHelix(object):
                     lcs1.Visibility = False
                     lcs2.Visibility = False
                 wafer_name = self.parm_set + "w" + p1
-                wafer = Wafer(FreeCAD, self.gui, self.parm_set)
+                wafer = Wafer(FreeCAD, self.gui, self.parm_set, wafer_type=p2_type)
                 wafer.make_wafer_from_lcs(lcs1, lcs2, minor_radius, wafer_name)
                 # print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
                 self.wafer_list.append(wafer)
             if not first_location:
                 raise ValueError(f"File {csv_file} apparently missing content")
-            fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
-            fuse.Shapes = [x.wafer for x in self.wafer_list]
+            if len(self.wafer_list) > 1:
+                fuse = self.doc.addObject("Part::MultiFuse", self.parm_set + "FusedResult")
+                fuse.Shapes = [x.wafer for x in self.wafer_list]
+            elif len(self.wafer_list) == 1:
+                fuse = self.wafer_list[0].wafer
+                fuse.Label = self.parm_set + "FusedResult"
+            else:
+                raise ValueError("Zero Length Wafer List when building helix")
             fuse.Visibility = True
             fuse.ViewObject.DisplayMode = "Shaded"
-            fuse.Placement = first_location.Placement      # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            fuse.Placement = first_location.Placement  # Places segment at location of first wafer
             FreeCAD.activeDocument().recompute()
             self.result = fuse
             self.named_result_LCS_top = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_top")
@@ -116,9 +135,12 @@ class StructureHelix(object):
             new_name = self.parm_set + "lcs_base"
             self.named_result_LCS_base = self.doc.addObject('PartDesign::CoordinateSystem', new_name)
             self.named_result_LCS_base.Placement = first_location.Placement
-            self.named_result_LCS_base.Visibility = True
-            self.transform_to_top = Driver.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
+            self.named_result_LCS_base.Visibility = False
+            self.transform_to_top = StructureHelix.make_transform_align(self.named_result_LCS_base, self.named_result_LCS_top)
             return fuse, last_location
+
+    def get_segment_objects(self):
+        return self.result, self.named_result_LCS_base, self.named_result_LCS_top, self.transform_to_top
 
     def move_content(self, transform):
         pl = self.result.Placement
@@ -130,6 +152,7 @@ class StructureHelix(object):
 
     def make_cut_list(self, cuts_file):
         # TODO: THIS HAS TO BE BASED ON SEGMENTS
+        print(f"Cuts Made")
         cuts_file.write("Cutting order:\n\n\n")
         parm_str = f"Lift Angle: {np.rad2deg(self.lift_angle)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
@@ -251,4 +274,14 @@ class StructureHelix(object):
         objln2.Placement = new_place
 
         self.doc.recompute()
+
+    @staticmethod
+    def make_transform_align(object_1, object_2):
+        """Create transform that will move an object by the same relative positions of two input objects"""
+        l1 = object_1.Placement
+        l2 = object_2.Placement
+        tr = l1.inverse().multiply(l2)
+        print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
+        # make available to console
+        return tr
 

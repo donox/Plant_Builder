@@ -18,6 +18,7 @@ from .segment import Segment
 
 # Now on github as plant-builder
 class Driver(object):
+    # trace = None
 
     def __init__(self, App, Gui, assembly_name, master_spreadsheet):
         self.App = App
@@ -110,6 +111,7 @@ class Driver(object):
             # This case reads the descriptor file and build multiple segments
             self.build_from_file()
             self.relocate_segments()
+            self.build_cut_list()
 
         if case == "helix":
             self.make_helix()
@@ -144,17 +146,32 @@ class Driver(object):
         if case == "other":
             pass
 
+        if self.do_trace:
+            self.trace_file.close()
+
     def relocate_segments(self):
         """Relocate segments end to end."""
         first = True
         compound_transform = None
         for segment in self.segment_list:
+            # print(f"TRANSFORM: {compound_transform}")
             if first:
                 first = False
                 compound_transform = segment.get_transform_to_top()
             else:
                 segment.move_to_top(compound_transform)
                 compound_transform = compound_transform.multiply(segment.get_transform_to_top())
+
+    def build_cut_list(self):
+        print(f"BUILD CUT LIST")
+        cuts_file_name = self.get_parm("cuts_file")
+        cuts_file = open(cuts_file_name, "w+")
+        cuts_file.write("Cutting order:\n\n\n")
+
+        for nbr, segment in enumerate(self.segment_list):
+            segment.make_cut_list(nbr, cuts_file)
+
+        cuts_file.close()
 
     def make_helix(self):
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
@@ -173,21 +190,28 @@ class Driver(object):
         with open(self.get_parm("description_file"), "r") as csvfile:
             reader = csv.reader(csvfile)
             for line in reader:
-                if not line[0] == 'type':
+                if line[0] != 'type' and line[0] != 'stop':
                     # print(f"LINE: {line}")
                     new_line = []
                     for item in line:           # space in 'name' was an issue, get all spaces to be sure
                         new_line.append(item.strip())
                     # type, lift, rotate, count, name, height, cylinder, show lcs, build segment
                     segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
-                    show_lcs, build_segment = new_line
+                        show_lcs, build_segment = new_line
                     show_lcs = Driver.convert_tf(show_lcs)
                     temp_file = self.get_parm("lcs_file") + "/" + name + ".txt"
-                    if Driver.convert_tf(build_segment):
-                        new_segment = Segment(name, lift_angle, rotate_angle, outside_height, cylinder_diameter,
-                                              wafer_count, show_lcs, temp_file)
+                    do_build = Driver.convert_tf(build_segment)
+
+                    new_segment = Segment(name, lift_angle, rotate_angle, outside_height, cylinder_diameter,
+                                          wafer_count, show_lcs, temp_file, do_build, trace=self.trace)
+                    self.segment_list.append(new_segment)
+                    if do_build:
                         helix = new_segment.build_helix()
-                        self.segment_list.append(new_segment)
+                    else:
+                        # Use existing segment and construct minimal means to handle
+                        helix = new_segment.reconstruct_helix()
+                elif line[0] == 'stop':
+                    break
 
     @staticmethod
     def make_transform_align(object_1, object_2):
@@ -195,7 +219,8 @@ class Driver(object):
         l1 = object_1.Placement
         l2 = object_2.Placement
         tr = l1.inverse().multiply(l2)
-        # FreeCAD.align = tr        # make available to console
+        print(f"MOVE: {object_1.Label}, {object_2.Label}, {l1}")
+        FreeCAD.align = tr        # make available to console
         return tr
 
     def animate(self):
@@ -251,10 +276,23 @@ class Driver(object):
         self.trace_file_name = self.parent_parms.get("trace_file")
         self.do_trace = Driver.make_tf("do_trace", self.parent_parms)
         if self.do_trace:
-            self.trace_file = open(self.trace_file_name, "w+")
+            self.trace_file = open(self.trace_file_name, "w")
             self.trace_file.write("Start Trace\n")
+            self.trace_file.flush()
         else:
             self.trace_file = None
+
+    def trace(self, *args):
+        if self.do_trace:
+            if self.trace_file.closed:
+                print("FILE WAS CLOSED")
+                self.trace_file = open(self.trace_file_name, "a")
+            trace_string = ''
+            for arg in args:
+                trace_string += "  " + repr(arg) + "\n"
+            self.trace_file.write(trace_string)
+            self.trace_file.flush()
+            print(trace_string)
 
     def build_helix_OLD(self, parm_set):
         lcs_file_name = self.get_parm("lcs_file")
@@ -267,7 +305,7 @@ class Driver(object):
         print(f"Major: {major_radius}, Minor: {minor_radius}, Lift: {np.rad2deg(lift_angle)}")
         wafer_count = self.get_parm("wafer_count")
         show_lcs = Driver.make_tf("show_lcs", self.parent_parms)
-        helix = StructureHelix(self.App, self.Gui, parm_set, lcs_file_name, self.position_offset)
+        helix = StructureHelix(self.App, self.Gui, parm_set, lcs_file_name, self.position_offset, trace=self.trace)
         helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
         helix.write_instructions()
         fused_result, last_loc = helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
