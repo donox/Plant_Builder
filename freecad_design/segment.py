@@ -6,6 +6,12 @@ import FreeCAD
 import FreeCADGui
 
 
+def pos_to_str(x):
+    inches = int(x)
+    fraction = int((x - inches) * 16)
+    return f'{inches:2d}" {fraction:2d}/16'
+
+
 class Segment(object):
     def __init__(self, prefix, lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count, show_lcs,
                  temp_file, to_build, trace=None):
@@ -16,6 +22,7 @@ class Segment(object):
         self.outside_height = float(outside_height)
         self.cylinder_diameter = float(cylinder_diameter)
         self.wafer_count = int(wafer_count)
+        self.wafer_list = []            # This is empty for segments that were reconstructed from the model tree
         self.helix_radius = None
         self.inside_height = None
         self.show_lcs = show_lcs
@@ -116,6 +123,7 @@ class Segment(object):
         self.lcs_base = base
         self.lcs_top = top
         self.transform_to_top = transform
+        self.wafer_list = helix.get_wafer_list()
         if self.trace:
             self.trace("BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
         return helix
@@ -146,9 +154,14 @@ class Segment(object):
         parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
         cuts_file.write(parm_str)
         cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
-        nbr_rotations = int(360 / np.rad2deg(self.rotation_angle))
-        step_size = nbr_rotations / 2 - 1
-        current_position = 0
+        try:
+            nbr_rotations = int(360 / np.rad2deg(self.rotation_angle))
+            step_size = nbr_rotations / 2 - 1
+        except Exception as e:
+            nbr_rotations = None
+            step_size = 0
+
+        current_position = 0  # Angular position of index (0-360) when rotating cylinder for cutting
         s1 = "Step: "
         s2 = " at position: "
         for i in range(self.wafer_count):
@@ -163,7 +176,37 @@ class Segment(object):
             else:
                 str2 = s2 + str2
             cuts_file.write(f"{str1} {str2};    Done: _____\n")
-            current_position = int((current_position + step_size) % nbr_rotations)
+            if nbr_rotations:
+                current_position = int((current_position + step_size) % nbr_rotations)
+
+    def print_construction_list(self, segment_no, cons_file, global_placement):
+        parm_str = f"\nConstruction list for segment: {segment_no}\n"
+        parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
+        parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
+        parm_str += f"Outside Wafer Height: {pos_to_str(self.outside_height)} in\n"
+        parm_str += f"Inside Wafer Height: {pos_to_str(self.inside_height)} in\n"
+        parm_str += f"Cylinder Diameter:{pos_to_str(self.cylinder_diameter)} in\n"
+        parm_str += f"Helix Radius: \t{pos_to_str(self.helix_radius)} in\n"
+        cons_file.write(parm_str)
+        cons_file.write(f"Wafer Count: {self.wafer_count}\n\n")
+
+        if not self.wafer_list:
+            cons_file.write(f"This segment was reconstructed thus there is no wafer list")
+            return None
+        for wafer_num, wafer in enumerate(self.wafer_list):
+            top_lcs_place = wafer.get_top().Placement
+            global_loc = global_placement.multiply(top_lcs_place)
+            num_str = str(wafer_num)
+            local_x = pos_to_str(top_lcs_place.Base.x)
+            global_x = pos_to_str(global_loc.Base.x)
+            local_y = pos_to_str(top_lcs_place.Base.y)
+            global_y = pos_to_str(global_loc.Base.y)
+            local_z = pos_to_str(top_lcs_place.Base.z)
+            global_z = pos_to_str(global_loc.Base.z)
+            str1 = f"Wafer: {num_str}\t at Local: [{local_x:{5}}, {local_y}, {local_z}],"
+            str1 += f" \tat Global: [{global_x}, {global_y}, {global_z}]\n"
+            cons_file.write(str1)
+        return global_loc
 
     @staticmethod
     def make_transform_align(object_1, object_2):

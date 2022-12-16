@@ -108,10 +108,13 @@ class Driver(object):
         #             self.doc.removeObject(item.Label)
 
         if case == "segments":
-            # This case reads the descriptor file and build multiple segments
+            # This case reads the descriptor file and builds multiple segments
             self.build_from_file()
             self.relocate_segments()
-            self.build_cut_list()
+            if Driver.make_tf("print_cuts", self.parent_parms):
+                self.build_cut_list()
+            if Driver.make_tf("print_place", self.parent_parms):
+                self.build_place_list()
 
         if case == "helix":
             self.make_helix()
@@ -173,6 +176,18 @@ class Driver(object):
 
         cuts_file.close()
 
+    def build_place_list(self):
+        print(f"BUILD PLACE LIST")
+        cuts_file_name = self.get_parm("place_file")
+        cuts_file = open(cuts_file_name, "w+")
+        cuts_file.write("Wafer Placement:\n\n\n")
+        global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
+
+        for nbr, segment in enumerate(self.segment_list):
+            global_placement = segment.print_construction_list(nbr, cuts_file, global_placement)
+
+        cuts_file.close()
+
     def make_helix(self):
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
         print(f"Working parameter set: {self.parm_set}")
@@ -186,7 +201,6 @@ class Driver(object):
 
     def build_from_file(self):
         """Read file and build multiple segments"""
-
         with open(self.get_parm("description_file"), "r") as csvfile:
             reader = csv.reader(csvfile)
             for line in reader:
@@ -219,7 +233,7 @@ class Driver(object):
         l1 = object_1.Placement
         l2 = object_2.Placement
         tr = l1.inverse().multiply(l2)
-        print(f"MOVE: {object_1.Label}, {object_2.Label}, {l1}")
+        # print(f"MOVE: {object_1.Label}, {object_2.Label}, {l1}")
         FreeCAD.align = tr        # make available to console
         return tr
 
@@ -253,25 +267,6 @@ class Driver(object):
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
 
-    def align_segments(self):
-        """Align existing segments end-to-end."""
-        return  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        segments = []
-        segment_tops = []
-        for item in self.sequence_list:
-            segments.append(self.get_object_by_label(item + "_FusedResult"))
-            segment_tops.append(self.get_object_by_label(item + "_lcs_top"))
-        if len(segment_tops) > 1:
-            for i in range(len(segment_tops) - 2):
-                # align segment "si_" and "si+1_"
-                top = segment_tops[i]
-                print(f"Segments: {top.Label}, {segment_tops[i + 1].Label}")
-                self.move_and_rotate_segment(segment[i], segments[i + 1])
-
-    def move_and_rotate_segment(self, segment_1, segment_2):
-        """Rotate a segment and its top_lcs such that it is aligned with the base_lcs (top from prior segment"""
-        return
-
     def _set_up_trace(self):
         self.trace_file_name = self.parent_parms.get("trace_file")
         self.do_trace = Driver.make_tf("do_trace", self.parent_parms)
@@ -293,23 +288,6 @@ class Driver(object):
             self.trace_file.write(trace_string)
             self.trace_file.flush()
             print(trace_string)
-
-    def build_helix_OLD(self, parm_set):
-        lcs_file_name = self.get_parm("lcs_file")
-        outside_height = self.get_parm("outside_height")
-        cylinder_diameter = self.get_parm("cylinder_diameter")
-        lift_angle = np.deg2rad(self.get_parm("lift_angle"))
-        rotation_angle = np.deg2rad(self.get_parm("rotation_angle"))
-        minor_radius = (cylinder_diameter / 2)
-        major_radius = (cylinder_diameter / 2) / np.cos(lift_angle)
-        print(f"Major: {major_radius}, Minor: {minor_radius}, Lift: {np.rad2deg(lift_angle)}")
-        wafer_count = self.get_parm("wafer_count")
-        show_lcs = Driver.make_tf("show_lcs", self.parent_parms)
-        helix = StructureHelix(self.App, self.Gui, parm_set, lcs_file_name, self.position_offset, trace=self.trace)
-        helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
-        helix.write_instructions()
-        fused_result, last_loc = helix.create_structure(major_radius, minor_radius, lcs_file_name, show_lcs)
-        return helix
 
     def handle_spreadsheet(self, sheet):
         def get_parm(parm_name):

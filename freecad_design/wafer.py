@@ -21,8 +21,8 @@ class Wafer(object):
     def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name):
         """Make a wafer by cutting a cylinder with the xy-planes of two lcs's."""
         # TODO: if xy-planes are parallel, need to handle special cases (2 - co-linear z-axis and not)
-        self.lcs_top = lcs1
-        self.lcs_base = lcs2
+        self.lcs_top = lcs2
+        self.lcs_base = lcs1
         self.cylinder_radius = cylinder_diameter / 2
         self.wafer_name = wafer_name
 
@@ -38,7 +38,6 @@ class Wafer(object):
             else:
                 e1.MajorRadius = self.cylinder_radius
         elif wafer_1 == 'C':
-            print(f"Make Circle 1")
             e1 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
             e1.Radius = self.cylinder_radius
         else:
@@ -53,7 +52,6 @@ class Wafer(object):
             else:
                 e2.MajorRadius = self.cylinder_radius
         elif wafer_2 == 'C':
-            print(f"Make Circle 2")
             e2 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
             e2.Radius = self.cylinder_radius
         else:

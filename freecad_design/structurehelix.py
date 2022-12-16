@@ -142,6 +142,9 @@ class StructureHelix(object):
     def get_segment_objects(self):
         return self.result, self.named_result_LCS_base, self.named_result_LCS_top, self.transform_to_top
 
+    def get_wafer_list(self):
+        return self.wafer_list
+
     def move_content(self, transform):
         pl = self.result.Placement
         self.result.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
