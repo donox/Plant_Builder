@@ -42,34 +42,6 @@ class Driver(object):
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label  # simplify getting things in console
         self.position_offset = self.get_parm("position_offset")
-        # sequence_list is a string member of the property list associated with the master spreadsheet.
-        # The syntax of the sequence list is:
-        # "xx_yy_... where xx_ is of the form "sd_" for d as a digit(s) with the order of the
-        # elements giving the prepended string naming the segment or LCS (top or bottom) in the ordered
-        # set of segments defining the resultant structure.  The last element is the name for the current sequence.
-        # self.sequence_list = self.get_sequence_property()
-        # if self.sequence_list:
-        #     self.current_sequence_name = self.sequence_list[-1]
-        # else:
-        #     self.current_sequence_name = None
-
-    # def get_sequence_property(self):
-    #     """Get list of items giving sequence of segments in overall design."""
-    #     try:
-    #         seq_string = self.get_parm("seg_sequence")
-    #         if seq_string is not None:
-    #             seq_list = seq_string.split("_")[0:-1]
-    #         else:
-    #             seq_list = []
-    #         return seq_list
-    #     except Exception as e:
-    #         print(f"Failed to get/find Sequence Item: {e.args}")
-
-    # def add_sequence_property(self, element):
-    #     """Add an element to existing sequence list and update spreadsheet."""
-    #     self.sequence_list.append(element + "_")
-    #     seq_content = "_".join(self.sequence_list)
-    #     self.set_parm("seg_sequence", seq_content)
 
     def _gobj(self):
         """Function to get an object by label in FreeCAD"""
@@ -157,11 +129,14 @@ class Driver(object):
         first = True
         compound_transform = None
         for segment in self.segment_list:
-            # print(f"TRANSFORM: {compound_transform}")
             if first:
                 first = False
                 compound_transform = segment.get_transform_to_top()
             else:
+                angle = segment.get_segment_rotation()
+                segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
+                                                     FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
+                compound_transform = compound_transform.multiply(segment_rotation)
                 segment.move_to_top(compound_transform)
                 compound_transform = compound_transform.multiply(segment.get_transform_to_top())
 
@@ -169,7 +144,7 @@ class Driver(object):
         print(f"BUILD CUT LIST")
         cuts_file_name = self.get_parm("cuts_file")
         cuts_file = open(cuts_file_name, "w+")
-        cuts_file.write("Cutting order:\n\n\n")
+        cuts_file.write("Cutting order:\n")
 
         for nbr, segment in enumerate(self.segment_list):
             segment.make_cut_list(nbr, cuts_file)
@@ -211,13 +186,13 @@ class Driver(object):
                         new_line.append(item.strip())
                     # type, lift, rotate, count, name, height, cylinder, show lcs, build segment
                     segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
-                        show_lcs, build_segment = new_line
+                        show_lcs, build_segment, rotate_segment = new_line
                     show_lcs = Driver.convert_tf(show_lcs)
                     temp_file = self.get_parm("lcs_file") + "/" + name + ".txt"
                     do_build = Driver.convert_tf(build_segment)
 
                     new_segment = Segment(name, lift_angle, rotate_angle, outside_height, cylinder_diameter,
-                                          wafer_count, show_lcs, temp_file, do_build, trace=self.trace)
+                                          wafer_count, show_lcs, temp_file, do_build, rotate_segment,  trace=self.trace)
                     self.segment_list.append(new_segment)
                     if do_build:
                         helix = new_segment.build_helix()

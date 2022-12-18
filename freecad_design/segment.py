@@ -14,13 +14,14 @@ def pos_to_str(x):
 
 class Segment(object):
     def __init__(self, prefix, lift_angle, rotation_angle, outside_height, cylinder_diameter, wafer_count, show_lcs,
-                 temp_file, to_build, trace=None):
+                 temp_file, to_build, rotate_segment, trace=None):
         self.prefix = prefix + "_"
         self.trace = trace
         self.lift_angle = np.deg2rad(float(lift_angle))
         self.rotation_angle = np.deg2rad(float(rotation_angle))
         self.outside_height = float(outside_height)
         self.cylinder_diameter = float(cylinder_diameter)
+        self.rotate_segment = float(rotate_segment)
         self.wafer_count = int(wafer_count)
         self.wafer_list = []            # This is empty for segments that were reconstructed from the model tree
         self.helix_radius = None
@@ -73,6 +74,9 @@ class Segment(object):
             return self.transform_to_top
         else:
             raise ValueError("Segment has no valid transform to top")
+
+    def get_segment_rotation(self):
+        return self.rotate_segment
 
     def move_content(self, transform):
         # return

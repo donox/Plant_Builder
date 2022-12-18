@@ -284,7 +284,7 @@ class StructureHelix(object):
         l1 = object_1.Placement
         l2 = object_2.Placement
         tr = l1.inverse().multiply(l2)
-        print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
+        # print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
         # make available to console
         return tr
 
