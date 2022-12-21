@@ -10,7 +10,7 @@ import re
 import time
 import importlib.util
 import sys
-import tokenize
+import math
 from .structurehelix import StructureHelix
 from .wafer import Wafer
 from .segment import Segment
@@ -179,12 +179,19 @@ class Driver(object):
         with open(self.get_parm("description_file"), "r") as csvfile:
             reader = csv.reader(csvfile)
             for line in reader:
-                if line[0] != 'type' and line[0] != 'stop':
-                    # print(f"LINE: {line}")
+                if len(line):
                     new_line = []
                     for item in line:           # space in 'name' was an issue, get all spaces to be sure
                         new_line.append(item.strip())
-                    # type, lift, rotate, count, name, height, cylinder, show lcs, build segment
+                    operator = new_line[0]
+                else:
+                    operator = 'stop'
+                print(f"Operator: {operator}")
+                if operator == 'comment':
+                    pass
+                elif operator == 'helix':
+                    # print(f"LINE: {line}")
+                    # type, lift, rotate, count, name, height, cylinder, show lcs, build segment, rotate_segment
                     segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                         show_lcs, build_segment, rotate_segment = new_line
                     show_lcs = Driver.convert_tf(show_lcs)
@@ -199,7 +206,15 @@ class Driver(object):
                     else:
                         # Use existing segment and construct minimal means to handle
                         helix = new_segment.reconstruct_helix()
-                elif line[0] == 'stop':
+                elif operator == 'path':
+                    # create target path to follow
+                    segment_type, scale, point_count = new_line
+                    scale = float(scale)
+                    point_count = int(point_count)
+                    Driver.overhand_knot_path(scale, point_count)
+                elif operator == 'stop':
+                    break
+                else:
                     break
 
     @staticmethod
@@ -309,3 +324,70 @@ class Driver(object):
             return True
         else:
             return False
+
+    @staticmethod
+    def overhand_knot_path(scale, point_count):
+        """Compute path of overhand knot.
+
+        Return: list of
+                t = position number along curve ,
+                3D Placement of t
+                distance to next t"""
+        # NOTE:  if the first non-zero point has a zero y value, the candidate selected will have no lift
+        # angle as all candidates have a zero yaw value.  To fix, at some arbitrary rotation to the whole path.
+        point_list = []
+        for t in range(point_count):
+            angle = math.radians(t * 5) - math.pi
+            x = ((math.cos(angle) + 2 * math.cos(2 * angle))) * scale
+            y = ((math.sin(angle) - 2 * math.sin(2 * angle))) * scale
+            z = (-math.sin(3 * angle)) * scale
+            if t == 0:  # set origin of knot to global origin
+                x0 = x
+                y0 = y
+                z0 = z
+            vec = FreeCAD.Vector(x - x0, y - y0, z - z0)
+            # print(f"Knot: t: {t}, x: {np.round(x, 3)}, y: {np.round(y, 3)}, z:  {np.round(z, 3)}")
+            point_list.append((t, vec))
+        p_prior = point_list[0]
+        place_list = []
+        for p_next in point_list[1:]:
+            t = p_prior[0]
+            v1 = p_prior[1]
+            v2 = p_next[1]
+            angle = v1.getAngle(v2)
+            if math.isnan(angle):
+                angle = 0.0
+            rot = FreeCAD.Rotation(v1, angle)
+            place = FreeCAD.Placement(v1, rot)
+            dist = v1.distanceToPoint(v2)
+            place_list.append((t, place, dist))
+            arrow("A" + str(t), place)
+            p_prior = p_next
+            # print(f"\t t: {t}, A: {np.round(angle, 2)} place: {place}")
+            lcs1 = FreeCAD.activeDocument().addObject('Part::Vertex', "Kdot" + str(t))
+            lcs1.X = v1.x
+            lcs1.Y = v1.y
+            lcs1.Z = v1.z
+        return place_list
+
+def arrow(name, placement):
+    """Simple arrow to show location and direction."""
+    return
+    n = []
+    leng = 0.025
+    v = FreeCAD.Vector(0, 0, 0)
+    n.append(v)
+    vpoint = FreeCAD.Vector(0, leng * 2, 0)
+    n.append(vpoint)
+    v = FreeCAD.Vector(leng, leng, 0)
+    n.append(v)
+    n.append(vpoint)
+    v = FreeCAD.Vector(-leng, leng, 0)
+    n.append(v)
+    p = FreeCAD.activeDocument().addObject("Part::Polygon", name)
+    p.Nodes = n
+    rot = placement.Rotation
+    loc = placement.Base
+    p.Placement.Rotation = rot
+    p.Placement.Base = loc
+    return p

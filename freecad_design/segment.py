@@ -191,6 +191,7 @@ class Segment(object):
         parm_str += f"Inside Wafer Height: {pos_to_str(self.inside_height)} in\n"
         parm_str += f"Cylinder Diameter:{pos_to_str(self.cylinder_diameter)} in\n"
         parm_str += f"Helix Radius: \t{pos_to_str(self.helix_radius)} in\n"
+        parm_str += f"Segment Rotation: \t{pos_to_str(self.rotate_segment)} in\n"
         cons_file.write(parm_str)
         cons_file.write(f"Wafer Count: {self.wafer_count}\n\n")
 
