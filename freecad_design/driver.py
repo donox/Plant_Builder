@@ -42,6 +42,9 @@ class Driver(object):
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label  # simplify getting things in console
         self.position_offset = self.get_parm("position_offset")
+        self.compound_transform = None      # transform from base of first segment to top of last
+        self.handle_arrows = None           # holder for arrow command that must run after segment relocation
+        self.path_place_list = None         # list of triples - point nbr, point place, distance to next point
 
     def _gobj(self):
         """Function to get an object by label in FreeCAD"""
@@ -66,7 +69,7 @@ class Driver(object):
         remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
         if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
-            doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+|f.+")  # obj names start with l,e,L,E
+            doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+|f.+|K.+|A.+")  # obj names start with l,e,L,E,f,K
             for item in doc_list:
                 if item.Label != 'Parms_Master':
                     try:
@@ -83,6 +86,7 @@ class Driver(object):
             # This case reads the descriptor file and builds multiple segments
             self.build_from_file()
             self.relocate_segments()
+            self.process_arrow_command()
             if Driver.make_tf("print_cuts", self.parent_parms):
                 self.build_cut_list()
             if Driver.make_tf("print_place", self.parent_parms):
@@ -127,19 +131,19 @@ class Driver(object):
     def relocate_segments(self):
         """Relocate segments end to end."""
         first = True
-        compound_transform = None
         for segment in self.segment_list:
             if first:
                 first = False
-                compound_transform = segment.get_transform_to_top()
+                self.compound_transform = segment.get_transform_to_top()
+                print("DID FIRST")
             else:
                 angle = segment.get_segment_rotation()
                 segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
                                                      FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
-                compound_transform = compound_transform.multiply(segment_rotation)
-                segment.move_to_top(compound_transform)
-                compound_transform = compound_transform.multiply(segment.get_transform_to_top())
-
+                self.compound_transform = self.compound_transform.multiply(segment_rotation)
+                segment.move_to_top(self.compound_transform)
+                self.compound_transform = self.compound_transform.multiply(segment.get_transform_to_top())
+                print("DID OTHER")
     def build_cut_list(self):
         print(f"BUILD CUT LIST")
         cuts_file_name = self.get_parm("cuts_file")
@@ -211,11 +215,40 @@ class Driver(object):
                     segment_type, scale, point_count = new_line
                     scale = float(scale)
                     point_count = int(point_count)
-                    Driver.overhand_knot_path(scale, point_count)
+                    self.path_place_list = Driver.overhand_knot_path(scale, point_count)
+                elif operator == 'arrows':
+                    # add lines from last wafer to specified point and normal to last wafer
+                    # this must run after segment relocation so temp hold for now.  Note if multiple
+                    # arrow specs in file, the last will prevail
+                    self.handle_arrows = new_line
                 elif operator == 'stop':
                     break
                 else:
                     break
+
+    def process_arrow_command(self):
+        if not self.handle_arrows:
+            return
+        _, size, point_nbr = self.handle_arrows   # input string from description file (delayed input to allow for segment relo)
+        size = float(size)
+        point_nbr = int(point_nbr)
+        segment_list_top = self.segment_list[0]
+        lcs_top = segment_list_top.get_lcs_base()
+        if not self.compound_transform:
+            raise ValueError(f"TOP MISSING")
+        lcs_top.Placement = lcs_top.Placement.multiply(self.compound_transform)
+        arrow('Normal', lcs_top.Placement, size)
+
+        # Now add line to specified point
+        if len(self.path_place_list) <= point_nbr:
+            raise ValueError(f"No path point: {point_nbr}")
+        nbr, place, dist = self.path_place_list[point_nbr]
+        line = Part.LineSegment()
+        line.StartPoint = lcs_top.Placement.Base
+        line.EndPoint = place.Base
+        obj = self.doc.addObject("Part::Feature", "Line")
+        obj.Shape = line.toShape()
+
 
     @staticmethod
     def make_transform_align(object_1, object_2):
@@ -361,7 +394,7 @@ class Driver(object):
             place = FreeCAD.Placement(v1, rot)
             dist = v1.distanceToPoint(v2)
             place_list.append((t, place, dist))
-            arrow("A" + str(t), place)
+            # arrow("A" + str(t), place)
             p_prior = p_next
             # print(f"\t t: {t}, A: {np.round(angle, 2)} place: {place}")
             lcs1 = FreeCAD.activeDocument().addObject('Part::Vertex', "Kdot" + str(t))
@@ -370,19 +403,18 @@ class Driver(object):
             lcs1.Z = v1.z
         return place_list
 
-def arrow(name, placement):
+
+def arrow(name, placement, size):
     """Simple arrow to show location and direction."""
-    return
     n = []
-    leng = 0.025
     v = FreeCAD.Vector(0, 0, 0)
     n.append(v)
-    vpoint = FreeCAD.Vector(0, leng * 2, 0)
+    vpoint = FreeCAD.Vector(0, 0, size * 6)
     n.append(vpoint)
-    v = FreeCAD.Vector(leng, leng, 0)
+    v = FreeCAD.Vector(size, 0, size * 5)
     n.append(v)
     n.append(vpoint)
-    v = FreeCAD.Vector(-leng, leng, 0)
+    v = FreeCAD.Vector(-size, 0, size * 5)
     n.append(v)
     p = FreeCAD.activeDocument().addObject("Part::Polygon", name)
     p.Nodes = n
@@ -391,3 +423,15 @@ def arrow(name, placement):
     p.Placement.Rotation = rot
     p.Placement.Base = loc
     return p
+
+
+def squared_distance(place1, place2):
+    """Return square of distance between two Placements"""
+    p1 = place1.Base
+    p2 = place2.Base
+    p3 = p2.sub(p1)
+    return p3.x ** 2 + p3.y ** 2 + p3.z ** 2
+
+
+def disp_ax_ang(pref, place):
+    print(f"{pref}: {np.round(place.Rotation.Angle, 2)} {np.round(place.Rotation.Axis, 2)}")

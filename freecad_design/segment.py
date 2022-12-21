@@ -35,7 +35,7 @@ class Segment(object):
         self.segment_object = None
         self.lcs_base = None
         self.lcs_top = None
-        self.transform_to_top = None
+        self.transform_to_top = None  # transform from base of segment t0 top of segment
 
         self.get_wafer_parameters()
         if self.to_build:
@@ -68,6 +68,14 @@ class Segment(object):
             self.helix_radius = np.math.cos(self.lift_angle) / np.math.sin(self.lift_angle) * self.outside_height
             # print(f"SET RADIUS: {self.helix_radius}, Lift: {self.lift_angle}, Height: {self.outside_height}")
             self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(self.lift_angle)
+
+    def get_lcs_top(self):
+        return self.lcs_top
+
+    def get_lcs_base(self):
+        if not self.lcs_base:
+            raise ValueError(f"lcs_base not set")
+        return self.lcs_base
 
     def get_transform_to_top(self):
         if (self.segment_type == 'helix' and self.helix) or not self.to_build:
