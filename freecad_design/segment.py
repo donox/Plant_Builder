@@ -38,7 +38,8 @@ class Segment(object):
         self.transform_to_top = None  # transform from base of segment t0 top of segment
 
         self.get_wafer_parameters()
-        self.remove_prior_version()
+        if self.to_build:
+            self.remove_prior_version()
 
     def get_wafer_count(self):
         return self.wafer_count
@@ -77,8 +78,8 @@ class Segment(object):
         return self.lcs_base
 
     def get_transform_to_top(self):
-        if self.segment_type == 'helix' and self.helix:
-            return self.helix.transform_to_top
+        if (self.segment_type == 'helix' and self.helix) or not self.to_build:
+            return self.transform_to_top
         else:
             raise ValueError("Segment has no valid transform to top")
 
@@ -102,8 +103,10 @@ class Segment(object):
 
     def move_to_top(self, transform):
         """Apply transform to reposition segment."""
-        if self.segment_type == 'helix' and self.helix:
-            self.helix.move_content(transform)
+        if (self.segment_type == 'helix' and self.helix) or not self.to_build:
+            # print(f"BEFORE: {self.segment_object.Label}, {self.segment_object.Placement}")
+            self.move_content(transform)
+            # print(f"AFTER: {self.segment_object.Label}, {self.segment_object.Placement}")
         else:
             raise ValueError("Segment has no valid content to transform")
 

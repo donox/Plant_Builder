@@ -68,19 +68,16 @@ class Driver(object):
         # remove existing objects
         remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
+        remove_string = "K.+|L+.|N+."
         if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
-            doc_list = self.doc.findObjects(Name="l.+|e.+|L.+|E.+|f.+|K.+|A.+")  # obj names start with l,e,L,E,f,K
-            for item in doc_list:
-                if item.Label != 'Parms_Master':
-                    try:
-                        self.doc.removeObject(item.Label)
-                    except:
-                        pass
-        # if not do_cuts and (case == "helix" or case == "animate" or "segments"):
-        #     doc_list = self.doc.findObjects(Name=self.parm_set + ".+")  # remove prior occurrence of set being built
-        #     for item in doc_list:
-        #         if item.Label != 'Parms_Master':
-        #             self.doc.removeObject(item.Label)
+            remove_string += "|.+|e.+|E.+|f.+|A.+"
+        doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+        for item in doc_list:
+            if item.Label != 'Parms_Master':
+                try:
+                    self.doc.removeObject(item.Label)
+                except:
+                    pass
 
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
@@ -135,15 +132,14 @@ class Driver(object):
             if first:
                 first = False
                 self.compound_transform = segment.get_transform_to_top()
-                print("DID FIRST")
             else:
-                angle = segment.get_segment_rotation()
+                angle = segment.get_segment_rotation()      # Rotate entire segment around its own base
                 segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
                                                      FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
                 self.compound_transform = self.compound_transform.multiply(segment_rotation)
                 segment.move_to_top(self.compound_transform)
                 self.compound_transform = self.compound_transform.multiply(segment.get_transform_to_top())
-                print("DID OTHER")
+
     def build_cut_list(self):
         print(f"BUILD CUT LIST")
         cuts_file_name = self.get_parm("cuts_file")
@@ -212,10 +208,10 @@ class Driver(object):
                         helix = new_segment.reconstruct_helix()
                 elif operator == 'path':
                     # create target path to follow
-                    segment_type, scale, point_count = new_line
+                    segment_type, scale, point_count, knot_rotation = new_line
                     scale = float(scale)
                     point_count = int(point_count)
-                    self.path_place_list = Driver.overhand_knot_path(scale, point_count)
+                    self.path_place_list = Driver.overhand_knot_path(scale, point_count, int(knot_rotation))
                 elif operator == 'arrows':
                     # add lines from last wafer to specified point and normal to last wafer
                     # this must run after segment relocation so temp hold for now.  Note if multiple
@@ -248,7 +244,6 @@ class Driver(object):
         line.EndPoint = place.Base
         obj = self.doc.addObject("Part::Feature", "Line")
         obj.Shape = line.toShape()
-
 
     @staticmethod
     def make_transform_align(object_1, object_2):
@@ -359,7 +354,7 @@ class Driver(object):
             return False
 
     @staticmethod
-    def overhand_knot_path(scale, point_count):
+    def overhand_knot_path(scale, point_count, rotation):
         """Compute path of overhand knot.
 
         Return: list of
@@ -371,14 +366,16 @@ class Driver(object):
         point_list = []
         for t in range(point_count):
             angle = math.radians(t * 5) - math.pi
-            x = ((math.cos(angle) + 2 * math.cos(2 * angle))) * scale
-            y = ((math.sin(angle) - 2 * math.sin(2 * angle))) * scale
+            x = (math.cos(angle) + 2 * math.cos(2 * angle)) * scale
+            y = (math.sin(angle) - 2 * math.sin(2 * angle)) * scale
             z = (-math.sin(3 * angle)) * scale
             if t == 0:  # set origin of knot to global origin
                 x0 = x
                 y0 = y
                 z0 = z
-            vec = FreeCAD.Vector(x - x0, y - y0, z - z0)
+            vec1 = FreeCAD.Vector(x - x0, y - y0, z - z0)
+            rot = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), rotation)
+            vec = rot.multVec(vec1)
             # print(f"Knot: t: {t}, x: {np.round(x, 3)}, y: {np.round(y, 3)}, z:  {np.round(z, 3)}")
             point_list.append((t, vec))
         p_prior = point_list[0]

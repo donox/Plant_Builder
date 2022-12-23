@@ -1,6 +1,7 @@
 import numpy as np
 import time
 
+
 class Wafer(object):
 
     def __init__(self, app, gui, parm_set, wafer_type="EE"):
