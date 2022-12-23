@@ -232,15 +232,15 @@ class Driver(object):
         lcs_top = segment_list_top.get_lcs_base()
         if not self.compound_transform:
             raise ValueError(f"TOP MISSING")
-        lcs_top.Placement = lcs_top.Placement.multiply(self.compound_transform)
-        arrow('Normal', lcs_top.Placement, size)
+        new_place = lcs_top.Placement.multiply(self.compound_transform)     # Don't change LCS Base, so new Placement
+        arrow('Normal', new_place, size)
 
         # Now add line to specified point
         if len(self.path_place_list) <= point_nbr:
             raise ValueError(f"No path point: {point_nbr}")
         nbr, place, dist = self.path_place_list[point_nbr]
         line = Part.LineSegment()
-        line.StartPoint = lcs_top.Placement.Base
+        line.StartPoint = new_place.Base
         line.EndPoint = place.Base
         obj = self.doc.addObject("Part::Feature", "Line")
         obj.Shape = line.toShape()
