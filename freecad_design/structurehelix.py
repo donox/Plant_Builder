@@ -6,6 +6,16 @@ import re
 import Part
 import FreeCAD
 
+def print_placement(plc):
+    # print a numpy array
+    ary = np.array(plc.Matrix.A)  # one dimensional numpy array
+    res = ""
+    for i in range(4):
+        for j in range(4):
+            res += f"\t{np.round(ary[i*4+j], 3):>6.3f}"
+        res += "\n"
+    return res
+
 
 class StructureHelix(object):
     def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset, trace=None):
@@ -127,7 +137,7 @@ class StructureHelix(object):
             self.result = fuse
             self.named_result_LCS_top = self.doc.addObject('PartDesign::CoordinateSystem', self.parm_set + "lcs_top")
             self.named_result_LCS_top.Placement = lcs2.Placement
-            self.named_result_LCS_top.Visibility = True             # !!!!!!!!!!!!!!!!!!!!!
+            self.named_result_LCS_top.Visibility = False
             self.result_LCS_top = lcs2
             self.result_LCS_base = first_location
             new_name = self.parm_set + "lcs_base"
@@ -219,34 +229,30 @@ class StructureHelix(object):
         return e2
 
     def rotate_vertically(self):
-        # Set top location before rotation, but relocate to account for position of base moved to 0,0,0
-        # print_placement("LCS_TOP (before)", self.result_LCS_top)
-        box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
-        box_y = self.result_LCS_top.Placement.Base.y - self.result_LCS_base.Placement.Base.y
-        box_z = self.result_LCS_top.Placement.Base.z - self.result_LCS_base.Placement.Base.z
+        rot_to_vert = FreeCAD.Rotation(self.result_LCS_top.Placement.Base, FreeCAD.Vector(0, 0, 1))
+        pl_to_vert = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), rot_to_vert)
+        self.result.Placement = pl_to_vert * self.result.Placement
+        self.result_LCS_top.Placement = pl_to_vert * self.result_LCS_top.Placement
+        self.named_result_LCS_top.Placement = pl_to_vert * self.named_result_LCS_top.Placement
+        return pl_to_vert
 
-        # Rotate result to place vertically on each axis.  This requires only two rotations in x and y.
-        # Unclear why np.pi is different for x and y axes.
-        x_ang = np.pi / 2 - np.arcsin(box_z / np.sqrt(box_z ** 2 + box_y ** 2))
-        # self.result.Placement.Matrix.rotateX(x_ang)
-        self.result_LCS_top.Placement.Matrix.rotateX(x_ang)
-        self.named_result_LCS_top.Placement.Matrix.rotateX(x_ang)
-        self.result_LCS_base.Placement.Matrix.rotateX(x_ang)
+    def rotate_to_zero_y(self):
+        # Get the current position of the local coordinate system
+        pos = self.result_LCS_top.Placement.Base
 
-        box_x = self.result_LCS_top.Placement.Base.x - self.result_LCS_base.Placement.Base.x
-        box_z = self.result_LCS_top.Placement.Base.z - self.result_LCS_base.Placement.Base.z
-        y_ang = np.arcsin(box_z / np.sqrt(box_z ** 2 + box_x ** 2)) - np.pi / 2
-        # self.result.Placement.Matrix.rotateY(y_ang)
-        self.result_LCS_top.Placement.Matrix.rotateY(y_ang)
-        self.named_result_LCS_top.Placement.Matrix.rotateY(y_ang)
-        self.result_LCS_base.Placement.Matrix.rotateY(y_ang)
+        # Calculate the angle to rotate around the z-axis
+        angle = np.arctan2(pos.y, pos.x)
 
-        # print(f"In Structure: {self.result.Placement}")
-        print(f"Rotate X: {np.rad2deg(x_ang)}, Y: {np.rad2deg(y_ang)}")
+        # Create a rotation around the z-axis
+        rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle)
 
-        for wafer in self.wafer_list:
-            wafer.rotate_to_vertical(x_ang, y_ang)
-        FreeCAD.ang = (np.rad2deg(x_ang), np.rad2deg(y_ang))
+        # Apply the rotation to the local coordinate system
+        self.result.Placement = FreeCAD.Placement(self.result.Placement.Base, rotation)
+        self.named_result_LCS_top.Placement = FreeCAD.Placement(self.named_result_LCS_top.Placement.Base, rotation)
+        # print(f"self.named_result_LCS_top {self.named_result_LCS_top.Label}")
+        self.result_LCS_base.Placement = FreeCAD.Placement(self.result_LCS_base.Placement.Base, rotation)
+        # print(f"self.result_LCS_base {self.result_LCS_base.Label}")
+        return FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), rotation)
 
     def rotate_about_axis(self, obj, v1, v2, angle, rot_center):
         """Rotate an object about an axis defined by two vectors by a specified angle. """
@@ -282,7 +288,7 @@ class StructureHelix(object):
         l1 = object_1.Placement
         l2 = object_2.Placement
         tr = l1.inverse().multiply(l2)
-        print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
+        # print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
         # make available to console
         return tr
 

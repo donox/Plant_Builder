@@ -6,7 +6,7 @@ import FreeCAD
 import FreeCADGui
 
 
-def pos_to_str(x):
+def position_to_str(x):
     inches = int(x)
     fraction = int((x - inches) * 16)
     return f'{inches:2d}" {fraction:2d}/16'
@@ -41,6 +41,9 @@ class Segment(object):
         if self.to_build:
             self.remove_prior_version()
 
+    def get_segment_object(self):
+        return self.segment_object
+
     def get_wafer_count(self):
         return self.wafer_count
 
@@ -70,6 +73,7 @@ class Segment(object):
             self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(self.lift_angle)
 
     def get_lcs_top(self):
+        print(f"LCS TOP: {self.lcs_top.Label}")
         return self.lcs_top
 
     def get_lcs_base(self):
@@ -152,6 +156,13 @@ class Segment(object):
             self.move_content_to_zero(self.lcs_base.Placement.inverse())
             if self.trace:
                 self.trace("RE-BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
+            remove_string = f"{self.prefix}e.+|{self.prefix}we.+"
+            doc_list = doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+            for item in doc_list:
+                try:
+                    doc.removeObject(item.Label)
+                except:
+                    pass
 
         except Exception as e:
             raise ValueError(f"Failed to Reconstruct Segment: {e.args}")
@@ -195,11 +206,11 @@ class Segment(object):
         parm_str = f"\nConstruction list for segment: {segment_no}\n"
         parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        parm_str += f"Outside Wafer Height: {pos_to_str(self.outside_height)} in\n"
-        parm_str += f"Inside Wafer Height: {pos_to_str(self.inside_height)} in\n"
-        parm_str += f"Cylinder Diameter:{pos_to_str(self.cylinder_diameter)} in\n"
-        parm_str += f"Helix Radius: \t{pos_to_str(self.helix_radius)} in\n"
-        parm_str += f"Segment Rotation: \t{pos_to_str(self.rotate_segment)} in\n"
+        parm_str += f"Outside Wafer Height: {position_to_str(self.outside_height)} in\n"
+        parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
+        parm_str += f"Cylinder Diameter:{position_to_str(self.cylinder_diameter)} in\n"
+        parm_str += f"Helix Radius: \t{position_to_str(self.helix_radius)} in\n"
+        parm_str += f"Segment Rotation: \t{position_to_str(self.rotate_segment)} in\n"
         cons_file.write(parm_str)
         cons_file.write(f"Wafer Count: {self.wafer_count}\n\n")
 
@@ -210,12 +221,12 @@ class Segment(object):
             top_lcs_place = wafer.get_top().Placement
             global_loc = global_placement.multiply(top_lcs_place)
             num_str = str(wafer_num)
-            local_x = pos_to_str(top_lcs_place.Base.x)
-            global_x = pos_to_str(global_loc.Base.x)
-            local_y = pos_to_str(top_lcs_place.Base.y)
-            global_y = pos_to_str(global_loc.Base.y)
-            local_z = pos_to_str(top_lcs_place.Base.z)
-            global_z = pos_to_str(global_loc.Base.z)
+            local_x = position_to_str(top_lcs_place.Base.x)
+            global_x = position_to_str(global_loc.Base.x)
+            local_y = position_to_str(top_lcs_place.Base.y)
+            global_y = position_to_str(global_loc.Base.y)
+            local_z = position_to_str(top_lcs_place.Base.z)
+            global_z = position_to_str(global_loc.Base.z)
             str1 = f"Wafer: {num_str}\t at Local: [{local_x:{5}}, {local_y}, {local_z}],"
             str1 += f" \tat Global: [{global_x}, {global_y}, {global_z}]\n"
             cons_file.write(str1)

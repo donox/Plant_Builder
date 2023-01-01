@@ -13,7 +13,11 @@ import sys
 import math
 from .structurehelix import StructureHelix
 from .wafer import Wafer
-from .segment import Segment
+from .segment import Segment, position_to_str
+
+
+def convert_angle(angle):
+    return np.round(np.rad2deg(angle), 3)
 
 
 # Now on github as plant-builder
@@ -38,6 +42,7 @@ class Driver(object):
         self.trace_file_name = None
         self.trace_file = None
         self.do_trace = None
+        self.relocate_segments_tf = None
         self._set_up_trace()
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label  # simplify getting things in console
@@ -45,6 +50,7 @@ class Driver(object):
         self.compound_transform = None      # transform from base of first segment to top of last
         self.handle_arrows = None           # holder for arrow command that must run after segment relocation
         self.path_place_list = None         # list of triples - point nbr, point place, distance to next point
+        self.first_segment = True           # used to initialize segment list when relocating
 
     def _gobj(self):
         """Function to get an object by label in FreeCAD"""
@@ -79,19 +85,18 @@ class Driver(object):
                 except:
                     pass
 
+        if case == "helix_by_specs":
+            self.helix_specs()
+
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
+            self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
             self.build_from_file()
-            self.relocate_segments()
             self.process_arrow_command()
             if Driver.make_tf("print_cuts", self.parent_parms):
                 self.build_cut_list()
             if Driver.make_tf("print_place", self.parent_parms):
                 self.build_place_list()
-
-        if case == "helix":
-            self.make_helix()
-
         if case == "animate":
             self.make_helix()
             h1 = self.get_object_by_label("s1_FusedResult")
@@ -125,20 +130,21 @@ class Driver(object):
         if self.do_trace:
             self.trace_file.close()
 
-    def relocate_segments(self):
+    def relocate_segment(self):
         """Relocate segments end to end."""
-        first = True
-        for segment in self.segment_list:
-            if first:
-                first = False
-                self.compound_transform = segment.get_transform_to_top()
-            else:
-                angle = segment.get_segment_rotation()      # Rotate entire segment around its own base
-                segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
-                                                     FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
-                self.compound_transform = self.compound_transform.multiply(segment_rotation)
-                segment.move_to_top(self.compound_transform)
-                self.compound_transform = self.compound_transform.multiply(segment.get_transform_to_top())
+        if not self.relocate_segments_tf:
+            return
+        segment = self.segment_list[-1]
+        angle = segment.get_segment_rotation()  # Rotate entire segment around its own base
+        segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
+                                             FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
+        if self.first_segment:
+            self.first_segment = False
+            self.compound_transform = segment_rotation  # for first segment, we rotate only
+        else:
+            self.compound_transform = self.compound_transform.multiply(segment_rotation)
+        segment.move_to_top(self.compound_transform)
+        self.compound_transform = self.compound_transform.multiply(segment.get_transform_to_top())
 
     def build_cut_list(self):
         print(f"BUILD CUT LIST")
@@ -163,17 +169,6 @@ class Driver(object):
 
         cuts_file.close()
 
-    def make_helix(self):
-        do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
-        print(f"Working parameter set: {self.parm_set}")
-        helix = self.build_helix_OLD(self.parm_set)
-        if do_cuts:
-            cuts_file_name = self.get_parm("cuts_file")
-            cuts_file = open(cuts_file_name, "w+")
-            helix.make_cut_list(cuts_file)
-        # helix.rotate_vertically()
-        # self.align_segments()
-
     def build_from_file(self):
         """Read file and build multiple segments"""
         with open(self.get_parm("description_file"), "r") as csvfile:
@@ -186,7 +181,7 @@ class Driver(object):
                     operator = new_line[0]
                 else:
                     operator = 'stop'
-                print(f"Operator: {operator}")
+                # print(f"Operator: {operator}")
                 if operator == 'comment':
                     pass
                 elif operator == 'helix':
@@ -206,6 +201,7 @@ class Driver(object):
                     else:
                         # Use existing segment and construct minimal means to handle
                         helix = new_segment.reconstruct_helix()
+                    self.relocate_segment()
                 elif operator == 'path':
                     # create target path to follow
                     segment_type, scale, point_count, knot_rotation = new_line
@@ -217,6 +213,27 @@ class Driver(object):
                     # this must run after segment relocation so temp hold for now.  Note if multiple
                     # arrow specs in file, the last will prevail
                     self.handle_arrows = new_line
+                elif operator == 'target':
+                    # determine angle and distance from the top lcs to a specified points
+                    _, point_nbr = new_line
+                    point_nbr = int(point_nbr)
+                    if point_nbr >= point_count:
+                        raise ValueError(f"Point number higher than max count: {point_nbr}, {point_count}")
+                    top_segment = self.segment_list[-1]
+                    top_place = top_segment.get_lcs_top().Placement
+                    for pn in range(point_nbr - 1, point_nbr + 2):
+                        if 0 <= pn < point_count:
+                            knot_place = self.path_place_list[pn][1]
+                            knot_number = self.path_place_list[pn][0]
+                            distance, angle, x_distance, y_distance, z_distance, x_angle, y_angle = \
+                                calculate_distance_and_rotation(top_place, knot_place.Base)
+                            res_str = f"Segment: {top_segment.get_segment_object().Label}, Point: {knot_number}\n"
+                            res_str += f"\tDistance: {np.round(distance / 25.4, 3)}, Angle: {convert_angle(angle)}\n"
+                            res_str += f"\tX_Dist: {np.round(x_distance / 25.4, 3)}, "
+                            res_str += f"Y_Dist: {np.round(y_distance / 25.4, 3)}, "
+                            res_str += f"Z_Dist: {np.round(z_distance / 25.4, 3)},\n"
+                            res_str += f"\t X_Rotate: {convert_angle(x_angle)}, Y_Rotate: {convert_angle(y_angle)}"
+                            print(res_str)
                 elif operator == 'stop':
                     break
                 else:
@@ -233,7 +250,7 @@ class Driver(object):
         if not self.compound_transform:
             raise ValueError(f"TOP MISSING")
         new_place = lcs_top.Placement.multiply(self.compound_transform)     # Don't change LCS Base, so new Placement
-        arrow('Normal', new_place, size)
+        # arrow('Normal', new_place, size)
 
         # Now add line to specified point
         if len(self.path_place_list) <= point_nbr:
@@ -244,6 +261,18 @@ class Driver(object):
         line.EndPoint = place.Base
         obj = self.doc.addObject("Part::Feature", "Line")
         obj.Shape = line.toShape()
+
+        # find angle between normal to face and line to point on curve
+        p = FreeCAD.Placement(FreeCAD.Vector(0, 0, 3), FreeCAD.Rotation(0, 0, 0))
+        line2 = Part.LineSegment()
+        line2.StartPoint = new_place.Base
+        line2.EndPoint = new_place.multiply(p).Base
+        line_tan = line.tangent(0)[0]
+        line2_tan = line2.tangent(0)[0]
+        obj = self.doc.addObject("Part::Feature", "Line")
+        obj.Shape = line2.toShape()
+        angle = np.round(np.rad2deg(line2_tan.getAngle(line_tan)), 1)
+        print(f" ANGLE: {angle}")
 
     @staticmethod
     def make_transform_align(object_1, object_2):
@@ -364,6 +393,7 @@ class Driver(object):
         # NOTE:  if the first non-zero point has a zero y value, the candidate selected will have no lift
         # angle as all candidates have a zero yaw value.  To fix, at some arbitrary rotation to the whole path.
         point_list = []
+        knot_group = FreeCAD.activeDocument().addObject("App::DocumentObjectGroup", "Knot Group")
         for t in range(point_count):
             angle = math.radians(t * 5) - math.pi
             x = (math.cos(angle) + 2 * math.cos(2 * angle)) * scale
@@ -398,7 +428,35 @@ class Driver(object):
             lcs1.X = v1.x
             lcs1.Y = v1.y
             lcs1.Z = v1.z
+            knot_group.addObjects([lcs1])
         return place_list
+
+    def helix_specs(self):
+        file = "/home/don/Documents/Temp/helix_points.csv"
+        temp_file = "/home/don/Documents/Temp/helix_temp.csv"
+        wafer_count = 8
+        with open(file, "w") as f:
+            csv_w = csv.writer(f)
+            for lift in range(8, 13, 22):
+                for rotate in range(10, 36, 100):
+                    try:
+                        self.doc.removeObject(self.doc.getObjectsByLabel("helix_FusedResult")[0].Name)
+                    except IndexError:
+                        pass
+                    new_segment = Segment("helix", lift, rotate, 0.75, 2.0,
+                                          wafer_count, False, temp_file, True, False, trace=self.trace)
+                    helix = new_segment.build_helix()
+                    pl_to_vert = helix.rotate_vertically()
+                    rotation = helix.rotate_to_zero_y()
+                    # pl_to_vert = pl_to_vert.multiply(rotation)
+                    # lift, rotate, px, py, pz
+                    for i in range(wafer_count):
+                        wafer_name = f"helix_we{str(i)}"
+                        wafer = self.doc.getObjectsByLabel(wafer_name)[0]
+                        pt_pl = pl_to_vert.multiply(wafer.OutList[0].Placement)
+                        pt = pt_pl.Base
+                        csv_w.writerow([lift, rotate, np.round(pt.x, 3), np.round(pt.y, 3), np.round(pt.z, 3)])
+            f.close()
 
 
 def arrow(name, placement, size):
@@ -430,5 +488,28 @@ def squared_distance(place1, place2):
     return p3.x ** 2 + p3.y ** 2 + p3.z ** 2
 
 
-def disp_ax_ang(pref, place):
+def display_axis_angle(pref, place):
     print(f"{pref}: {np.round(place.Rotation.Angle, 2)} {np.round(place.Rotation.Axis, 2)}")
+
+
+def calculate_distance_and_rotation(placement, vec):
+    # Calculate the distance between a placement and a vector in mm and radians
+    distance = np.sqrt(
+        (vec.x - placement.Base.x) ** 2 + (vec.y - placement.Base.y) ** 2 + (vec.z - placement.Base.z) ** 2)
+    # Get the rotation matrix of the placement
+    rot_matrix = placement.Rotation.toMatrix()
+
+    # Rotate the vector around the z-axis of the placement
+    rotated_vec = rot_matrix.multiply(vec)
+
+    # Calculate the angle to rotate around the z-axis of the placement
+    angle = np.arctan2(rotated_vec.y, rotated_vec.x)
+
+    # Calculate the component distances and angles
+    x_distance = rotated_vec.x
+    y_distance = rotated_vec.y
+    z_distance = rotated_vec.z
+    x_angle = np.arctan2(rotated_vec.z, rotated_vec.x)
+    y_angle = np.arctan2(rotated_vec.z, rotated_vec.y)
+
+    return distance, angle, x_distance, y_distance, z_distance, x_angle, y_angle
