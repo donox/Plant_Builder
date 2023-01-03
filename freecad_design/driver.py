@@ -97,6 +97,14 @@ class Driver(object):
                 self.build_cut_list()
             if Driver.make_tf("print_place", self.parent_parms):
                 self.build_place_list()
+
+        if case == "relative_places":
+            self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
+            self.build_from_file()
+            start_seg = self.get_parm("relative_start")
+            end_seg = self.get_parm("relative_end")
+            self.build_relative_place_list(start_seg, end_seg)
+
         if case == "animate":
             self.make_helix()
             h1 = self.get_object_by_label("s1_FusedResult")
@@ -169,6 +177,31 @@ class Driver(object):
 
         cuts_file.close()
 
+    def build_relative_place_list(self, seg_start, seg_end):
+        # Construct placement list assuming seg_start is at 0,0,0 and continue through seg_end
+        print(f"BUILD RELATIVE PLACE LIST from {seg_start} to {seg_end}")
+        cuts_file_name = self.get_parm("place_file")
+        cuts_file = open(cuts_file_name, "w+")
+        cuts_file.write("Wafer Placement:\n\n\n")
+        global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
+        start_seg = None
+        end_seg = None
+        for nbr, segment in enumerate(self.segment_list):
+            if segment.get_segment_name() == seg_start:
+                global_placement = global_placement.multiply(segment.get_lcs_base().Placement)
+                start_seg = nbr
+                break
+        for nbr, segment in enumerate(self.segment_list):
+            if segment.get_segment_name() == seg_end:
+                end_seg = nbr
+                break
+        if not start_seg or not end_seg:
+            raise ValueError(f"Invalid start or ending segment name: start {seg_start}, end {seg_end}")
+        for nbr, segment in enumerate(self.segment_list[start_seg:end_seg+1]):
+            global_placement = segment.print_construction_list(nbr + start_seg, cuts_file, global_placement)
+
+        cuts_file.close()
+
     def build_from_file(self):
         """Read file and build multiple segments"""
         with open(self.get_parm("description_file"), "r") as csvfile:
@@ -228,10 +261,10 @@ class Driver(object):
                             distance, angle, x_distance, y_distance, z_distance, x_angle, y_angle = \
                                 calculate_distance_and_rotation(top_place, knot_place.Base)
                             res_str = f"Segment: {top_segment.get_segment_object().Label}, Point: {knot_number}\n"
-                            res_str += f"\tDistance: {np.round(distance / 25.4, 3)}, Angle: {convert_angle(angle)}\n"
-                            res_str += f"\tX_Dist: {np.round(x_distance / 25.4, 3)}, "
-                            res_str += f"Y_Dist: {np.round(y_distance / 25.4, 3)}, "
-                            res_str += f"Z_Dist: {np.round(z_distance / 25.4, 3)},\n"
+                            res_str += f"\tDistance: {np.round(distance, 3)}, Angle: {convert_angle(angle)}\n"
+                            res_str += f"\tX_Dist: {np.round(x_distance, 3)}, "
+                            res_str += f"Y_Dist: {np.round(y_distance, 3)}, "
+                            res_str += f"Z_Dist: {np.round(z_distance, 3)},\n"
                             res_str += f"\t X_Rotate: {convert_angle(x_angle)}, Y_Rotate: {convert_angle(y_angle)}"
                             print(res_str)
                 elif operator == 'stop':

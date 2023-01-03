@@ -41,6 +41,9 @@ class Segment(object):
         if self.to_build:
             self.remove_prior_version()
 
+    def get_segment_name(self):
+        return self.prefix[:-1]    # strip trailing underscore
+
     def get_segment_object(self):
         return self.segment_object
 
@@ -138,6 +141,7 @@ class Segment(object):
         self.segment_object = fuse
         self.lcs_base = base
         self.lcs_top = top
+        self.lcs_top.Visibility = False
         self.transform_to_top = transform
         self.wafer_list = helix.get_wafer_list()
         if self.trace:
