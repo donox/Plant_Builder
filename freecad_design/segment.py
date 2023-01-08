@@ -176,14 +176,19 @@ class Segment(object):
         parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
         parm_str += f"Outside Wafer Height: {np.round(self.outside_height / 25.4, 2)} in\n"
-        parm_str += f"Inside Wafer Height: {np.round(self.inside_height / 25.4, 2)} in\n"
+        if self.inside_height:
+            parm_str += f"Inside Wafer Height: {np.round(self.inside_height / 25.4, 2)} in\n"
+        else:
+            parm_str += f"Inside Wafer Height: NONE\n"
         parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter / 25.4, 2)} in\n"
-        parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
+        if self.helix_radius:
+            parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
+        else:
+            parm_str += f"Helix Radius: NONE\n"
         cuts_file.write(parm_str)
         cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
         try:
-            nbr_rotations = int(360 / np.rad2deg(self.rotation_angle))
-            step_size = nbr_rotations / 2 - 1
+            step_size = np.rad2deg(self.rotation_angle)
         except Exception as e:
             nbr_rotations = None
             step_size = 0
@@ -203,36 +208,48 @@ class Segment(object):
             else:
                 str2 = s2 + str2
             cuts_file.write(f"{str1} {str2};    Done: _____\n")
-            if nbr_rotations:
-                current_position = int((current_position + step_size) % nbr_rotations)
+            current_position = int((current_position - step_size + 180) % 360)
 
     def print_construction_list(self, segment_no, cons_file, global_placement):
         parm_str = f"\nConstruction list for segment: {segment_no}\n"
         parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
         parm_str += f"Outside Wafer Height: {position_to_str(self.outside_height)} in\n"
-        parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
+        if self.inside_height:
+            parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
+        else:
+            parm_str += f"Inside Wafer Height: NONE\n"
         parm_str += f"Cylinder Diameter:{position_to_str(self.cylinder_diameter)} in\n"
-        parm_str += f"Helix Radius: \t{position_to_str(self.helix_radius)} in\n"
+        if self.helix_radius:
+            parm_str += f"Helix Radius: \t{position_to_str(self.helix_radius)} in\n"
+        else:
+            parm_str += f"Helix Radius: NONE\n"
         parm_str += f"Segment Rotation: \t{position_to_str(self.rotate_segment)} in\n"
         cons_file.write(parm_str)
         cons_file.write(f"Wafer Count: {self.wafer_count}\n\n")
 
+        vec = FreeCAD.Vector(0, 0, 1)
         if not self.wafer_list:
             cons_file.write(f"This segment was reconstructed thus there is no wafer list")
             return None
         for wafer_num, wafer in enumerate(self.wafer_list):
             top_lcs_place = wafer.get_top().Placement
             global_loc = global_placement.multiply(top_lcs_place)
-            num_str = str(wafer_num)
+            num_str = str(wafer_num + 1)       # Make one-based for conformance with practice
             local_x = position_to_str(top_lcs_place.Base.x)
             global_x = position_to_str(global_loc.Base.x)
             local_y = position_to_str(top_lcs_place.Base.y)
             global_y = position_to_str(global_loc.Base.y)
             local_z = position_to_str(top_lcs_place.Base.z)
             global_z = position_to_str(global_loc.Base.z)
-            str1 = f"Wafer: {num_str}\t at Local: [{local_x:{5}}, {local_y}, {local_z}],"
-            str1 += f" \tat Global: [{global_x}, {global_y}, {global_z}]\n"
+            # Seems to be a long way around to get the lcs z-axis s vector
+            lcso = FreeCAD.activeDocument().getObject(wafer.get_lcs_top().Label)
+            vec = FreeCAD.Vector(0, 0, 1)
+            vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
+            angle = vec2.getAngle(vec)
+            str1 = f"Wafer: {num_str}\tat Local:  [{local_x:{5}}, {local_y}, {local_z}],"
+            str1 += f" with Angle: {np.round(np.rad2deg(angle), 1)}\n"
+            str1 += f"\t\tat Global: [{global_x}, {global_y}, {global_z}]\n"
             cons_file.write(str1)
         return global_loc
 

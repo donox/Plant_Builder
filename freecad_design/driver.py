@@ -188,7 +188,6 @@ class Driver(object):
         end_seg = None
         for nbr, segment in enumerate(self.segment_list):
             if segment.get_segment_name() == seg_start:
-                global_placement = global_placement.multiply(segment.get_lcs_base().Placement)
                 start_seg = nbr
                 break
         for nbr, segment in enumerate(self.segment_list):

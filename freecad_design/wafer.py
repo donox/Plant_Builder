@@ -1,5 +1,6 @@
 import numpy as np
 import time
+import FreeCAD
 
 
 class Wafer(object):
@@ -80,4 +81,70 @@ class Wafer(object):
 
     def get_base(self):
         return self.lcs_base
+
+    def get_wafer_name(self):
+        return self.wafer_name
+
+    def get_lcs_top(self):
+        return self.lcs_top
+
+
+def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
+    """Move lcs on base surface to corresponding position on top.
+
+    There are four cases where the base is a circle (C) or ellipse (E) and similarly on top.
+
+        For CC:  The lift angle is zero and the new placement is simply the addition of the
+            outside height to the z-axis.
+        For CE: The wafer is a cylinder of height outside height / 2 and an inclined section
+            with a circle at the base and ellipse at the top.
+        For EC: The wafer is an inverted CE.
+        For EE: The wafer is an EC at the base and a CE on top.
+
+    Calculations:
+        Calculate each part separately (thus CE above is a cylinder on bottom and an ellipse on top with the
+        cylinder of height outside_height / 2).  Then combine two parts appropriately to create the full case above.
+
+        If base is an ellipse, rotate point to global zero.  Figure will be a cylinder inclined
+        by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
+
+    """
+    parts = {"CC": ("CC2", "CC2"),
+             "CE": ("CC2", "CE2"),
+             "EC": ("EC2", "CC2"),
+             "EE": ("EC2", "CE2")}
+    used_parts = parts[lcs_type]
+    h2 = outside_height / 2
+    d2 = cylinder_diameter / 2
+    la = lift_angle / 2
+    result_vec = []
+    for i in range(2):
+        if "EC2" == used_parts[i]:
+            del_x = -d2 * np.sin(la)
+            del_z = h2 - d2 * np.tan(la)
+            result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+            # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
+        if "CE2" == used_parts[i]:
+            del_x = -d2 * np.sin(la)
+            del_z = h2 - d2 * np.tan(la)
+            result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+            # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
+        if "CC2" == used_parts[i]:
+            del_x = 0
+            del_z = h2
+            result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+            # print(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
+        rot = FreeCAD.Rotation(0, 0, 0)
+        if used_parts[i] in ["CE2", "EC2"]:
+            rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
+        if used_parts[i] == "EE2":
+            rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
+        new_place = FreeCAD.Placement(result_vec[i], rot)
+        lcs.Placement = lcs.Placement.multiply(new_place)
+        # break
+    # lcso = FreeCAD.activeDocument().getObject(lcs.Label)        # Debug - checking actual lift angle
+    # vec = FreeCAD.Vector(0, 0, 1)
+    # vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
+    # angle = vec2.getAngle(vec)
+    # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
 

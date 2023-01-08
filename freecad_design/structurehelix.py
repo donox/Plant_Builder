@@ -1,6 +1,6 @@
 import numpy as np
 import csv
-from .wafer import Wafer
+from .wafer import lift_lcs
 from .wafer import Wafer
 import re
 import Part
@@ -34,6 +34,7 @@ class StructureHelix(object):
         self.lift_angle = ps.get_lift_angle()
         self.rotation_angle = ps.get_rotation_angle()
         self.helix_radius = ps.get_helix_radius()
+        self.cylinder_diameter = ps.get_cylinder_diameter()
         self.outside_height = ps.get_outside_height()
         # The assumption is that a single Structure creates a single fused result such as a helix
         # There is also an LCS that is the last location of the structure (position of the top ellipse
@@ -64,33 +65,29 @@ class StructureHelix(object):
             e_name = 'e' + str(total_wafer_count)
             self.lcs_writer.writerow([e_name, lcs_temp.Placement])
             e_name += '_top'
+            print(f"LIFT in WRITE: lift angle - {np.round(np.rad2deg(self.lift_angle), 2)}, j - {j}")
             if j == 0:
-                self.lift_lcs(lcs_temp, self.lift_angle/2, self.helix_radius, self.outside_height)
-                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle/2)    # This makes rotation occur within a wafer
+                # lift_lcs(lcs_temp, 0, self.helix_radius, self.outside_height / 2)   # Presume cylinder for half
+                lift_lcs(lcs_temp, self.lift_angle, self.cylinder_diameter, self.outside_height, "CE")
+                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)    # This makes rotation occur within a wafer
                 self.lcs_writer.writerow([e_name, lcs_temp.Placement, "CE"])
             elif j == wc - 1:
-                self.lift_lcs(lcs_temp, self.lift_angle/2, self.helix_radius, self.outside_height)
-                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle/2)  # This makes rotation occur within a wafer
+                lift_lcs(lcs_temp, self.lift_angle, self.cylinder_diameter, self.outside_height, "EC")
+                lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)  # This makes rotation occur within a wafer
+                # lift_lcs(lcs_temp, 0, self.helix_radius, self.outside_height / 2)
                 self.lcs_writer.writerow([e_name, lcs_temp.Placement, "EC"])
             else:
-                self.lift_lcs(lcs_temp, self.lift_angle, self.helix_radius, self.outside_height)
+                lift_lcs(lcs_temp, self.lift_angle, self.cylinder_diameter, self.outside_height, "EE")
                 lcs_temp.Placement.Matrix.rotateZ(self.rotation_angle)  # This makes rotation occur within a wafer
                 self.lcs_writer.writerow([e_name, lcs_temp.Placement, "EE"])
+            # lcso = self.doc.getObject(lcs_temp.Label)        # Debug - checking actual lift angle
+            # vec = FreeCAD.Vector(0, 0, 1)
+            # vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
+            # angle = vec2.getAngle(vec)
+            # print(f"WRITE_LCS: Input: {np.round(np.rad2deg(self.lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}, radius - {np.round(self.helix_radius, 2)}")
 
         self.lcs_writer.writerow(["Done", "Done"])
         self.lcs_file.close()
-
-    def lift_lcs(self, lcs, lift_angle, helix_radius, outside_height):
-        # print(f"LIFT ANGLE: {lift_angle}, {helix_radius}, {outside_height}")
-        if lift_angle == 0:
-            lcs.Placement.Base = lcs.Placement.Base + FreeCAD.Vector(0, 0, outside_height)
-            return
-        translate_vector = FreeCAD.Vector(-helix_radius, 0, 0)
-        lcs.Placement.Base = lcs.Placement.Base + translate_vector
-        pm = lcs.Placement.toMatrix()
-        pm.rotateY(lift_angle)
-        lcs.Placement = FreeCAD.Placement(pm)
-        lcs.Placement.Base = lcs.Placement.Base - translate_vector
 
     def create_structure(self, major_radius, minor_radius, csv_file, show_lcs):
         """Create structure from I/O stream or file"""
@@ -160,38 +157,6 @@ class StructureHelix(object):
         self.named_result_LCS_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
         pl = self.named_result_LCS_base.Placement
         self.named_result_LCS_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-
-    def make_cut_list(self, cuts_file):
-        # TODO: THIS HAS TO BE BASED ON SEGMENTS
-        print(f"Cuts Made")
-        cuts_file.write("Cutting order:\n\n\n")
-        parm_str = f"Lift Angle: {np.rad2deg(self.lift_angle)} degrees\n"
-        parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        parm_str += f"Outside Wafer Height: {np.round(self.outside_height / 25.4, 2)} in\n"
-        parm_str += f"Inside Wafer Height: {np.round(self.inside_height / 25.4, 2)} in\n"
-        parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter / 25.4, 2)} in\n"
-        parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
-        cuts_file.write(parm_str)
-        cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
-        nbr_rotations = int(360 / np.rad2deg(self.rotation_angle))
-        step_size = nbr_rotations / 2 - 1
-        current_position = 0
-        s1 = "Step: "
-        s2 = " at position: "
-        for i in range(self.wafer_count):
-            str1 = str(i)
-            if len(str1) == 1:
-                str1 = s1 + ' ' + str1
-            else:
-                str1 = s1 + str1
-            str2 = str(current_position)
-            if len(str2) == 1:
-                str2 = s2 + ' ' + str2
-            else:
-                str2 = s2 + str2
-            self.cuts_file.write(f"{str1} {str2};    Done: _____\n")
-            current_position = int((current_position + step_size) % nbr_rotations)
-        self.cuts_file.close()
 
     def make_placement(self, place_str):
         """Create a placement as read from file."""
