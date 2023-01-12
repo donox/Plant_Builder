@@ -70,10 +70,12 @@ class Segment(object):
 
     def get_wafer_parameters(self):
         if self.lift_angle != 0:  # leave as simple cylinder if zero
+            la = self.lift_angle / 2
+            oh = self.outside_height / 2
             # Assume origin at center of ellipse, x-axis along major axis, positive to outside.
-            self.helix_radius = np.math.cos(self.lift_angle) / np.math.sin(self.lift_angle) * self.outside_height
+            self.helix_radius = oh / np.math.tan(la)
             # print(f"SET RADIUS: {self.helix_radius}, Lift: {self.lift_angle}, Height: {self.outside_height}")
-            self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(self.lift_angle)
+            self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(la) * 2
 
     def get_lcs_top(self):
         print(f"LCS TOP: {self.lcs_top.Label}")
@@ -175,14 +177,14 @@ class Segment(object):
         parm_str = f"\n\nCut list for segment: {segment_no}\n"
         parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        parm_str += f"Outside Wafer Height: {np.round(self.outside_height / 25.4, 2)} in\n"
+        parm_str += f"Outside Wafer Height: {np.round(self.outside_height, 2)} in\n"
         if self.inside_height:
-            parm_str += f"Inside Wafer Height: {np.round(self.inside_height / 25.4, 2)} in\n"
+            parm_str += f"Inside Wafer Height: {np.round(self.inside_height, 2)} in\n"
         else:
             parm_str += f"Inside Wafer Height: NONE\n"
-        parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter / 25.4, 2)} in\n"
+        parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter, 2)} in\n"
         if self.helix_radius:
-            parm_str += f"Helix Radius: \t{np.round(self.helix_radius / 25.4, 2)} in\n"
+            parm_str += f"Helix Radius: \t{np.round(self.helix_radius, 2)} in\n"
         else:
             parm_str += f"Helix Radius: NONE\n"
         cuts_file.write(parm_str)
@@ -210,7 +212,7 @@ class Segment(object):
             cuts_file.write(f"{str1} {str2};    Done: _____\n")
             current_position = int((current_position - step_size + 180) % 360)
 
-    def print_construction_list(self, segment_no, cons_file, global_placement):
+    def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
         parm_str = f"\nConstruction list for segment: {segment_no}\n"
         parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
         parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
@@ -233,16 +235,19 @@ class Segment(object):
             cons_file.write(f"This segment was reconstructed thus there is no wafer list")
             return None
         for wafer_num, wafer in enumerate(self.wafer_list):
+            # if wafer_num:
+            #     prior_top = top_lcs_place
             top_lcs_place = wafer.get_top().Placement
             global_loc = global_placement.multiply(top_lcs_place)
-            num_str = str(wafer_num + 1)       # Make one-based for conformance with practice
+            num_str = str(wafer_num + 1)       # Make one-based for conformance with  in shop
             local_x = position_to_str(top_lcs_place.Base.x)
             global_x = position_to_str(global_loc.Base.x)
             local_y = position_to_str(top_lcs_place.Base.y)
             global_y = position_to_str(global_loc.Base.y)
             local_z = position_to_str(top_lcs_place.Base.z)
             global_z = position_to_str(global_loc.Base.z)
-            # Seems to be a long way around to get the lcs z-axis s vector
+            find_min_max(global_loc.Base)
+            # Seems to be a long way around to get the lcs z-axis's vector
             lcso = FreeCAD.activeDocument().getObject(wafer.get_lcs_top().Label)
             vec = FreeCAD.Vector(0, 0, 1)
             vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
@@ -251,6 +256,17 @@ class Segment(object):
             str1 += f" with Angle: {np.round(np.rad2deg(angle), 1)}\n"
             str1 += f"\t\tat Global: [{global_x}, {global_y}, {global_z}]\n"
             cons_file.write(str1)
+            # if wafer_num:
+            #     # relocate to global space using prior wafer and compute direction and distance.
+            #     relocate = prior_top.inverse()
+            #     relative_position = relocate.multiply(top_lcs_place)
+            #     x_pos = position_to_str(relative_position.Base.x)
+            #     y_pos = position_to_str(relative_position.Base.y)
+            #     z_pos = position_to_str(relative_position.Base.z)
+            #     str2 = f"\t\tRelative placement:\t[{x_pos}, {y_pos}, {z_pos}\n]"
+            #     euler_angles = relative_position.Rotation.getYawPitchRoll()
+            #     str2 += f"\t\tEuler Angles:\t{euler_angles}\n"
+            #     cons_file.write(str2)
         return global_loc
 
     @staticmethod

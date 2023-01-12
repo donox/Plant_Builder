@@ -113,32 +113,33 @@ def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
              "CE": ("CC2", "CE2"),
              "EC": ("EC2", "CC2"),
              "EE": ("EC2", "CE2")}
-    used_parts = parts[lcs_type]
+    parts_used = parts[lcs_type]
     h2 = outside_height / 2
     d2 = cylinder_diameter / 2
     la = lift_angle / 2
     result_vec = []
     for i in range(2):
-        if "EC2" == used_parts[i]:
+        # print(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
+        if "EC2" == parts_used[i]:
             del_x = -d2 * np.sin(la)
             del_z = h2 - d2 * np.tan(la)
             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-            # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
-        if "CE2" == used_parts[i]:
+            # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
+        if "CE2" == parts_used[i]:
             del_x = -d2 * np.sin(la)
             del_z = h2 - d2 * np.tan(la)
             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-            # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
-        if "CC2" == used_parts[i]:
+            # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
+        if "CC2" == parts_used[i]:
             del_x = 0
-            del_z = h2
+            del_z = 0              # removes cylindrical part
             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
             # print(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
         rot = FreeCAD.Rotation(0, 0, 0)
-        if used_parts[i] in ["CE2", "EC2"]:
+        if parts_used[i] in ["CE2", "EC2"]:
             rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
-        if used_parts[i] == "EE2":
-            rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
+        # if parts_used[i] == "EE2":          # there is no EE2
+        #     rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
         new_place = FreeCAD.Placement(result_vec[i], rot)
         lcs.Placement = lcs.Placement.multiply(new_place)
         # break

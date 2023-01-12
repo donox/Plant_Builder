@@ -78,6 +78,7 @@ class Driver(object):
         if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
             remove_string += "|.+|e.+|E.+|f.+|A.+"
         doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+        print(f"DOC LIST LEN: {len(doc_list)}")
         for item in doc_list:
             if item.Label != 'Parms_Master':
                 try:
@@ -167,13 +168,23 @@ class Driver(object):
 
     def build_place_list(self):
         print(f"BUILD PLACE LIST")
+        min_max = [[0, 0], [0, 0], [0, 0]]
+        def find_min_max(base):
+            for i in range(3):
+                if base[i] < min_max[i][0]:
+                    min_max[i][0] = np.round(base[i], 3)
+                if base[i] > min_max[i][1]:
+                    min_max[i][1] = np.round(base[i], 3)
         cuts_file_name = self.get_parm("place_file")
         cuts_file = open(cuts_file_name, "w+")
         cuts_file.write("Wafer Placement:\n\n\n")
         global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
 
         for nbr, segment in enumerate(self.segment_list):
-            global_placement = segment.print_construction_list(nbr, cuts_file, global_placement)
+            global_placement = segment.print_construction_list(nbr, cuts_file, global_placement, find_min_max)
+        min_max_str = f"\nGlobal Min Max:\n\tX: {min_max[0][0]} - {min_max[0][1]}, "
+        min_max_str += f"Y: {min_max[1][0]} - {min_max[1][1]}, Z: {min_max[2][0]} - {min_max[2][1]}"
+        cuts_file.write(f"{min_max_str}")
 
         cuts_file.close()
 

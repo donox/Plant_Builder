@@ -65,7 +65,7 @@ class StructureHelix(object):
             e_name = 'e' + str(total_wafer_count)
             self.lcs_writer.writerow([e_name, lcs_temp.Placement])
             e_name += '_top'
-            print(f"LIFT in WRITE: lift angle - {np.round(np.rad2deg(self.lift_angle), 2)}, j - {j}")
+            # print(f"LIFT in WRITE: lift angle - {np.round(np.rad2deg(self.lift_angle), 2)}, j - {j}")
             if j == 0:
                 # lift_lcs(lcs_temp, 0, self.helix_radius, self.outside_height / 2)   # Presume cylinder for half
                 lift_lcs(lcs_temp, self.lift_angle, self.cylinder_diameter, self.outside_height, "CE")
