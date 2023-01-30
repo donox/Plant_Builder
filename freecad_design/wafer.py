@@ -8,8 +8,8 @@ class Wafer(object):
     def __init__(self, app, gui, parm_set, wafer_type="EE"):
         self.app = app
         self.gui = gui
-        self.parm_set = parm_set
-        self.wafer_type = wafer_type
+        self.parm_set = parm_set        # Naming preamble for elements in a set (segment)
+        self.wafer_type = wafer_type    # EE, CE, EC, CC
         self.outside_height = None
         self.lift_angle = None
         self.rotation_angle = None
@@ -88,9 +88,14 @@ class Wafer(object):
     def get_lcs_top(self):
         return self.lcs_top
 
+    def get_wafer(self):
+        return self.wafer
+
 
 def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
     """Move lcs on base surface to corresponding position on top.
+
+    This is a side-effecting operation.  Result is modified input lcs.
 
     There are four cases where the base is a circle (C) or ellipse (E) and similarly on top.
 
@@ -109,6 +114,7 @@ def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
         by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
 
     """
+    # print(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
     parts = {"CC": ("CC2", "CC2"),
              "CE": ("CC2", "CE2"),
              "EC": ("EC2", "CC2"),
@@ -137,6 +143,7 @@ def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
             # print(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
         rot = FreeCAD.Rotation(0, 0, 0)
         if parts_used[i] in ["CE2", "EC2"]:
+            # Not clear if Rotation wants radians or degrees.  Testing says radians - complex_path says degrees
             rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
         # if parts_used[i] == "EE2":          # there is no EE2
         #     rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
@@ -149,3 +156,6 @@ def lift_lcs(lcs, lift_angle, cylinder_diameter, outside_height, lcs_type):
     # angle = vec2.getAngle(vec)
     # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
 
+
+def convert_angle(angle):
+    return np.round(np.rad2deg(angle), 3)

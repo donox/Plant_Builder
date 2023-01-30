@@ -78,7 +78,7 @@ class Segment(object):
             self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(la) * 2
 
     def get_lcs_top(self):
-        print(f"LCS TOP: {self.lcs_top.Label}")
+        # print(f"LCS TOP: {self.lcs_top.Label}")
         return self.lcs_top
 
     def get_lcs_base(self):

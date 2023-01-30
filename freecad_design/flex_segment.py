@@ -1,7 +1,7 @@
 import numpy as np
 import csv
 from .wafer import Wafer
-from .structurehelix import StructureHelix
+from .structurehelix import StructureHelix, lift_lcs
 import FreeCAD
 import FreeCADGui
 
@@ -13,8 +13,11 @@ def position_to_str(x):
 
 
 class FlexSegment(object):
-    def __init__(self, prefix,  show_lcs,temp_file, to_build, rotate_segment, trace=None):
+    def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment, trace=None):
+        self.doc = FreeCAD.ActiveDocument
+        self.gui = FreeCADGui
         self.prefix = prefix + "_"
+        self.rotate_segment = rotate_segment
         self.trace = trace
         self.wafer_count = 0
         self.wafer_list = []            # This is empty for segments that were reconstructed from the model tree
@@ -22,18 +25,38 @@ class FlexSegment(object):
         self.temp_file = temp_file
         self.segment_type = None
         self.to_build = to_build    # if False, use existing structure
-
-        self.segment_object = None
-        self.lcs_base = None
-        self.lcs_top = None
+        self.segment_object = None      # THIS WAS HELIX - DOES NOT EXIST HERE?
         self.transform_to_top = None  # transform from base of segment t0 top of segment
-
-        self.get_wafer_parameters()     # need specific wafer
         if self.to_build:
             self.remove_prior_version()
+        self.lcs_base = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_base")
+        self.lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_top")
 
-    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height):
-        pass
+    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
+        # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
+        # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
+        self.wafer_count += 1
+        name_base = self.prefix + str(self.wafer_count)
+        lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
+        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
+        lift_lcs(lcs2, lift, cylinder_diameter, outside_height, wafer_type)
+        matrix = lcs2.Placement.toMatrix()
+        matrix.rotateZ(-rotation)
+        lcs2.Placement = FreeCAD.Placement(matrix)
+        if not self.show_lcs:
+            lcs1.Visibility = False
+            lcs2.Visibility = False
+        wafer_name = name_base + "_w"
+        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
+        wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
+        print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
+
+        lcs1.Placement = self.lcs_top.Placement
+        lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
+        wafer_loft = wafer.get_wafer()
+        wafer_loft.Placement = lcs1.Placement
+        self.wafer_list.append(wafer)
+        self.lcs_top.Placement = lcs2.Placement
 
     def get_segment_name(self):
         return self.prefix[:-1]    # strip trailing underscore
@@ -55,7 +78,7 @@ class FlexSegment(object):
             self.inside_height = (self.helix_radius - self.cylinder_diameter) * np.math.tan(la) * 2
 
     def get_lcs_top(self):
-        print(f"LCS TOP: {self.lcs_top.Label}")
+        # print(f"LCS TOP: {self.lcs_top.Label}")
         return self.lcs_top
 
     def get_lcs_base(self):
