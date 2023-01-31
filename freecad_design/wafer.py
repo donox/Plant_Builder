@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import FreeCAD
+from . import utilities
 
 
 class Wafer(object):

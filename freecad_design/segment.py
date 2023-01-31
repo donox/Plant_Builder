@@ -4,12 +4,7 @@ from .wafer import Wafer
 from .structurehelix import StructureHelix
 import FreeCAD
 import FreeCADGui
-
-
-def position_to_str(x):
-    inches = int(x)
-    fraction = int((x - inches) * 16)
-    return f'{inches:2d}" {fraction:2d}/16'
+from . import utilities
 
 
 class Segment(object):

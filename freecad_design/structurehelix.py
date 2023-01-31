@@ -5,17 +5,7 @@ from .wafer import Wafer
 import re
 import Part
 import FreeCAD
-
-def print_placement(plc):
-    # print a numpy array
-    ary = np.array(plc.Matrix.A)  # one dimensional numpy array
-    res = ""
-    for i in range(4):
-        for j in range(4):
-            res += f"\t{np.round(ary[i*4+j], 3):>6.3f}"
-        res += "\n"
-    return res
-
+from . import utilities
 
 class StructureHelix(object):
     def __init__(self, App, Gui, parent_segment, parm_set, lcs_file_name, position_offset, trace=None):
