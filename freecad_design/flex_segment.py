@@ -1,7 +1,7 @@
 import numpy as np
 import csv
 from .wafer import Wafer
-from .structurehelix import StructureHelix, lift_lcs
+from .structurehelix import StructureHelix
 import FreeCAD
 import FreeCADGui
 
@@ -37,19 +37,20 @@ class FlexSegment(object):
         # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
         self.wafer_count += 1
         name_base = self.prefix + str(self.wafer_count)
+        wafer_name = name_base + "_w"
+        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
+        wafer.set_parameters(lift, rotation, cylinder_diameter, outside_height, wafer_type="EE")
         lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
         lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
-        lift_lcs(lcs2, lift, cylinder_diameter, outside_height, wafer_type)
+        wafer.lift_lcs(lcs2, wafer_type)
         matrix = lcs2.Placement.toMatrix()
         matrix.rotateZ(-rotation)
         lcs2.Placement = FreeCAD.Placement(matrix)
         if not self.show_lcs:
             lcs1.Visibility = False
             lcs2.Visibility = False
-        wafer_name = name_base + "_w"
-        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
         wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
-        print(f"Wafer {wafer_name} angle to X-Y plane: {wafer.get_angle()}")
+        print(f"Wafer {wafer_name} angle to X-Y plane: {np.round(wafer.get_angle(), 3)}")
 
         lcs1.Placement = self.lcs_top.Placement
         lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
@@ -174,35 +175,49 @@ class FlexSegment(object):
     #         raise ValueError(f"Failed to Reconstruct Segment: {e.args}")
 
     def make_cut_list(self, segment_no, cuts_file):
-        raise NotImplementedError(f"Need to update")
         parm_str = f"\n\nCut list for segment: {segment_no}\n"
-        parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
-        parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        parm_str += f"Outside Wafer Height: {np.round(self.outside_height, 2)} in\n"
-        if self.inside_height:
-            parm_str += f"Inside Wafer Height: {np.round(self.inside_height, 2)} in\n"
-        else:
-            parm_str += f"Inside Wafer Height: NONE\n"
-        parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter, 2)} in\n"
-        if self.helix_radius:
-            parm_str += f"Helix Radius: \t{np.round(self.helix_radius, 2)} in\n"
-        else:
-            parm_str += f"Helix Radius: NONE\n"
-        cuts_file.write(parm_str)
-        cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
-        try:
-            step_size = np.rad2deg(self.rotation_angle)
-        except Exception as e:
-            nbr_rotations = None
-            step_size = 0
+        # parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
+        # parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
+        # parm_str += f"Outside Wafer Height: {np.round(self.outside_height, 2)} in\n"
+        # if self.inside_height:
+        #     parm_str += f"Inside Wafer Height: {np.round(self.inside_height, 2)} in\n"
+        # else:
+        #     parm_str += f"Inside Wafer Height: NONE\n"
+        # parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter, 2)} in\n"
+        # if self.helix_radius:
+        #     parm_str += f"Helix Radius: \t{np.round(self.helix_radius, 2)} in\n"
+        # else:
+        #     parm_str += f"Helix Radius: NONE\n"
+        # cuts_file.write(parm_str)
+        # cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
+        # try:
+        #     step_size = np.rad2deg(self.rotation_angle)
+        # except Exception as e:
+        #     nbr_rotations = None
+        #     step_size = 0
 
         current_position = 0  # Angular position of index (0-360) when rotating cylinder for cutting
         s1 = "Step: "
         s2 = " at position: "
-        for i in range(self.wafer_count):
+        for i, wafer in enumerate(self.wafer_list):
+            ra = wafer.get_rotation_angle()
+            if ra is not None:
+                ra = np.round(np.rad2deg(ra), 2)
+            else:
+                ra = 0
+            la = wafer.get_lift_angle()
+            if la:
+                la = np.round(np.rad2deg(la), 2)
+            else:
+                la = "NA"
+            oh = wafer.get_outside_height()
+            if oh:
+                oh = np.round(oh, 2)
+            else:
+                oh = "NA"
             str1 = str(i)
             if len(str1) == 1:
-                str1 = s1 + ' ' + str1
+                str1 = s1 + ' ' + str1      # account for number of steps (max <= 99)
             else:
                 str1 = s1 + str1
             str2 = str(current_position)
@@ -210,8 +225,9 @@ class FlexSegment(object):
                 str2 = s2 + ' ' + str2
             else:
                 str2 = s2 + str2
-            cuts_file.write(f"{str1} {str2};    Done: _____\n")
-            current_position = int((current_position - step_size + 180) % 360)
+            str3 = f"\tLift: {la}\tRotate: {ra}\tHeight: {oh}"
+            cuts_file.write(f"{str1} {str2} {str3};    Done: _____\n")
+            current_position = int((current_position - ra + 180) % 360)
 
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
         raise NotImplementedError(f"Need to update")
@@ -258,17 +274,6 @@ class FlexSegment(object):
             str1 += f" with Angle: {np.round(np.rad2deg(angle), 1)}\n"
             str1 += f"\t\tat Global: [{global_x}, {global_y}, {global_z}]\n"
             cons_file.write(str1)
-            # if wafer_num:
-            #     # relocate to global space using prior wafer and compute direction and distance.
-            #     relocate = prior_top.inverse()
-            #     relative_position = relocate.multiply(top_lcs_place)
-            #     x_pos = position_to_str(relative_position.Base.x)
-            #     y_pos = position_to_str(relative_position.Base.y)
-            #     z_pos = position_to_str(relative_position.Base.z)
-            #     str2 = f"\t\tRelative placement:\t[{x_pos}, {y_pos}, {z_pos}\n]"
-            #     euler_angles = relative_position.Rotation.getYawPitchRoll()
-            #     str2 += f"\t\tEuler Angles:\t{euler_angles}\n"
-            #     cons_file.write(str2)
         return global_loc
 
     @staticmethod

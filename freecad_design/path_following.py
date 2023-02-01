@@ -49,7 +49,7 @@ class PathFollower(object):
             # next curve point must be higher than wafer height (not true, needs only height at center point)
             icnt = 0
             if base_lcs.Placement.inverse().multVec(point_place).z <= self.outside_height:
-                print(f"Point {point_nbr} failed, Height: {point_place.z}")
+                print(f"Point {point_nbr} failed, Height: {point_place.z} ....")
             while base_lcs.Placement.inverse().multVec(point_place).z > self.outside_height:
                 icnt += 1
                 # print(f"CANDIDATE: {point_nbr} - {format_vector(point_place)}")

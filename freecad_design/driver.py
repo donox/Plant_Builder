@@ -98,6 +98,7 @@ class Driver(object):
         if case == "curve":
             tf = self.get_parm("flex_temp")
             segment = FlexSegment("X",  False, tf, True, False)     # name, show_lcs, temp_file, to_build, rotate_segment
+            self.segment_list.append(segment)
             follower = PathFollower(segment)
             nbr_points = 100
             curve_rotation = 0
@@ -109,6 +110,11 @@ class Driver(object):
             follower.set_curve_parameters("overhand knot", nbr_points, curve_rotation, increment, scale)
             follower.set_wafer_parameters(wafer_height, outside_diameter)
             follower.implement_curve()
+
+            if Driver.make_tf("print_cuts", self.parent_parms):
+                self.build_cut_list()
+            if Driver.make_tf("print_place", self.parent_parms):
+                self.build_place_list()
 
         if case == "relative_places":
             self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
