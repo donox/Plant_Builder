@@ -4,12 +4,7 @@ from .wafer import Wafer
 from .structurehelix import StructureHelix
 import FreeCAD
 import FreeCADGui
-
-
-def position_to_str(x):
-    inches = int(x)
-    fraction = int((x - inches) * 16)
-    return f'{inches:2d}" {fraction:2d}/16'
+from .utilities import position_to_str
 
 
 class FlexSegment(object):
@@ -50,7 +45,7 @@ class FlexSegment(object):
             lcs1.Visibility = False
             lcs2.Visibility = False
         wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
-        print(f"Wafer {wafer_name} angle to X-Y plane: {np.round(wafer.get_angle(), 3)}")
+        # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
 
         lcs1.Placement = self.lcs_top.Placement
         lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
@@ -230,25 +225,17 @@ class FlexSegment(object):
             current_position = int((current_position - ra + 180) % 360)
 
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
-        raise NotImplementedError(f"Need to update")
         parm_str = f"\nConstruction list for segment: {segment_no}\n"
-        parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
-        parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        parm_str += f"Outside Wafer Height: {position_to_str(self.outside_height)} in\n"
-        if self.inside_height:
-            parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
-        else:
-            parm_str += f"Inside Wafer Height: NONE\n"
-        parm_str += f"Cylinder Diameter:{position_to_str(self.cylinder_diameter)} in\n"
-        if self.helix_radius:
-            parm_str += f"Helix Radius: \t{position_to_str(self.helix_radius)} in\n"
-        else:
-            parm_str += f"Helix Radius: NONE\n"
+        # if self.inside_height:
+        #     parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
+        # else:
+        #     parm_str += f"Inside Wafer Height: NONE\n"
+        # parm_str += f"Cylinder Diameter:{position_to_str(self.cylinder_diameter)} in\n"
         parm_str += f"Segment Rotation: \t{position_to_str(self.rotate_segment)} in\n"
+        parm_str += f"\n\tNote 'angle' below is angle of top wafer surface to X-Y plane.\n"
         cons_file.write(parm_str)
         cons_file.write(f"Wafer Count: {self.wafer_count}\n\n")
 
-        vec = FreeCAD.Vector(0, 0, 1)
         if not self.wafer_list:
             cons_file.write(f"This segment was reconstructed thus there is no wafer list")
             return None

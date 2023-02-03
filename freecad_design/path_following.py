@@ -48,8 +48,9 @@ class PathFollower(object):
             point_place = point[1]      # FreeCAD Vector
             # next curve point must be higher than wafer height (not true, needs only height at center point)
             icnt = 0
-            if base_lcs.Placement.inverse().multVec(point_place).z <= self.outside_height:
-                print(f"Point {point_nbr} failed, Height: {point_place.z} ....")
+            point_place_z = base_lcs.Placement.inverse().multVec(point_place).z
+            if point_place_z <= self.outside_height:
+                print(f"Point {point_nbr} failed, Z-Position: {np.round(point_place_z, 3)} ....")
             while base_lcs.Placement.inverse().multVec(point_place).z > self.outside_height:
                 icnt += 1
                 # print(f"CANDIDATE: {point_nbr} - {format_vector(point_place)}")
@@ -64,7 +65,7 @@ class PathFollower(object):
                     lift = np.round(lift / 2, 0) * 2
                 rotate_angle = np.round(rotate_angle, 0)
                 # rotate_angle = 0
-                print(f"L: {lift}, R: {rotate_angle}")
+                # print(f"L: {lift}, R: {rotate_angle}")
                 self.segment.add_wafer(np.deg2rad(lift), np.deg2rad(rotate_angle), self.wafer_diameter,
                                        self.outside_height, wafer_type=wafer_type)
                 base_lcs = self.segment.get_lcs_top()

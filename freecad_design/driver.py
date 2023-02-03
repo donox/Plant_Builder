@@ -15,7 +15,8 @@ from .structurehelix import StructureHelix
 from .wafer import Wafer
 from .segment import Segment
 from .flex_segment import FlexSegment
-from .path_following import get_lift_and_rotate, curve, PathFollower
+from .path_following import PathFollower
+from .make_helix import MakeHelix
 from . import utilities
 
 
@@ -137,7 +138,11 @@ class Driver(object):
             self.animate()
 
         if case == "other":
-            pass
+            tf = self.get_parm("flex_temp")
+            new_segment = FlexSegment("X", False, tf, True,
+                                      False)  # name, show_lcs, temp_file, to_build, rotate_segment
+            helix = MakeHelix(new_segment)
+            helix.create_helix(30, 2.5, 1.0, 10, 20, "FOO")
 
         if self.do_trace:
             self.trace_file.close()
@@ -237,58 +242,45 @@ class Driver(object):
                 if operator == 'comment':
                     pass
                 elif operator == 'helix':
-                    # The term helix is out of date, but represents the current path formed from one or more segments.
-                    # print(f"LINE: {line}")
+                    tf = self.get_parm("flex_temp")
                     segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
-                    show_lcs, build_segment, rotate_segment = new_line
-                    show_lcs = Driver.convert_tf(show_lcs)
-                    temp_file = self.get_parm("lcs_file") + "/" + name + ".txt"  # temp for intermediate store
-                    do_build = Driver.convert_tf(build_segment)
+                        show_lcs, build_segment, rotate_segment = new_line
+                    lift_angle = float(lift_angle)
+                    wafer_count = int(wafer_count)
+                    outside_height = float(outside_height)
+                    cylinder_diameter = float(cylinder_diameter)
 
-                    new_segment = Segment(name, lift_angle, rotate_angle, outside_height, cylinder_diameter,
-                                          wafer_count, show_lcs, temp_file, do_build, rotate_segment, trace=self.trace)
-                    self.segment_list.append(new_segment)
-                    if do_build:
-                        helix = new_segment.build_helix()
-                    else:
-                        # Use existing segment and construct minimal means to handle
-                        helix = new_segment.reconstruct_helix()
-                    self.relocate_segment()
-                elif operator == 'path':
-                    # create target path to follow
-                    segment_type, scale, point_count, knot_rotation = new_line
+                    new_segment = FlexSegment(name,  show_lcs, tf, build_segment, rotate_segment)
+                    helix = MakeHelix(new_segment)
+                    helix.create_helix(wafer_count, cylinder_diameter, outside_height, name)
+
+                elif operator == "curve":
+                    tf = self.get_parm("flex_temp")
+                    segment_type, segment_name, curve_type, nbr_points, increment, scale, curve_rotation, \
+                        wafer_height, outside_diameter, show_lcs, build_segment, rotate_segment = new_line
+                    nbr_points = int(nbr_points)
+                    increment = float(increment)
                     scale = float(scale)
-                    point_count = int(point_count)
-                    self.path_place_list = Driver.overhand_knot_path(scale, point_count, int(knot_rotation))
+                    curve_rotation = float(curve_rotation)
+                    wafer_height = float(wafer_height)
+                    outside_diameter = float(outside_diameter)
+                    rotate_segment = float(rotate_segment)
+
+                    segment = FlexSegment(segment_name, show_lcs, tf, build_segment, rotate_segment)
+                    self.segment_list.append(segment)
+                    follower = PathFollower(segment)
+
+                    follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
+                    follower.set_wafer_parameters(wafer_height, outside_diameter)
+                    follower.implement_curve()
+
+
                 elif operator == 'arrows':
                     # add lines from last wafer to specified point and normal to last wafer
                     # this must run after segment relocation so temp hold for now.  Note if multiple
                     # arrow specs in file, the last will prevail
                     self.handle_arrows = new_line
-                elif operator == 'target':
-                    print("here")
-                    # determine angle and distance from the top lcs to a specified points
-                    _, point_nbr = new_line
-                    point_nbr = int(point_nbr)
-                    if point_nbr >= point_count:
-                        raise ValueError(f"Point number higher than max count: {point_nbr}, {point_count}")
-                    top_segment = self.segment_list[-1]
-                    lcs_top = top_segment.get_lcs_top()
-                    top_place = lcs_top.Placement
-                    for pn in range(point_nbr - 1, point_nbr + 2):
-                        if 0 <= pn < point_count:
-                            knot_place = self.path_place_list[pn][1]
-                            knot_number = self.path_place_list[pn][0]
-                            # distance, angle, x_distance, y_distance, z_distance, x_angle, y_angle = \
-                            #     calculate_distance_and_rotation(top_place, knot_place.Base)
-                            res_str = f"Segment: {top_segment.get_segment_object().Label}, Point: {knot_number}\n"
-                            # res_str += f"\tDistance: {np.round(distance, 3)}, Angle: {convert_angle(angle)}\n"
-                            # res_str += f"\tX_Dist: {np.round(x_distance, 3)}, "
-                            # res_str += f"Y_Dist: {np.round(y_distance, 3)}, "
-                            # res_str += f"Z_Dist: {np.round(z_distance, 3)},\n"
-                            # res_str += f"\t X_Rotate: {convert_angle(x_angle)}, Y_Rotate: {convert_angle(y_angle)}"
-                            print(res_str)
-                            self.get_lift_and_rotate(lcs_top, knot_place.Base)
+
                 elif operator == 'stop':
                     break
                 else:

@@ -1,6 +1,6 @@
 import numpy as np
 import csv
-from .wafer import lift_lcs
+# from .wafer import lift_lcs
 from .wafer import Wafer
 import re
 import Part
@@ -36,8 +36,6 @@ class StructureHelix(object):
         self.named_result_LCS_top = None        # LCS with segment name appended
         self.named_result_LCS_base = None
         self.transform_to_top = None   # transform that will move LCS at base to conform to LCS at top
-
-        from .driver import Driver
 
     def write_instructions(self):
         # In principle, this should not be necessary, but combining with the actual construction seems to
@@ -140,14 +138,6 @@ class StructureHelix(object):
     def get_wafer_list(self):
         return self.wafer_list
 
-    def move_content(self, transform):
-        pl = self.result.Placement
-        self.result.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-        pl = self.named_result_LCS_top.Placement
-        self.named_result_LCS_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-        pl = self.named_result_LCS_base.Placement
-        self.named_result_LCS_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-
     def make_placement(self, place_str):
         """Create a placement as read from file."""
         vectors = re.findall(r'\(.+?\)', place_str)
@@ -159,83 +149,6 @@ class StructureHelix(object):
         rot = eval("FreeCAD.Rotation" + vectors[1])
         newplace = FreeCAD.Placement(pos, rot)
         return newplace
-
-    def make_ellipse(self, name, major_radius, minor_radius, lcs, trace_file, show_lcs):
-        """
-        Make ellipse inclined and rotated compared to another ellipse (e_prior).
-
-        :param App: FreeCAD application
-        :param name: str -> name of created ellipse
-        :param major_radius: float -> ellipse major axis / 2
-        :param minor_radius:  float -> ellipse minor axis / 2
-        :param lcs: properly oriented lcs at center of ellipse
-        :param trace_file: file_ptr -> open file pointer for tracing or None if no tracing
-        :param show_lcs:  boolean, add an LCS on top surface of ellipse
-        :return: resultant ellipse
-        """
-        e2 = FreeCAD.activeDocument().addObject('Part::Ellipse', self.parm_set + name)
-        e2.MajorRadius = major_radius
-        e2.MinorRadius = minor_radius
-        e2.Placement = lcs.Placement
-        e2.Visibility = False
-        if show_lcs and not name.endswith('top'):
-            e2_ctr = FreeCAD.activeDocument().addObject('PartDesign::CoordinateSystem',  self.parm_set + name + "lcs")
-            e2_ctr.Placement = e2.Placement
-        return e2
-
-    def rotate_vertically(self):
-        rot_to_vert = FreeCAD.Rotation(self.result_LCS_top.Placement.Base, FreeCAD.Vector(0, 0, 1))
-        pl_to_vert = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), rot_to_vert)
-        self.result.Placement = pl_to_vert * self.result.Placement
-        self.result_LCS_top.Placement = pl_to_vert * self.result_LCS_top.Placement
-        self.named_result_LCS_top.Placement = pl_to_vert * self.named_result_LCS_top.Placement
-        return pl_to_vert
-
-    def rotate_to_zero_y(self):
-        # Get the current position of the local coordinate system
-        pos = self.result_LCS_top.Placement.Base
-
-        # Calculate the angle to rotate around the z-axis
-        angle = np.arctan2(pos.y, pos.x)
-
-        # Create a rotation around the z-axis
-        rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle)
-
-        # Apply the rotation to the local coordinate system
-        self.result.Placement = FreeCAD.Placement(self.result.Placement.Base, rotation)
-        self.named_result_LCS_top.Placement = FreeCAD.Placement(self.named_result_LCS_top.Placement.Base, rotation)
-        # print(f"self.named_result_LCS_top {self.named_result_LCS_top.Label}")
-        self.result_LCS_base.Placement = FreeCAD.Placement(self.result_LCS_base.Placement.Base, rotation)
-        # print(f"self.result_LCS_base {self.result_LCS_base.Label}")
-        return FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), rotation)
-
-    def rotate_about_axis(self, obj, v1, v2, angle, rot_center):
-        """Rotate an object about an axis defined by two vectors by a specified angle. """
-        axis = FreeCAD.Vector(v2 - v1)
-        line = Part.LineSegment()
-        line.StartPoint = v1
-        line.EndPoint = v2
-        objln = self.doc.addObject("Part::Feature", self.parm_set + "Line")
-        objln.Shape = line.toShape()
-        objln.ViewObject.LineColor = (204.0, 170.0, 34.0)
-        objln2 = self.doc.addObject("Part::Feature", self.parm_set + "Line")
-        objln2.Shape = line.toShape()
-        objln2.ViewObject.LineColor = (104.0, 100.0, 134.0)
-
-        rot = FreeCAD.Rotation(axis, angle)
-        obj_base = obj.Placement.Base
-        print(f"Obj: {obj_base}, CTR: {rot_center}")
-        new_place = FreeCAD.Placement(obj_base, rot, rot_center)
-        obj.Placement = new_place
-
-        objln.Placement = new_place
-        rot = FreeCAD.Rotation(axis, 15)
-        obj_base = obj.Placement.Base
-        print(f"Obj: {obj_base}, CTR2: {rot_center}")
-        new_place = FreeCAD.Placement(obj_base, rot, rot_center)
-        objln2.Placement = new_place
-
-        self.doc.recompute()
 
     @staticmethod
     def make_transform_align(object_1, object_2):
