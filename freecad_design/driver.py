@@ -226,70 +226,130 @@ class Driver(object):
 
         cuts_file.close()
 
+    def _operations_reader(self, parm_name):
+        """Create csv reader to handle structure definition commands."""
+        # Continuation lines are designated with a "+" operator in the first position which is removed before
+        # returning the line to the calling code. It is an error to find a continuation line at the operator level.
+        csv_file = open(self.get_parm(parm_name), "r")
+        reader = csv.reader(csv_file)
+        new_line = []
+        do_read = True
+        operator = None
+
+        def fill_buffer():
+            nonlocal do_read, new_line, operator
+            if do_read:
+                do_read = False
+                try:
+                    line = next(reader)
+                    print(f"Operation: {new_line}")
+                except StopIteration:
+                    csv_file.close()
+                    new_line = ["stop"]
+                new_line = []
+                for item in line:  # space in 'name' was an issue, get all spaces to be sure
+                    new_line.append(item.strip())
+                operator = new_line[0]
+
+        def get_operator_line():
+            nonlocal new_line, operator, do_read
+            fill_buffer()
+            if operator == "+":
+                raise ValueError(f"Call for continuation at top level")
+            else:
+                operator = new_line[0]
+            do_read = True
+            return operator, new_line
+
+        def get_continuation_line():
+            nonlocal new_line, operator, do_read
+            fill_buffer()
+            if operator != "+":
+                raise ValueError(f"Call for continuation but not found")
+            else:
+                new_line = new_line[1:]
+            do_read = True
+            print(f"LINE: {new_line}")
+            return operator, new_line
+
+        def test_continuation():
+            nonlocal operator, do_read
+            if do_read:
+                fill_buffer()
+            if operator == '+':
+                return True
+            else:
+                return False
+
+        return get_operator_line, get_continuation_line, test_continuation
+
     def build_from_file(self):
         """Read file and build multiple segments"""
-        with open(self.get_parm("description_file"), "r") as csvfile:
-            reader = csv.reader(csvfile)
-            for line in reader:
-                if len(line):
-                    new_line = []
-                    for item in line:  # space in 'name' was an issue, get all spaces to be sure
-                        new_line.append(item.strip())
-                    operator = new_line[0]
+        get_operator_line, get_continuation_line, test_continuation = self._operations_reader("description_file")
+        while True:
+            operator, new_line = get_operator_line()
+            if operator == 'comment':
+                pass
+            elif operator == 'helix':
+                tf = self.get_parm("flex_temp")
+                segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
+                    show_lcs, build_segment, rotate_segment = new_line
+                lift_angle = float(lift_angle)
+                wafer_count = int(wafer_count)
+                outside_height = float(outside_height)
+                cylinder_diameter = float(cylinder_diameter)
+                rotate_angle = float(rotate_angle)
+                rotate_segment = float(rotate_segment)
+
+                new_segment = FlexSegment(name,  show_lcs, tf, build_segment, rotate_segment)
+                helix = MakeHelix(new_segment)
+                helix.create_helix(wafer_count, cylinder_diameter, outside_height, lift_angle, rotate_angle, name)
+
+            elif operator == "curve":
+                tf = self.get_parm("flex_temp")
+                segment_type, segment_name, curve_type, nbr_points, increment, scale, curve_rotation = new_line
+                if test_continuation():
+                    _, ln = get_continuation_line()
+                    wafer_height, outside_diameter = ln
                 else:
-                    operator = 'stop'
-                # print(f"Operator: {operator}")
-                if operator == 'comment':
-                    pass
-                elif operator == 'helix':
-                    tf = self.get_parm("flex_temp")
-                    segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
-                        show_lcs, build_segment, rotate_segment = new_line
-                    lift_angle = float(lift_angle)
-                    wafer_count = int(wafer_count)
-                    outside_height = float(outside_height)
-                    cylinder_diameter = float(cylinder_diameter)
-
-                    new_segment = FlexSegment(name,  show_lcs, tf, build_segment, rotate_segment)
-                    helix = MakeHelix(new_segment)
-                    helix.create_helix(wafer_count, cylinder_diameter, outside_height, name)
-
-                elif operator == "curve":
-                    tf = self.get_parm("flex_temp")
-                    segment_type, segment_name, curve_type, nbr_points, increment, scale, curve_rotation, \
-                        wafer_height, outside_diameter, show_lcs, build_segment, rotate_segment = new_line
-                    nbr_points = int(nbr_points)
-                    increment = float(increment)
-                    scale = float(scale)
-                    curve_rotation = float(curve_rotation)
-                    wafer_height = float(wafer_height)
-                    outside_diameter = float(outside_diameter)
-                    rotate_segment = float(rotate_segment)
-
-                    segment = FlexSegment(segment_name, show_lcs, tf, build_segment, rotate_segment)
-                    self.segment_list.append(segment)
-                    follower = PathFollower(segment)
-
-                    follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
-                    follower.set_wafer_parameters(wafer_height, outside_diameter)
-                    follower.implement_curve()
-
-
-                elif operator == 'arrows':
-                    # add lines from last wafer to specified point and normal to last wafer
-                    # this must run after segment relocation so temp hold for now.  Note if multiple
-                    # arrow specs in file, the last will prevail
-                    self.handle_arrows = new_line
-
-                elif operator == 'stop':
-                    break
+                    raise ValueError("Missing wafer descriptor continuation")
+                if test_continuation():
+                    _, ln = get_continuation_line()
+                    show_lcs, build_segment, rotate_segment = ln
                 else:
-                    break
+                    raise ValueError("Missing segment controls continuation")
+                nbr_points = int(nbr_points)
+                increment = float(increment)
+                scale = float(scale)
+                curve_rotation = float(curve_rotation)
+                wafer_height = float(wafer_height)
+                outside_diameter = float(outside_diameter)
+                rotate_segment = float(rotate_segment)
+
+                segment = FlexSegment(segment_name, show_lcs, tf, build_segment, rotate_segment)
+                self.segment_list.append(segment)
+                follower = PathFollower(segment)
+
+                follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
+                follower.set_wafer_parameters(wafer_height, outside_diameter)
+                follower.implement_curve()
+
+            elif operator == 'arrows':
+                # add lines from last wafer to specified point and normal to last wafer
+                # this must run after segment relocation so temp hold for now.  Note if multiple
+                # arrow specs in file, the last will prevail
+                self.handle_arrows = new_line
+
+            elif operator == 'stop':
+                break
+            else:
+                break
 
     def process_arrow_command(self):
         if not self.handle_arrows:
             return
-        _, size, point_nbr = self.handle_arrows  # input string from description file (delayed input to allow for segment relo)
+        # input string from description file (delayed input to allow for segment relocation)
+        _, size, point_nbr = self.handle_arrows
         size = float(size)
         point_nbr = int(point_nbr)
         segment_list_top = self.segment_list[0]
