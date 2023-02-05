@@ -73,22 +73,15 @@ class Driver(object):
 
         # remove existing objects
         remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
+        self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
         do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
         remove_string = "K.+|L+.|N+.|base_lcs.*"
         if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
             remove_string += "|.+|e.+|E.+|f.+|A.+"
-        doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
-        print(f"DOC LIST LEN: {len(doc_list)}")
-        for item in doc_list:
-            if item.Label != 'Parms_Master':
-                try:
-                    self.doc.removeObject(item.Label)
-                except:
-                    pass
+        self.remove_objects_re(remove_string)
 
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
-            self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
             self.build_from_file()
             self.process_arrow_command()
             if Driver.make_tf("print_cuts", self.parent_parms):
@@ -96,29 +89,7 @@ class Driver(object):
             if Driver.make_tf("print_place", self.parent_parms):
                 self.build_place_list()
 
-        if case == "curve":
-            tf = self.get_parm("flex_temp")
-            segment = FlexSegment("X",  False, tf, True, False)     # name, show_lcs, temp_file, to_build, rotate_segment
-            self.segment_list.append(segment)
-            follower = PathFollower(segment)
-            nbr_points = 100
-            curve_rotation = 0
-            increment = 4
-            scale = 3
-            wafer_height = 2.5
-            outside_diameter = 2.25
-
-            follower.set_curve_parameters("overhand knot", nbr_points, curve_rotation, increment, scale)
-            follower.set_wafer_parameters(wafer_height, outside_diameter)
-            follower.implement_curve()
-
-            if Driver.make_tf("print_cuts", self.parent_parms):
-                self.build_cut_list()
-            if Driver.make_tf("print_place", self.parent_parms):
-                self.build_place_list()
-
         if case == "relative_places":
-            self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
             self.build_from_file()
             start_seg = self.get_parm("relative_start")
             end_seg = self.get_parm("relative_end")
@@ -138,11 +109,7 @@ class Driver(object):
             self.animate()
 
         if case == "other":
-            tf = self.get_parm("flex_temp")
-            new_segment = FlexSegment("X", False, tf, True,
-                                      False)  # name, show_lcs, temp_file, to_build, rotate_segment
-            helix = MakeHelix(new_segment)
-            helix.create_helix(30, 2.5, 1.0, 10, 20, "FOO")
+            pass
 
         if self.do_trace:
             self.trace_file.close()
@@ -226,6 +193,17 @@ class Driver(object):
 
         cuts_file.close()
 
+    def remove_objects_re(self, remove_string):
+        "Remove objects containing 'name' as a part of a label."
+        doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+        # print(f"DOC LIST LEN: {len(doc_list)}")
+        for item in doc_list:
+            if item.Label != 'Parms_Master':
+                try:
+                    self.doc.removeObject(item.Label)
+                except:
+                    pass
+
     def _operations_reader(self, parm_name):
         """Create csv reader to handle structure definition commands."""
         # Continuation lines are designated with a "+" operator in the first position which is removed before
@@ -269,7 +247,6 @@ class Driver(object):
             else:
                 new_line = new_line[1:]
             do_read = True
-            print(f"LINE: {new_line}")
             return operator, new_line
 
         def test_continuation():
@@ -294,14 +271,16 @@ class Driver(object):
                 tf = self.get_parm("flex_temp")
                 segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                     show_lcs, build_segment, rotate_segment = new_line
+                self.remove_objects_re(f"{name}.+")
                 lift_angle = float(lift_angle)
                 wafer_count = int(wafer_count)
                 outside_height = float(outside_height)
                 cylinder_diameter = float(cylinder_diameter)
                 rotate_angle = float(rotate_angle)
                 rotate_segment = float(rotate_segment)
-
+                show_lcs = bool(show_lcs == "True")
                 new_segment = FlexSegment(name,  show_lcs, tf, build_segment, rotate_segment)
+                self.segment_list.append(new_segment)
                 helix = MakeHelix(new_segment)
                 helix.create_helix(wafer_count, cylinder_diameter, outside_height, lift_angle, rotate_angle, name)
 
@@ -316,8 +295,10 @@ class Driver(object):
                 if test_continuation():
                     _, ln = get_continuation_line()
                     show_lcs, build_segment, rotate_segment = ln
+                    show_lcs = bool(show_lcs == "True")
                 else:
                     raise ValueError("Missing segment controls continuation")
+                self.remove_objects_re(f"{segment_name}.+|Curve.+")
                 nbr_points = int(nbr_points)
                 increment = float(increment)
                 scale = float(scale)
@@ -344,6 +325,7 @@ class Driver(object):
                 break
             else:
                 break
+        self.relocate_segment()
 
     def process_arrow_command(self):
         if not self.handle_arrows:

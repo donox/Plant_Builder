@@ -74,6 +74,8 @@ class PathFollower(object):
                     break
             if point_nbr > 190:
                 break
+        if self.segment.wafer_count > 0:
+            self.segment.fuse_wafers()
 
     @staticmethod
     def curve(curve_selector, scale, point_count, increment, rotation, add_vertex=True):

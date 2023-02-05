@@ -27,4 +27,7 @@ class MakeHelix(object):
             self.segment.add_wafer(lift, rotate, self.wafer_diameter, self.outside_height, wafer_type="EE")
         self.segment.add_wafer(lift / 2, rotate, self.wafer_diameter, self.outside_height, wafer_type="EC")
 
+        if self.segment.wafer_count > 0:
+            self.segment.fuse_wafers()
+
 

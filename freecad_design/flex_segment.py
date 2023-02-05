@@ -26,6 +26,7 @@ class FlexSegment(object):
             self.remove_prior_version()
         self.lcs_base = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_base")
         self.lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_top")
+        self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "_lcs_group")
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
         # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
@@ -37,6 +38,7 @@ class FlexSegment(object):
         wafer.set_parameters(lift, rotation, cylinder_diameter, outside_height, wafer_type="EE")
         lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
         lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
+        self.lcs_group.addObjects([lcs1, lcs2])
         wafer.lift_lcs(lcs2, wafer_type)
         matrix = lcs2.Placement.toMatrix()
         matrix.rotateZ(-rotation)
@@ -83,16 +85,34 @@ class FlexSegment(object):
         return self.lcs_base
 
     def get_transform_to_top(self):    # Does this need changing
-        if not self.to_build:
+        if self.to_build:
+            if not self.transform_to_top:
+                # print(f"TO TOP: Base: {self.lcs_base.Placement}. Top: {self.lcs_top.Placement}")
+                self.transform_to_top = self.make_transform_align(self.lcs_base, self.lcs_top)
             return self.transform_to_top
         else:
-            raise ValueError("Segment has no valid transform to top")
+            print(f"NO TRANSFORM: {self.get_segment_name()}, BUILD? {self.to_build}")
+            raise ValueError("Segment has no valid transform to top as it was created in prior run.")
+
+    def fuse_wafers(self):
+        name = self.get_segment_name()
+        if len(self.wafer_list) > 1:
+            fuse = self.doc.addObject("Part::MultiFuse", name + "FusedResult")
+            fuse.Shapes = [x.wafer for x in self.wafer_list]
+        elif len(self.wafer_list) == 1:
+            fuse = self.wafer_list[0].wafer
+            fuse.Label = name + "FusedResult"
+        else:
+            raise ValueError("Zero Length Wafer List when building helix")
+        fuse.Visibility = True
+        fuse.ViewObject.DisplayMode = "Shaded"
+        fuse.Placement = self.lcs_base.Placement
+        self.segment_object = fuse
 
     def get_segment_rotation(self):
         return self.rotate_segment
 
     def move_content(self, transform):
-        # return
         pl = self.segment_object.Placement
         self.segment_object.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
         pl = self.lcs_top.Placement
@@ -100,7 +120,7 @@ class FlexSegment(object):
         pl = self.lcs_base.Placement
         self.lcs_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
         # print(f"LABELS: {self.segment_object.Label}, {self.lcs_base.Label}, {self.lcs_top.Label}")
-        self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
+        # self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
 
     def move_content_to_zero(self, transform):
         """Relocate to a zero base corresponding to a new build.  Transform is lcs_base.inverse()"""
@@ -108,12 +128,7 @@ class FlexSegment(object):
 
     def move_to_top(self, transform):
         """Apply transform to reposition segment."""
-        if (self.segment_type == 'helix' and self.helix) or not self.to_build:
-            # print(f"BEFORE: {self.segment_object.Label}, {self.segment_object.Placement}")
-            self.move_content(transform)
-            # print(f"AFTER: {self.segment_object.Label}, {self.segment_object.Placement}")
-        else:
-            raise ValueError("Segment has no valid content to transform")
+        self.move_content(transform)
 
     def remove_prior_version(self):
         # TODO: not do so if making cut list???
