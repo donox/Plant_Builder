@@ -50,7 +50,8 @@ class PathFollower(object):
             icnt = 0
             point_place_z = base_lcs.Placement.inverse().multVec(point_place).z
             if point_place_z <= self.outside_height:
-                print(f"Point {point_nbr} failed, Z-Position: {np.round(point_place_z, 3)} ....")
+                # print(f"Point {point_nbr} failed, Z-Position: {np.round(point_place_z, 3)} ....")
+                pass
             while base_lcs.Placement.inverse().multVec(point_place).z > self.outside_height:
                 icnt += 1
                 # print(f"CANDIDATE: {point_nbr} - {format_vector(point_place)}")

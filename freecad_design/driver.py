@@ -220,7 +220,7 @@ class Driver(object):
                 do_read = False
                 try:
                     line = next(reader)
-                    print(f"Operation: {new_line}")
+                    print(f"Operation: {line}")
                 except StopIteration:
                     csv_file.close()
                     new_line = ["stop"]
@@ -283,6 +283,7 @@ class Driver(object):
                 self.segment_list.append(new_segment)
                 helix = MakeHelix(new_segment)
                 helix.create_helix(wafer_count, cylinder_diameter, outside_height, lift_angle, rotate_angle, name)
+                self.relocate_segment()
 
             elif operator == "curve":
                 tf = self.get_parm("flex_temp")
@@ -314,6 +315,7 @@ class Driver(object):
                 follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
                 follower.set_wafer_parameters(wafer_height, outside_diameter)
                 follower.implement_curve()
+                self.relocate_segment()
 
             elif operator == 'arrows':
                 # add lines from last wafer to specified point and normal to last wafer
@@ -325,7 +327,6 @@ class Driver(object):
                 break
             else:
                 break
-        self.relocate_segment()
 
     def process_arrow_command(self):
         if not self.handle_arrows:
