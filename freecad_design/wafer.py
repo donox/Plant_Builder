@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import FreeCAD
+import Part
 from . import utilities
 
 
@@ -77,6 +78,56 @@ class Wafer(object):
         self.wafer.Solid = True
         self.wafer.Visibility = True
 
+    @staticmethod
+    def _make_rectangle(long_side, short_side):
+        part = Part.makePolygon([FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(long_side, 0, 0),
+                                 FreeCAD.Vector(long_side, short_side, 0), FreeCAD.Vector(0, short_side, 0),
+                                 FreeCAD.Vector(0, 0, 0)])
+        face = Part.Face(part)
+        return face
+
+    def make_rectangle_wafer_from_lcs(self, lcs1, lcs2, short_side, long_side, wafer_name):
+        """Make a wafer by cutting a cylinder with the xy-planes of two lcs's."""
+        # TODO: if xy-planes are parallel, need to handle special cases (2 - co-linear z-axis and not)
+        self.lcs_top = lcs2
+        self.lcs_base = lcs1
+        self.cylinder_radius = long_side / 2
+        self.wafer_name = wafer_name
+
+        # create a cylinder between lcs1 and lcs2 with the cylinder axis
+        # along the path between the origin points of the lcs's
+        wafer_1 = self.wafer_type[0]
+        wafer_2 = self.wafer_type[1]
+        if wafer_1 == 'E':
+            e1 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e1")
+            e1.Shape = self._make_rectangle(long_side, short_side)
+        elif wafer_1 == 'C':
+            e1 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e1")
+            e1.Shape = self._make_rectangle(long_side, short_side)
+        else:
+            raise ValueError(f"Unrecognized Wafer Type: {wafer_1}")
+        e1.Placement = lcs1.Placement
+        # e1.Visibility = False
+        if wafer_2 == 'E':
+            e2 = self.app.activeDocument().addObject("Part::Feature",  self.parm_set + "e2")
+            e2.Shape = self._make_rectangle(long_side, short_side)
+        elif wafer_2 == 'C':
+            e2 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e2")
+            e2.Shape = self._make_rectangle(long_side, short_side)
+        else:
+            raise ValueError(f"Unrecognized Wafer Type: {wafer_2}")
+        e2.Placement = lcs2.Placement
+        # e2.Visibility = False
+        e_face = e2.Shape.Faces[0]
+        e_normal = e_face.normalAt(0, 0)  # normal to edge lies in plane of the ellipse
+        self.angle = 90 - np.rad2deg(e_normal.getAngle(self.app.Vector(0, 0, 1)))
+        # print(f"{e_edge} at angle: {self.angle}")
+        loft = Part.makeLoft([e1.Shape.Faces[0].OuterWire, e2.Shape.Faces[0].OuterWire],  True)
+        self.wafer = self.app.activeDocument().addObject('Part::Loft', wafer_name)
+        self.wafer.Sections = [e1, e2]
+        self.wafer.Solid = True
+        self.wafer.Visibility = True
+
     def rotate_to_vertical(self, x_ang, y_ang):
         self.wafer.Placement.Matrix.rotateX(x_ang)
         self.wafer.Placement.Matrix.rotateY(y_ang)
@@ -144,17 +195,19 @@ class Wafer(object):
         parts_used = parts[lcs_type]
         h2 = self.outside_height / 2
         d2 = self.cylinder_radius
-        la = self.lift_angle / 2
+        la = self.lift_angle        # Lift angle already divided for end segments
+        if lcs_type == "EE":
+            la = self.lift_angle / 2
         result_vec = []
         for i in range(2):
             # print(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
             if "EC2" == parts_used[i]:
-                del_x = -d2 * np.sin(la)
+                del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
                 # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
             if "CE2" == parts_used[i]:
-                del_x = -d2 * np.sin(la)
+                del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
                 # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")

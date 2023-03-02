@@ -1,7 +1,6 @@
 import numpy as np
 import csv
 from .wafer import Wafer
-from .structurehelix import StructureHelix
 import FreeCAD
 import FreeCADGui
 from .utilities import position_to_str
@@ -48,6 +47,37 @@ class FlexSegment(object):
             lcs2.Visibility = False
         wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
         # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
+
+        lcs1.Placement = self.lcs_top.Placement
+        lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
+        wafer_loft = wafer.get_wafer()
+        wafer_loft.Placement = lcs1.Placement
+        self.wafer_list.append(wafer)
+        self.lcs_top.Placement = lcs2.Placement
+
+    def add_wafer_rectangle(self, lift, rotation, long_side, outside_height, wafer_type="EE"):
+        # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
+        # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
+        self.wafer_count += 1
+        name_base = self.prefix + str(self.wafer_count)
+        wafer_name = name_base + "_w"
+        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
+        wafer.set_parameters(lift, rotation, long_side, outside_height, wafer_type="EE")
+        lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
+        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
+        self.lcs_group.addObjects([lcs1, lcs2])
+        wafer.lift_lcs(lcs2, wafer_type)
+        # matrix = lcs2.Placement.toMatrix()
+        # matrix.rotateZ(-rotation)
+        # lcs2.Placement = FreeCAD.Placement(matrix)
+        if not self.show_lcs:
+            lcs1.Visibility = False
+            lcs2.Visibility = False
+        wafer.make_rectangle_wafer_from_lcs(lcs1, lcs2, long_side, long_side, wafer_name)
+        # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
+        matrix = lcs2.Placement.toMatrix()
+        matrix.rotateZ(-rotation)
+        lcs2.Placement = FreeCAD.Placement(matrix)
 
         lcs1.Placement = self.lcs_top.Placement
         lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
@@ -113,14 +143,17 @@ class FlexSegment(object):
         return self.rotate_segment
 
     def move_content(self, transform):
-        pl = self.segment_object.Placement
-        self.segment_object.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-        pl = self.lcs_top.Placement
-        self.lcs_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-        pl = self.lcs_base.Placement
-        self.lcs_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-        # print(f"LABELS: {self.segment_object.Label}, {self.lcs_base.Label}, {self.lcs_top.Label}")
-        # self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
+        if self.segment_object:
+            pl = self.segment_object.Placement
+            self.segment_object.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+            pl = self.lcs_top.Placement
+            self.lcs_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+            pl = self.lcs_base.Placement
+            self.lcs_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
+            # print(f"LABELS: {self.segment_object.Label}, {self.lcs_base.Label}, {self.lcs_top.Label}")
+            # self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
+        else:
+            print(f"NO CONTENT: {self.get_segment_name()} has no content to move.")
 
     def move_content_to_zero(self, transform):
         """Relocate to a zero base corresponding to a new build.  Transform is lcs_base.inverse()"""

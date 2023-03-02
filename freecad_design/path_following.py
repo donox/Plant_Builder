@@ -53,6 +53,7 @@ class PathFollower(object):
                 # print(f"Point {point_nbr} failed, Z-Position: {np.round(point_place_z, 3)} ....")
                 pass
             while base_lcs.Placement.inverse().multVec(point_place).z > self.outside_height:
+                print(f"POINT: {point}")
                 icnt += 1
                 # print(f"CANDIDATE: {point_nbr} - {format_vector(point_place)}")
                 lift, rotate_angle = self.get_lift_and_rotate(base_lcs, point_place)
@@ -73,10 +74,13 @@ class PathFollower(object):
                 if icnt > 10:
                     print(f"Exceeded 10 wafers for single point")
                     break
-            if point_nbr > 190:
+            if point_nbr > 2:
                 break
         if self.segment.wafer_count > 0:
+            foo = 3/0
             self.segment.fuse_wafers()
+        else:
+            print(f"NO WAFERS in segment {self.segment.prefix}")
 
     @staticmethod
     def curve(curve_selector, scale, point_count, increment, rotation, add_vertex=True):
@@ -127,7 +131,7 @@ class PathFollower(object):
                 if angle > 2 * np.pi:
                     break
         else:
-            raise ValueError(f"Invalid curve specifier: {curve_selector}")
+            raise ValueError(f"Invalid curve specifier: ..{curve_selector}..")
         return result
 
     @staticmethod

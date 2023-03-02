@@ -11,12 +11,11 @@ import time
 import importlib.util
 import sys
 import math
-from .structurehelix import StructureHelix
 from .wafer import Wafer
-from .segment import Segment
 from .flex_segment import FlexSegment
 from .path_following import PathFollower
 from .make_helix import MakeHelix
+from .make_rectangle import MakeRectangle
 from . import utilities
 
 
@@ -194,14 +193,15 @@ class Driver(object):
         cuts_file.close()
 
     def remove_objects_re(self, remove_string):
-        "Remove objects containing 'name' as a part of a label."
+        """Remove objects containing 'name' as a part of a label."""
         doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
         # print(f"DOC LIST LEN: {len(doc_list)}")
         for item in doc_list:
             if item.Label != 'Parms_Master':
                 try:
                     self.doc.removeObject(item.Label)
-                except:
+                except Exception as e:
+                    print(f"Remove object Exception: {e.args}")     # TODO: replace with actual exception
                     pass
 
     def _operations_reader(self, parm_name):
@@ -213,9 +213,13 @@ class Driver(object):
         new_line = []
         do_read = True
         operator = None
+        icnt = 0
 
         def fill_buffer():
-            nonlocal do_read, new_line, operator
+            nonlocal do_read, new_line, operator, icnt
+            if icnt > 40:
+                foo = 3/0
+            icnt += 1
             if do_read:
                 do_read = False
                 try:
@@ -227,11 +231,18 @@ class Driver(object):
                 new_line = []
                 for item in line:  # space in 'name' was an issue, get all spaces to be sure
                     new_line.append(item.strip())
-                operator = new_line[0]
+                if new_line:
+                    operator = new_line[0]
+                else:
+                    do_read = True
+                    operator = ""
 
         def get_operator_line():
             nonlocal new_line, operator, do_read
             fill_buffer()
+            if len(operator) < 2:
+                do_read = True
+                return "blank", "blank"
             if operator == "+":
                 raise ValueError(f"Call for continuation at top level")
             else:
@@ -265,9 +276,10 @@ class Driver(object):
         get_operator_line, get_continuation_line, test_continuation = self._operations_reader("description_file")
         while True:
             operator, new_line = get_operator_line()
-            if operator == 'comment':
+            if operator == 'comment' or operator == '#' or operator == "blank":
                 pass
             elif operator == 'helix':
+                print(f"HELIX: {new_line}")
                 tf = self.get_parm("flex_temp")
                 segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                     show_lcs, build_segment, rotate_segment = new_line
@@ -285,8 +297,29 @@ class Driver(object):
                 helix.create_helix(wafer_count, cylinder_diameter, outside_height, lift_angle, rotate_angle, name)
                 self.relocate_segment()
 
-            elif operator == "curve":
+            elif operator == 'rectangle':
                 tf = self.get_parm("flex_temp")
+                segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
+                    show_lcs, build_segment, rotate_segment = new_line
+                self.remove_objects_re(f"{name}.+")
+                lift_angle = float(lift_angle)
+                wafer_count = int(wafer_count)
+                outside_height = float(outside_height)
+                cylinder_diameter = float(cylinder_diameter)
+                long_side = cylinder_diameter
+                short_side = cylinder_diameter
+                rotate_angle = float(rotate_angle)
+                rotate_segment = float(rotate_segment)
+                show_lcs = bool(show_lcs == "True")
+                new_segment = FlexSegment(name,  show_lcs, tf, build_segment, rotate_segment)
+                self.segment_list.append(new_segment)
+                box = MakeRectangle(new_segment)
+                box.create_boxes(wafer_count, cylinder_diameter, cylinder_diameter,
+                                 outside_height, lift_angle, rotate_angle, name)
+                self.relocate_segment()
+
+            elif operator == "curve":
+                tf = self.get_parm("flex_temp")     # Temp file for path following
                 segment_type, segment_name, curve_type, nbr_points, increment, scale, curve_rotation = new_line
                 if test_continuation():
                     _, ln = get_continuation_line()
@@ -315,7 +348,11 @@ class Driver(object):
                 follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
                 follower.set_wafer_parameters(wafer_height, outside_diameter)
                 follower.implement_curve()
-                self.relocate_segment()
+                if segment.get_segment_object():
+                    print(f"Segment {segment_name} has segment object {segment.get_segment_object()}")
+                    # self.relocate_segment()
+                else:
+                    print(f"Curve {segment_name} did not produce a segment object.")
 
             elif operator == 'arrows':
                 # add lines from last wafer to specified point and normal to last wafer
@@ -323,9 +360,17 @@ class Driver(object):
                 # arrow specs in file, the last will prevail
                 self.handle_arrows = new_line
 
+            elif operator == 'path':
+                # create target path to follow
+                segment_type, scale, point_count, knot_rotation = new_line
+                scale = float(scale)
+                point_count = int(point_count)
+                self.path_place_list = Driver.overhand_knot_path(scale, point_count, int(knot_rotation))
+
             elif operator == 'stop':
-                break
+                return
             else:
+                print(f"NOT RECOGNIZED: {operator}")
                 break
 
     def process_arrow_command(self):
