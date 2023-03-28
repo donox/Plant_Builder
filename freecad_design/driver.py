@@ -16,6 +16,7 @@ from .flex_segment import FlexSegment
 from .path_following import PathFollower
 from .make_helix import MakeHelix
 from .make_rectangle import MakeRectangle
+from .other import Other
 from . import utilities
 
 
@@ -108,7 +109,13 @@ class Driver(object):
             self.animate()
 
         if case == "other":
-            pass
+            other = Other()
+            other.follow_path(Driver.overhand_knot_path)
+            # other.rotate_lcs()
+            # other.lift_and_rotate_lcs()
+            # other.do_it()
+            # self.build_from_file()
+            # other.yp()
 
         if self.do_trace:
             self.trace_file.close()
@@ -347,7 +354,7 @@ class Driver(object):
 
                 follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
                 follower.set_wafer_parameters(wafer_height, outside_diameter)
-                follower.implement_curve()
+                follower.implement_curve_test()     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 if segment.get_segment_object():
                     print(f"Segment {segment_name} has segment object {segment.get_segment_object()}")
                     # self.relocate_segment()
@@ -536,6 +543,7 @@ class Driver(object):
             x = (math.cos(angle) + 2 * math.cos(2 * angle)) * scale
             y = (math.sin(angle) - 2 * math.sin(2 * angle)) * scale
             z = (-math.sin(3 * angle)) * scale
+            # x = y = z = t * scale                               # Straight line !!!!!!!!!!!!!!!!!!!!!!!
             if t == 0:  # set origin of knot to global origin
                 x0 = x
                 y0 = y

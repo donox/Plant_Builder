@@ -19,6 +19,14 @@ def print_placement(plc):
     return res
 
 
+def print_placement_2(plc):
+    """Print a placement with rounding."""
+    res = f"Pos: [({np.round(plc.Base, 2)}), "
+    ypl = plc.Rotation.getYawPitchRoll()
+    res += f"YawPitchRoll: ({np.round(ypl, 2)})]"
+    return res
+
+
 def squared_distance(place1, place2):
     """Return square of distance between two Placements"""
     p1 = place1.Base
@@ -46,3 +54,19 @@ def position_to_str(x):
     inches = int(x)
     fraction = int((x - inches) * 16)
     return f'{inches:2d}" {fraction:2d}/16'
+
+
+def get_lift_and_rotate(lcs, vector):
+    """Determine lift and rotate needed to z-axis point from the origin to the location of a point (vector)."""
+    vec = lcs.Placement.inverse().multVec(vector)
+    v_x = vec.x
+    v_y = vec.y
+    v_z = vec.z
+    rotate_angle = np.arctan2(v_y, v_x)
+    v_len = np.sqrt(v_x ** 2 + v_y ** 2)
+    lift = np.arctan2(v_z, v_len)
+    return np.rad2deg(lift), np.rad2deg(rotate_angle)
+
+
+def format_float(fl):
+    return np.round(fl, 0)
