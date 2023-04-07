@@ -3,7 +3,6 @@ import time
 import FreeCAD
 import Part
 from . import utilities
-from .utilities import print_placement, get_lift_and_rotate
 
 
 class Wafer(object):
@@ -29,13 +28,6 @@ class Wafer(object):
         self.cylinder_radius = cylinder_diameter / 2
         self.outside_height = outside_height
         self.wafer_type = wafer_type
-
-    def relocate_wafer(self, new_placement):
-        """Place wafer at new location."""
-        e1, e2 = self.wafer.Sections
-        e1.Placement = new_placement
-        e2.Placement = e2.Placement.multiply(new_placement)
-        self.wafer.Placement = e1.Placement
 
     def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name):
         """Make a wafer by cutting a cylinder with the xy-planes of two lcs's."""
@@ -64,19 +56,18 @@ class Wafer(object):
         e1.Placement = lcs1.Placement
         e1.Visibility = False
         if wafer_2 == 'E':
-            e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e2")
+            e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
             e2.MinorRadius = self.cylinder_radius
             if self.lift_angle:
                 e2.MajorRadius = self.cylinder_radius / np.cos(self.lift_angle)
             else:
                 e2.MajorRadius = self.cylinder_radius
         elif wafer_2 == 'C':
-            e2 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e2")
+            e2 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
             e2.Radius = self.cylinder_radius
         else:
             raise ValueError(f"Unrecognized Wafer Type: {wafer_2}")
         e2.Placement = lcs2.Placement
-        # print(f"E1: {e1.Placement.Base}, E2: {e2.Placement.Base}")
         e2.Visibility = False
         e_edge = e2.Shape.Edges[0]
         e_normal = e_edge.normalAt(0)   # normal to edge lies in plane of the ellipse
@@ -174,7 +165,7 @@ class Wafer(object):
     def get_wafer(self):
         return self.wafer
 
-    def lift_lcs(self, lcs, lcs_type, point_place=None):
+    def lift_lcs(self, lcs, lcs_type):
         """Move lcs on base surface to corresponding position on top.
 
         This is a side-effecting operation.  Result is modified input lcs.
@@ -195,13 +186,8 @@ class Wafer(object):
             If base is an ellipse, rotate point to global zero.  Figure will be a cylinder inclined
             by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
 
-        Parameters:
-            lcs: Standard local coordinate system  (has been rotated to global????)
-            lcs_type:  EE, CE, EC, CC   indicating ellipse or circle
-            point_place: vector representing target point in driving curve (if exists)
-
         """
-        print(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(self.lift_angle)}")
+        # print(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
         parts = {"CC": ("CC2", "CC2"),
                  "CE": ("CC2", "CE2"),
                  "EC": ("EC2", "CC2"),
@@ -216,12 +202,12 @@ class Wafer(object):
         for i in range(2):
             # print(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
             if "EC2" == parts_used[i]:
-                del_x = d2 * np.sin(la)
+                del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
                 # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
             if "CE2" == parts_used[i]:
-                del_x = d2  # * np.sin(la)
+                del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
                 # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
@@ -232,25 +218,18 @@ class Wafer(object):
                 # print(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
             rot = FreeCAD.Rotation(0, 0, 0)
             if parts_used[i] in ["CE2", "EC2"]:
-                rot = FreeCAD.Rotation(0, np.rad2deg(la), 0)     # Rotation is adjusting the angle of the top ellipse
+                # Not clear if Rotation wants radians or degrees.  Testing says radians - complex_path says degrees
+                rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
             # if parts_used[i] == "EE2":          # there is no EE2
             #     rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
-            # l, r = get_lift_and_rotate(lcs, point_place)                        # !!!! DEBUG      ERROR SHOWN IN HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            # print(f"ONE: L: {np.round(l, 0)}, R: {np.round(r, 0)}, i: {i}")  # !!!! DEBUG
             new_place = FreeCAD.Placement(result_vec[i], rot)
-            # print(f"LCS_PLACE: \n{print_placement(lcs.Placement)}")
-            # print(f"NEW_PLACE: \n{print_placement(new_place)}")
-            lcs.Placement = lcs.Placement.multiply(new_place)    # appears to be dupe of lcs.Placement
-            # lcs.Placement = new_place
-            # print(f"RESULT_PLACE: \n{print_placement(lcs.Placement)}")
-            # l, r = get_lift_and_rotate(lcs, point_place)  # !!!! DEBUG
-            # print(f"TWO : L: {np.round(l, 0)}, R: {np.round(r, 0)}")  # !!!! DEBUG
+            lcs.Placement = lcs.Placement.multiply(new_place)
             # break
         # lcso = FreeCAD.activeDocument().getObject(lcs.Label)        # Debug - checking actual lift angle
         # vec = FreeCAD.Vector(0, 0, 1)
         # vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
         # angle = vec2.getAngle(vec)
-        # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(self.lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
+        # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
 
 
 def convert_angle(angle):

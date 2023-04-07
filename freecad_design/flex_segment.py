@@ -3,7 +3,7 @@ import csv
 from .wafer import Wafer
 import FreeCAD
 import FreeCADGui
-from .utilities import position_to_str, get_lift_and_rotate
+from .utilities import position_to_str
 
 
 class FlexSegment(object):
@@ -27,7 +27,7 @@ class FlexSegment(object):
         self.lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_top")
         self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "_lcs_group")
 
-    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, point_place, wafer_type="EE"):
+    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
         # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
         # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
         self.wafer_count += 1
@@ -38,24 +38,20 @@ class FlexSegment(object):
         lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
         lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
         self.lcs_group.addObjects([lcs1, lcs2])
-
-        wafer.lift_lcs(lcs2, wafer_type, point_place=point_place)   # REMOVE point_place...!!!!!!!!!!!
-        rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), np.rad2deg(rotation))
-        pl = FreeCAD.Placement(lcs2.Placement.Base, rot)
-        lcs2.Placement = pl
-
+        wafer.lift_lcs(lcs2, wafer_type)
+        matrix = lcs2.Placement.toMatrix()
+        matrix.rotateZ(-rotation)
+        lcs2.Placement = FreeCAD.Placement(matrix)
         if not self.show_lcs:
             lcs1.Visibility = False
             lcs2.Visibility = False
         wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
-        # Enabling this print requires determining angle in line ~83 of wafer
-        print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
+        # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
 
         lcs1.Placement = self.lcs_top.Placement
         lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
         wafer_loft = wafer.get_wafer()
         wafer_loft.Placement = lcs1.Placement
-        # wafer.relocate_wafer(lcs1.Placement)
         self.wafer_list.append(wafer)
         self.lcs_top.Placement = lcs2.Placement
 
@@ -103,7 +99,7 @@ class FlexSegment(object):
         raise NotImplementedError(f"need to identify specific wafer and get from there")
         if self.lift_angle != 0:  # leave as simple cylinder if zero
             la = self.lift_angle / 2
-            oh = self.wafer_height / 2
+            oh = self.outside_height / 2
             # Assume origin at center of ellipse, x-axis along major axis, positive to outside.
             self.helix_radius = oh / np.math.tan(la)
             # print(f"SET RADIUS: {self.helix_radius}, Lift: {self.lift_angle}, Height: {self.outside_height}")
@@ -175,6 +171,51 @@ class FlexSegment(object):
         for item in doc_list:
             if item.Label != 'Parms_Master':
                 doc.removeObject(item.Name)
+
+    # def build_helix(self):
+    #     position_offset = 0         # TODO: Remove???
+    #     minor_radius = (self.cylinder_diameter / 2)
+    #     major_radius = (self.cylinder_diameter / 2) / np.cos(self.lift_angle)
+    #     # print(f"Major: {major_radius}, Minor: {minor_radius}, Lift: {np.rad2deg(self.lift_angle)}")
+    #     helix = StructureHelix(FreeCAD, FreeCADGui, self, self.prefix, self.temp_file, position_offset)
+    #     # !!!! helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
+    #     helix.write_instructions()
+    #     fused_result, last_loc = helix.create_structure(major_radius, minor_radius, self.temp_file, self.show_lcs)
+    #     self.helix = helix
+    #     self.segment_type = "helix"
+    #     fuse, base, top, transform = helix.get_segment_objects()
+    #     self.segment_object = fuse
+    #     self.lcs_base = base
+    #     self.lcs_top = top
+    #     self.lcs_top.Visibility = False
+    #     self.transform_to_top = transform
+    #     self.wafer_list = helix.get_wafer_list()
+    #     if self.trace:
+    #         self.trace("BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
+    #     return helix
+    #
+    # def reconstruct_helix(self):
+    #     """Reconstruct existing helix from model tree."""
+    #     try:
+    #         self.segment_type = "existing"
+    #         doc = FreeCAD.activeDocument()
+    #         self.lcs_top = doc.getObjectsByLabel(self.prefix + "lcs_top")[0]
+    #         self.lcs_base = doc.getObjectsByLabel(self.prefix + "lcs_base")[0]
+    #         self.segment_object = doc.getObjectsByLabel(self.prefix + "FusedResult")[0]
+    #         self.transform_to_top = Segment.make_transform_align(self.lcs_base, self.lcs_top)
+    #         self.move_content_to_zero(self.lcs_base.Placement.inverse())
+    #         if self.trace:
+    #             self.trace("RE-BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
+    #         remove_string = f"{self.prefix}e.+|{self.prefix}we.+"
+    #         doc_list = doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+    #         for item in doc_list:
+    #             try:
+    #                 doc.removeObject(item.Label)
+    #             except:
+    #                 pass
+    #
+    #     except Exception as e:
+    #         raise ValueError(f"Failed to Reconstruct Segment: {e.args}")
 
     def make_cut_list(self, segment_no, cuts_file):
         parm_str = f"\n\nCut list for segment: {segment_no}\n"
