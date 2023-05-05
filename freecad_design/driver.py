@@ -45,7 +45,6 @@ class Driver(object):
         self._set_up_trace()
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label  # simplify getting things in console
-        self.position_offset = self.get_parm("position_offset")
         self.compound_transform = None  # transform from base of first segment to top of last
         self.handle_arrows = None  # holder for arrow command that must run after segment relocation
         self.path_place_list = None  # list of triples - point nbr, point place, distance to next point
@@ -68,16 +67,21 @@ class Driver(object):
         return self.get_parm("workflow")
 
     def workflow(self):
-        case = self._get_workflow()
+        """Determine workflow as specified in Parms_Master.
 
-        # remove existing objects
-        remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
+        This is called directly from the initiating macro."""
+        case = self._get_workflow()   # Workflow is specified in the parameter spreadsheet as "workflow"
+
+        # remove existing objects if not building from description file where removed are specified explicitly.
+        if case != "segments" and case != "relative_places":
+            remove_existing = Driver.make_tf("remove_existing", self.parent_parms)
+            do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
+            remove_string = "K.+|L+.|N+.|base_lcs.*"
+            if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
+                remove_string += "|.+|e.+|E.+|f.+|A.+"
+            self.remove_objects_re(remove_string)
+
         self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
-        do_cuts = Driver.make_tf("print_cuts", self.parent_parms)
-        remove_string = "K.+|L+.|N+.|base_lcs.*"
-        if not do_cuts and remove_existing:  # if do_cuts, there is no generated display
-            remove_string += "|.+|e.+|E.+|f.+|A.+"
-        self.remove_objects_re(remove_string)
 
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
@@ -159,6 +163,7 @@ class Driver(object):
         global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
 
         for nbr, segment in enumerate(self.segment_list):
+            print(f"SEGMENT: {segment.get_segment_name()}")
             global_placement = segment.print_construction_list(nbr, cuts_file, global_placement, find_min_max)
         min_max_str = f"\nGlobal Min Max:\n\tX: {min_max[0][0]} - {min_max[0][1]}, "
         min_max_str += f"Y: {min_max[1][0]} - {min_max[1][1]}, Z: {min_max[2][0]} - {min_max[2][1]}"
@@ -278,8 +283,26 @@ class Driver(object):
             operator, new_line = get_operator_line()
             if operator == 'comment' or operator == '#' or operator == "blank":
                 pass
+            elif operator == 'remove':
+                print(f"Remove: {new_line}")
+                names = new_line[1:]
+                for name in names:
+                    self.remove_objects_re(f"{name}.+")
+            elif operator == 'set_position':
+                # set the location and orientation of the next segment to be built.
+                positions = new_line[1:]   # contains 3 x,y,z values and optional roll,pitch,yaw
+                print(f"POSITION: {new_line[1:]}")
+                positions = [float(x) for x in positions]
+                pos = FreeCAD.Vector(positions[0], positions[1], positions[2])
+                if len(positions) == 6:
+                    rot = FreeCAD.Rotation(positions[3], positions[4], positions[5])
+                else:
+                    rot = FreeCAD.Rotation(0, 0, 0)
+                self.compound_transform = FreeCAD.Placement(pos, rot)
+                self.first_segment = False
+                print(f"PLACEMENT: {self.compound_transform}")
             elif operator == 'helix':
-                print(f"HELIX: {new_line}")
+                print(f"HELIX: {new_line[1:]}")
                 tf = self.get_parm("flex_temp")
                 segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                     show_lcs, build_segment, rotate_segment = new_line

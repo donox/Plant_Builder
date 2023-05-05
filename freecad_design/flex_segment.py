@@ -172,51 +172,6 @@ class FlexSegment(object):
             if item.Label != 'Parms_Master':
                 doc.removeObject(item.Name)
 
-    # def build_helix(self):
-    #     position_offset = 0         # TODO: Remove???
-    #     minor_radius = (self.cylinder_diameter / 2)
-    #     major_radius = (self.cylinder_diameter / 2) / np.cos(self.lift_angle)
-    #     # print(f"Major: {major_radius}, Minor: {minor_radius}, Lift: {np.rad2deg(self.lift_angle)}")
-    #     helix = StructureHelix(FreeCAD, FreeCADGui, self, self.prefix, self.temp_file, position_offset)
-    #     # !!!! helix.add_segment(outside_height, cylinder_diameter, lift_angle, rotation_angle, wafer_count)
-    #     helix.write_instructions()
-    #     fused_result, last_loc = helix.create_structure(major_radius, minor_radius, self.temp_file, self.show_lcs)
-    #     self.helix = helix
-    #     self.segment_type = "helix"
-    #     fuse, base, top, transform = helix.get_segment_objects()
-    #     self.segment_object = fuse
-    #     self.lcs_base = base
-    #     self.lcs_top = top
-    #     self.lcs_top.Visibility = False
-    #     self.transform_to_top = transform
-    #     self.wafer_list = helix.get_wafer_list()
-    #     if self.trace:
-    #         self.trace("BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
-    #     return helix
-    #
-    # def reconstruct_helix(self):
-    #     """Reconstruct existing helix from model tree."""
-    #     try:
-    #         self.segment_type = "existing"
-    #         doc = FreeCAD.activeDocument()
-    #         self.lcs_top = doc.getObjectsByLabel(self.prefix + "lcs_top")[0]
-    #         self.lcs_base = doc.getObjectsByLabel(self.prefix + "lcs_base")[0]
-    #         self.segment_object = doc.getObjectsByLabel(self.prefix + "FusedResult")[0]
-    #         self.transform_to_top = Segment.make_transform_align(self.lcs_base, self.lcs_top)
-    #         self.move_content_to_zero(self.lcs_base.Placement.inverse())
-    #         if self.trace:
-    #             self.trace("RE-BUILD", self.prefix, "base", self.lcs_base.Placement, "top", self.lcs_top.Placement)
-    #         remove_string = f"{self.prefix}e.+|{self.prefix}we.+"
-    #         doc_list = doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
-    #         for item in doc_list:
-    #             try:
-    #                 doc.removeObject(item.Label)
-    #             except:
-    #                 pass
-    #
-    #     except Exception as e:
-    #         raise ValueError(f"Failed to Reconstruct Segment: {e.args}")
-
     def make_cut_list(self, segment_no, cuts_file):
         parm_str = f"\n\nCut list for segment: {segment_no}\n"
         # parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
@@ -273,7 +228,8 @@ class FlexSegment(object):
             current_position = int((current_position - ra + 180) % 360)
 
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
-        parm_str = f"\nConstruction list for segment: {segment_no}\n"
+        """Print list giving local and global position and orientation of each wafer."""
+        parm_str = f"\nConstruction list for segment: {self.get_segment_name()}\n"
         # if self.inside_height:
         #     parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
         # else:
