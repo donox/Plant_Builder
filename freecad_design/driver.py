@@ -17,7 +17,9 @@ from .path_following import PathFollower
 from .make_helix import MakeHelix
 from .make_rectangle import MakeRectangle
 from . import utilities
+import pydevd_pycharm
 
+# pip install pydevd-pycharm~=241.15989.155
 
 # Now on github as plant-builder
 class Driver(object):
@@ -49,6 +51,8 @@ class Driver(object):
         self.handle_arrows = None  # holder for arrow command that must run after segment relocation
         self.path_place_list = None  # list of triples - point nbr, point place, distance to next point
         self.first_segment = True  # used to initialize segment list when relocating
+        # Support for remote debugging to FreeCAD
+        pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
     def _gobj(self):
         """Function to get an object by label in FreeCAD"""
@@ -82,7 +86,7 @@ class Driver(object):
             self.remove_objects_re(remove_string)
 
         self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
-
+        print(f"Case to execiute: {case}")
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
             self.build_from_file()
@@ -213,6 +217,7 @@ class Driver(object):
         """Create csv reader to handle structure definition commands."""
         # Continuation lines are designated with a "+" operator in the first position which is removed before
         # returning the line to the calling code. It is an error to find a continuation line at the operator level.
+        print(f"_operations_reader: parm_name: {parm_name}")
         csv_file = open(self.get_parm(parm_name), "r")
         reader = csv.reader(csv_file)
         new_line = []
@@ -281,6 +286,7 @@ class Driver(object):
         get_operator_line, get_continuation_line, test_continuation = self._operations_reader("description_file")
         while True:
             operator, new_line = get_operator_line()
+            print(f"op: {operator}, line: {new_line}")
             if operator == 'comment' or operator == '#' or operator == "blank":
                 pass
             elif operator == 'remove':
@@ -523,6 +529,7 @@ class Driver(object):
 
     @staticmethod
     def make_tf(variable_name, parent_parms):
+        print(f"make_tf:  Variable: {variable_name}, parent: {parent_parms}")
         try:
             if parent_parms.get(variable_name) == "True":
                 print(f"{variable_name} = True")

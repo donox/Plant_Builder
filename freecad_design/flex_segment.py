@@ -138,6 +138,7 @@ class FlexSegment(object):
         fuse.ViewObject.DisplayMode = "Shaded"
         fuse.Placement = self.lcs_base.Placement
         self.segment_object = fuse
+        self.doc.recompute()
 
     def get_segment_rotation(self):
         return self.rotate_segment
