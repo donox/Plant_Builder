@@ -14,7 +14,6 @@ import sys
 import math
 from .wafer import Wafer
 from .flex_segment import FlexSegment
-from .path_following import PathFollower
 from .curve_follower import CurveFollower
 from .make_helix import MakeHelix
 from .make_rectangle import MakeRectangle
