@@ -4,6 +4,7 @@ import importlib.util
 import Part
 import Draft
 import FreeCAD
+import FreeCADGui
 import numpy as np
 import csv
 import re
@@ -14,6 +15,7 @@ import math
 from .wafer import Wafer
 from .flex_segment import FlexSegment
 from .path_following import PathFollower
+from .curve_follower import CurveFollower
 from .make_helix import MakeHelix
 from .make_rectangle import MakeRectangle
 from . import utilities
@@ -86,7 +88,7 @@ class Driver(object):
             self.remove_objects_re(remove_string)
 
         self.relocate_segments_tf = Driver.make_tf("relocate_segments", self.parent_parms)
-        print(f"Case to execiute: {case}")
+        # print(f"Case to execiute: {case}")
         if case == "segments":
             # This case reads the descriptor file and builds multiple segments
             self.build_from_file()
@@ -122,7 +124,7 @@ class Driver(object):
             self.trace_file.close()
 
     def relocate_segment(self):
-        """Relocate segments end to end."""
+        """Relocate segments end to end as set in the parameters spreadsheet"""
         if not self.relocate_segments_tf:
             return
         segment = self.segment_list[-1]
@@ -201,9 +203,13 @@ class Driver(object):
 
         cuts_file.close()
 
-    def remove_objects_re(self, remove_string):
-        """Remove objects containing 'name' as a part of a label."""
-        doc_list = self.doc.findObjects(Name=remove_string)  # obj names start with l,e,L,E,f,K
+    def remove_objects_re(self, remove_string:str) -> None:
+        """Remove objects containing 'name' as a part of a label.
+            Args:
+                remove_string:  raw string containing a reqular expression
+        """
+        pattern = re.compile(remove_string)
+        doc_list = [obj for obj in self.doc.Objects if pattern.match(obj.Label)]
         # print(f"DOC LIST LEN: {len(doc_list)}")
         for item in doc_list:
             if item.Label != 'Parms_Master':
@@ -286,14 +292,14 @@ class Driver(object):
         get_operator_line, get_continuation_line, test_continuation = self._operations_reader("description_file")
         while True:
             operator, new_line = get_operator_line()
-            print(f"op: {operator}, line: {new_line}")
+            # print(f"op: {operator}, line: {new_line}")
             if operator == 'comment' or operator == '#' or operator == "blank":
                 pass
             elif operator == 'remove':
                 print(f"Remove: {new_line}")
                 names = new_line[1:]
                 for name in names:
-                    self.remove_objects_re(f"{name}.+")
+                    self.remove_objects_re(rf"{name}")
             elif operator == 'set_position':
                 # set the location and orientation of the next segment to be built.
                 positions = new_line[1:]   # contains 3 x,y,z values and optional roll,pitch,yaw
@@ -312,7 +318,7 @@ class Driver(object):
                 tf = self.get_parm("flex_temp")
                 segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                     show_lcs, build_segment, rotate_segment = new_line
-                self.remove_objects_re(f"{name}.+")
+                self.remove_objects_re(rf"{name}")
                 lift_angle = float(lift_angle)
                 wafer_count = int(wafer_count)
                 outside_height = float(outside_height)
@@ -327,10 +333,11 @@ class Driver(object):
                 self.relocate_segment()
 
             elif operator == 'rectangle':
+                # Wafers are rectanges instead of ellipses.
                 tf = self.get_parm("flex_temp")
                 segment_type, lift_angle, rotate_angle, wafer_count, name, outside_height, cylinder_diameter, \
                     show_lcs, build_segment, rotate_segment = new_line
-                self.remove_objects_re(f"{name}.+")
+                self.remove_objects_re(rf"{name}")
                 lift_angle = float(lift_angle)
                 wafer_count = int(wafer_count)
                 outside_height = float(outside_height)
@@ -361,7 +368,7 @@ class Driver(object):
                     show_lcs = bool(show_lcs == "True")
                 else:
                     raise ValueError("Missing segment controls continuation")
-                self.remove_objects_re(f"{segment_name}.+|Curve.+")
+                self.remove_objects_re(rf"{segment_name}.+|Curve.+")
                 nbr_points = int(nbr_points)
                 increment = float(increment)
                 scale = float(scale)
@@ -382,6 +389,90 @@ class Driver(object):
                     # self.relocate_segment()
                 else:
                     print(f"Curve {segment_name} did not produce a segment object.")
+
+            elif operator == "curve2":
+                tf = self.get_parm("flex_temp")  # Temp file for path following
+                segment_type, segment_name, curve_type, nbr_points, increment, scale, curve_rotation = new_line
+                if test_continuation():
+                    _, ln = get_continuation_line()
+                    wafer_height, outside_diameter = ln
+                else:
+                    raise ValueError("Missing wafer descriptor continuation")
+                if test_continuation():
+                    _, ln = get_continuation_line()
+                    show_lcs, build_segment, rotate_segment = ln
+                    show_lcs = bool(show_lcs == "True")
+                else:
+                    raise ValueError("Missing segment controls continuation")
+                self.remove_objects_re(rf"{segment_name}.+|Curve.+")
+                nbr_points = int(nbr_points)
+                increment = float(increment)
+                scale = float(scale)
+                curve_rotation = float(curve_rotation)
+                wafer_height = float(wafer_height)
+                outside_diameter = float(outside_diameter)
+                rotate_segment = float(rotate_segment)
+                curve_type = str(curve_type)
+
+                max_chord = 0.25
+                min_height = 0.5
+
+                segment = FlexSegment(segment_name, show_lcs, tf, build_segment, rotate_segment)
+                self.segment_list.append(segment)
+                follower = CurveFollower(self.doc, segment, outside_diameter, curve_type, nbr_points, scale, min_height, max_chord)
+                # elf, segment: Any, cylinder_diameter: float, curve: str,
+                #                  nbr_wafers: int, scale: float, min_height: float, max_chord: float
+
+                # follower.set_curve_parameters(curve_type, nbr_points, curve_rotation, increment, scale)
+                # follower.set_wafer_parameters(wafer_height, outside_diameter)
+                result = follower.process_wafers()
+                # # DEBUG OUTPUT:::::
+                # # Add explicit debugging and fusing
+                # print(f"\n=== Post-processing ===")
+                # print(f"Wafer count: {segment.get_wafer_count()}")
+                # print(f"Wafer list length: {len(segment.wafer_list)}")
+
+                # Check if any wafers were actually created
+                if segment.get_wafer_count() > 0:
+                    # print(f"Attempting to fuse {segment.get_wafer_count()} wafers...")
+
+                    try:
+                        segment.fuse_wafers()
+                        # print("Fusing completed successfully")
+
+                        # Check if segment object was created
+                        segment_obj = segment.get_segment_object()
+                        # if segment_obj:
+                            # print(f"Segment object created: {segment_obj.Label}")
+                            # print(f"Segment visibility: {segment_obj.Visibility}")
+                        # else:
+                        #     print("ERROR: No segment object created after fusing")
+
+                    except Exception as e:
+                        print(f"ERROR during fusing: {e}")
+
+                    # Force recompute
+                    try:
+                        FreeCAD.ActiveDocument.recompute()
+                        FreeCADGui.updateGui()
+                        # print("Document recomputed")
+                    except Exception as e:
+                        print(f"ERROR during recompute: {e}")
+
+                else:
+                    print("ERROR: No wafers were created")
+
+                # List all objects in the document for debugging
+                # print(f"\n=== All document objects ===")
+                # for obj in FreeCAD.ActiveDocument.Objects:
+                #     if "foo" in obj.Label:  # Filter to your objects
+                #         print(f"Object: {obj.Label}, Type: {obj.TypeId}, Visible: {obj.Visibility}")
+                #
+                # if segment.get_segment_object():
+                #     print(f"Segment {segment_name} has segment object {segment.get_segment_object()}")
+                #     # self.relocate_segment()
+                # else:
+                #     print(f"Curve {segment_name} did not produce a segment object.")
 
             elif operator == 'arrows':
                 # add lines from last wafer to specified point and normal to last wafer

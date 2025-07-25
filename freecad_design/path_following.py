@@ -74,10 +74,11 @@ class PathFollower(object):
                 if icnt > 10:
                     print(f"Exceeded 10 wafers for single point")
                     break
-            if point_nbr > 2:
+            print(f"Point Nbr: {point_nbr};  z-place: {base_lcs.Placement.inverse().multVec(point_place).z}")
+            if point_nbr > 15:
+                print(f"z-place: {base_lcs.Placement.inverse().multVec(point_place).z }")
                 break
         if self.segment.wafer_count > 0:
-            foo = 3/0
             self.segment.fuse_wafers()
         else:
             print(f"NO WAFERS in segment {self.segment.prefix}")
