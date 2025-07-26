@@ -463,15 +463,15 @@ class CurveFollower:
         return self.curves.get_curve_info()
 
     def add_curve_visualization(self, group_name: str = None) -> str:
-        """Add visual vertices along the curve for debugging/visualization.
+        """Add visual vertices along the curve for debugging/visualization."""
+        if group_name is None:
+            group_name = "curve_vertices"
 
-        Args:
-            group_name: Name of the document group (auto-generated if None)
+        # Get the segment's base LCS to align coordinate systems
+        segment_base_placement = self.segment.get_lcs_base().Placement
 
-        Returns:
-            Name of the created group
-        """
-        return self.curves.add_visualization_vertices(group_name)
+        # Use the Curves class method but transform the coordinates
+        return self.curves.add_visualization_vertices(group_name, segment_base_placement)
 
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
         """Main processing method that creates and adds wafers to the segment.

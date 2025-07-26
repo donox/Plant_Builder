@@ -152,11 +152,13 @@ class Curves:
             'end_point': points[-1].tolist()
         }
 
-    def add_visualization_vertices(self, group_name: Optional[str] = None) -> str:
+    def add_visualization_vertices(self, group_name: str = None,
+                                   base_placement: Any = None) -> str:
         """Add visual vertices at each curve point in FreeCAD.
 
         Args:
             group_name: Name of the document group (auto-generated if None)
+            segment_placement: FlexSegment placement to align coordinates
 
         Returns:
             Name of the created group
@@ -177,9 +179,20 @@ class Curves:
         vertices = []
         for i, point in enumerate(self.transformed_curve):
             vertex = self.doc.addObject('Part::Vertex', f"{group_name}_point_{i}")
-            vertex.X = float(point[0])
-            vertex.Y = float(point[1])
-            vertex.Z = float(point[2])
+
+            if base_placement:
+                # Transform curve point to match segment coordinate system
+                curve_vector = FreeCAD.Vector(point[0], point[1], point[2])
+                transformed_point = base_placement.multiply(FreeCAD.Placement(curve_vector, FreeCAD.Rotation()))
+                vertex.X = float(transformed_point.Base.x)
+                vertex.Y = float(transformed_point.Base.y)
+                vertex.Z = float(transformed_point.Base.z)
+            else:
+                # Use raw coordinates
+                vertex.X = float(point[0])
+                vertex.Y = float(point[1])
+                vertex.Z = float(point[2])
+
             vertices.append(vertex)
 
         # Add all vertices to the group
@@ -335,7 +348,7 @@ class Curves:
 
         Args:
             radius: Radius of the helix
-            pitch: Vertical distance per turn
+            pitch: Vertical distance per complete turn
             turns: Number of complete turns
             points: Number of points to generate
 
@@ -343,11 +356,20 @@ class Curves:
             List of [x, y, z] coordinate lists
         """
         curve_points = []
+        total_angle = turns * 2 * math.pi  # Total angle to traverse
+        total_height = turns * pitch  # Total height of helix
+
         for i in range(points):
-            t = i / (points - 1) * turns * 2 * math.pi
-            x = radius * math.cos(t)
-            y = radius * math.sin(t)
-            z = (t / (2 * math.pi)) * pitch
+            # Parameter goes from 0 to 1
+            t = i / (points - 1)
+
+            # Angle and height are proportional to t
+            angle = t * total_angle
+            z = t * total_height
+
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+
             curve_points.append([x, y, z])
 
         return curve_points

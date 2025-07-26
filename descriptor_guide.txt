@@ -1,0 +1,527 @@
+================================================================================
+PLANT BUILDER DESCRIPTOR FILE USER GUIDE
+================================================================================
+
+OVERVIEW
+--------
+The Plant Builder uses YAML format descriptor files to define construction 
+workflows. These files specify what objects to build, their parameters, and 
+the sequence of operations.
+
+The YAML format is human-readable and supports:
+- Comments (using #)
+- Hierarchical structure with indentation
+- Lists and dictionaries
+- Multiple data types (strings, numbers, booleans)
+
+FILE STRUCTURE
+--------------
+Each descriptor file contains several main sections:
+
+1. metadata          - Project information
+2. global_settings   - Settings that apply to all operations
+3. output_files      - File paths for generated reports
+4. workflow          - Main sequence of operations to perform
+5. workflows         - Alternative workflow definitions (optional)
+6. curve_templates   - Reusable curve definitions (optional)
+
+SECTION DETAILS
+===============
+
+1. METADATA SECTION
+-------------------
+Basic project information for documentation purposes.
+
+Example:
+  metadata:
+    project_name: "Helical Test Structure"
+    version: "1.0"
+    created: "2025-01-25"
+    description: "Test project demonstrating helical curve following"
+
+2. GLOBAL SETTINGS
+------------------
+Settings that affect the entire build process:
+
+  global_settings:
+    remove_existing: true      # Remove existing objects before building
+    relocate_segments: true    # Position segments end-to-end automatically
+    print_cuts: false         # Generate cutting instruction file
+    print_place: false        # Generate placement coordinate file
+    show_lcs: true            # Show local coordinate systems in FreeCAD
+    temp_file: "temp.dat"     # Temporary file for construction data
+
+3. OUTPUT FILES
+---------------
+Specify paths for generated files:
+
+  output_files:
+    cuts_file: "cutting_list.txt"     # Cutting instructions
+    place_file: "placement_list.txt"  # Wafer placement coordinates
+    trace_file: "build_trace.log"     # Build process log
+
+4. WORKFLOW OPERATIONS
+======================
+
+REMOVE OBJECTS
+--------------
+Remove existing FreeCAD objects by pattern matching:
+
+  - operation: "remove_objects"
+    description: "Clean up any existing objects"
+    patterns:
+      - "test_helix.*"        # Regular expression patterns
+      - "Curve.*"             # .* means "anything after"
+      - "temp.*"
+
+SET POSITION
+------------
+Set the starting position and orientation for the first segment:
+
+  - operation: "set_position"
+    description: "Set starting position and orientation"
+    position: [0, 0, 0]          # x, y, z coordinates in model units
+    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+
+If rotation is omitted, defaults to [0, 0, 0].
+
+BUILD CURVE FOLLOWER SEGMENT
+----------------------------
+Build a segment that follows a mathematical curve:
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "segment_name"
+    description: "Optional description"
+    
+    curve_spec:
+      type: "curve_type"        # See curve types below
+      parameters:               # Curve-specific parameters
+        # ... varies by curve type
+      transformations:          # Optional list of transformations
+        - operation: "scale"
+          factor: 1.5
+        - operation: "rotate"
+          axis: "z"
+          angle: 45
+        # ... more transformations
+      segment:                  # Optional curve segment selection
+        start_fraction: 0.0     # 0.0 = curve start, 1.0 = curve end
+        end_fraction: 1.0
+    
+    wafer_settings:
+      cylinder_diameter: 2.0    # Diameter of the cylinder being sliced
+      min_height: 1.0          # Minimum height of each wafer slice
+      max_chord: 0.5           # Maximum deviation from curve (accuracy)
+
+    segment_settings:
+      show_lcs: true           # Show coordinate systems in FreeCAD
+      build_segment: true      # true = build new, false = reuse existing
+      rotate_segment: 0.0      # Rotate entire segment (degrees)
+      add_curve_vertices: true # Add visual points along curve
+
+BUILD TRADITIONAL HELIX SEGMENT
+-------------------------------
+Build a traditional helix using the old method:
+
+  - operation: "build_segment"
+    segment_type: "helix"
+    name: "helix_name"
+    description: "Traditional helix construction"
+
+    helix_settings:
+      lift_angle: 9.0          # Lift angle in degrees
+      rotate_angle: 0.0        # Rotation angle in degrees
+      wafer_count: 16          # Number of wafers to create
+      outside_height: 2.0      # Height of each wafer
+      cylinder_diameter: 3.0   # Diameter of cylinder
+
+    segment_settings:
+      show_lcs: true
+      build_segment: true
+      rotate_segment: 0.0
+
+BUILD RECTANGLE SEGMENT
+-----------------------
+Build rectangular wafers instead of elliptical:
+
+  - operation: "build_segment"
+    segment_type: "rectangle"
+    name: "rectangle_name"
+
+    rectangle_settings:
+      lift_angle: 9.0
+      rotate_angle: 0.0
+      wafer_count: 16
+      outside_height: 2.0
+      cylinder_diameter: 3.0   # Creates square wafers
+
+    segment_settings:
+      show_lcs: true
+      build_segment: true
+      rotate_segment: 0.0
+
+ADD ARROWS
+----------
+Add directional arrows for visualization:
+
+  - operation: "add_arrows"
+    description: "Add directional arrows"
+    size: 5.0              # Size of arrows
+    point_number: 10       # Which curve point to target
+
+AVAILABLE CURVE TYPES
+=====================
+
+1. LINEAR CURVE
+---------------
+Creates a straight line:
+
+  type: "linear"
+  parameters:
+    length: 100.0              # Length of the line
+    points: 100                # Number of points along line
+    direction: [0, 0, 1]       # Direction vector [x, y, z]
+
+Example: Vertical line 50 units long with 75 points:
+  type: "linear"
+  parameters:
+    length: 50.0
+    points: 75
+    direction: [0, 0, 1]
+
+2. HELICAL CURVE
+----------------
+Creates a helix (corkscrew shape):
+
+  type: "helical"
+  parameters:
+    radius: 10.0               # Radius of the helix
+    pitch: 2.5                 # Vertical distance per complete turn
+    turns: 4.0                 # Number of complete turns
+    points: 100                # Number of points along helix
+
+Example: Tight helix with 6 turns:
+  type: "helical"
+  parameters:
+    radius: 5.0
+    pitch: 1.5
+    turns: 6.0
+    points: 150
+
+3. SINUSOIDAL CURVE
+-------------------
+Creates a sine wave curve:
+
+  type: "sinusoidal"
+  parameters:
+    length: 50.0               # Length along primary axis
+    amplitude: 5.0             # Height of the wave peaks
+    frequency: 2.0             # Number of complete wave cycles
+    points: 100                # Number of points
+    axis: "x"                  # Primary axis: "x", "y", or "z"
+
+Example: Wave along Y-axis:
+  type: "sinusoidal"
+  parameters:
+    length: 30.0
+    amplitude: 8.0
+    frequency: 3.0
+    points: 120
+    axis: "y"
+
+4. OVERHAND KNOT
+----------------
+Creates a mathematical overhand knot:
+
+  type: "overhand_knot"
+  parameters:
+    scale: 10.0                # Overall size of the knot
+    points: 200                # Number of points (more = smoother)
+    increment: 1.0             # Curve density parameter
+
+Example: Larger, smoother knot:
+  type: "overhand_knot"
+  parameters:
+    scale: 15.0
+    points: 300
+    increment: 0.8
+
+5. CIRCLE
+---------
+Creates a circular curve:
+
+  type: "circle"
+  parameters:
+    radius: 10.0               # Radius of the circle
+    points: 100                # Number of points around circle
+    plane: "xy"                # Plane: "xy", "xz", or "yz"
+
+Example: Circle in XZ plane:
+  type: "circle"
+  parameters:
+    radius: 8.0
+    points: 80
+    plane: "xz"
+
+6. SPIRAL
+---------
+Creates an expanding spiral:
+
+  type: "spiral"
+  parameters:
+    max_radius: 10.0           # Final radius at end of spiral
+    turns: 3.0                 # Number of complete turns
+    points: 100                # Number of points
+    plane: "xy"                # Plane: "xy", "xz", or "yz"
+
+7. FIGURE EIGHT
+---------------
+Creates a figure-eight shape:
+
+  type: "figure_eight"
+  parameters:
+    radius: 10.0               # Size of the figure-eight lobes
+    points: 100                # Number of points
+    plane: "xy"                # Plane: "xy", "xz", or "yz"
+
+8. CUSTOM CURVE
+---------------
+Use your own curve function:
+
+  type: "custom"
+  parameters:
+    # Whatever parameters your function needs
+    amplitude: 5.0
+    frequency: 2.0
+    custom_param: 10
+  custom_function: my_curve_function
+
+Your custom function must return a list of [x, y, z] coordinate lists.
+
+CURVE TRANSFORMATIONS
+=====================
+
+Transformations are applied to curves in the order listed.
+
+1. SCALE
+--------
+Resize the curve uniformly or per-axis:
+
+Uniform scaling:
+  - operation: "scale"
+    factor: 2.0                # Makes curve 2x larger in all directions
+
+Per-axis scaling:
+  - operation: "scale"
+    factors: [2.0, 1.5, 1.0]   # Scale x by 2.0, y by 1.5, z by 1.0
+
+2. ROTATE
+---------
+Rotate the curve around an axis:
+
+  - operation: "rotate"
+    axis: "z"                  # Rotation axis: "x", "y", or "z"
+    angle: 45                  # Angle in degrees (positive = counterclockwise)
+
+Example: Rotate 90 degrees around X-axis:
+  - operation: "rotate"
+    axis: "x"
+    angle: 90
+
+3. TRANSLATE
+------------
+Move the curve to a new position:
+
+  - operation: "translate"
+    offset: [10, 0, 5]         # Move by [x, y, z] units
+
+4. MIRROR
+---------
+Mirror the curve across a plane:
+
+  - operation: "mirror"
+    plane: "xy"                # Mirror plane: "xy", "xz", or "yz"
+
+Example: Mirror across XZ plane (flips Y coordinates):
+  - operation: "mirror"
+    plane: "xz"
+
+TRANSFORMATION ORDER EXAMPLE
+----------------------------
+Transformations are applied in sequence:
+
+  transformations:
+    - operation: "scale"        # 1. First, scale the curve
+      factor: 1.5
+    - operation: "rotate"       # 2. Then rotate the scaled curve
+      axis: "z"
+      angle: 45
+    - operation: "translate"    # 3. Finally, move the scaled+rotated curve
+      offset: [10, 0, 0]
+
+CURVE SEGMENT SELECTION
+=======================
+
+You can use only part of a generated curve:
+
+  segment:
+    start_fraction: 0.2        # Start at 20% along the curve
+    end_fraction: 0.8          # End at 80% along the curve
+
+Fractions range from 0.0 (curve start) to 1.0 (curve end).
+
+Examples:
+- First half of curve: start_fraction: 0.0, end_fraction: 0.5
+- Last quarter: start_fraction: 0.75, end_fraction: 1.0
+- Middle section: start_fraction: 0.3, end_fraction: 0.7
+
+ALTERNATIVE WORKFLOWS
+=====================
+
+You can define multiple workflows and select which one to run:
+
+  workflows:
+    simple_test:
+      - operation: "build_segment"
+        segment_type: "curve_follower"
+        name: "test_curve"
+        # ... rest of definition
+
+    complex_build:
+      - operation: "set_position"
+        position: [0, 0, 0]
+      - operation: "build_segment"
+        # ... first segment
+      - operation: "build_segment"
+        # ... second segment
+
+To use an alternative workflow, specify its name in the driver or interface.
+
+CURVE TEMPLATES
+===============
+
+Define reusable curve specifications to avoid repetition:
+
+  curve_templates:
+    standard_helix:
+      type: "helical"
+      parameters:
+        radius: 10.0
+        pitch: 2.5
+        turns: 4.0
+        points: 100
+
+    tight_spiral:
+      type: "spiral"
+      parameters:
+        max_radius: 8.0
+        turns: 5.0
+        points: 150
+        plane: "xy"
+
+Use templates in workflows:
+
+  workflow:
+    - operation: "build_segment"
+      segment_type: "curve_follower"
+      name: "my_helix"
+      curve_spec: "standard_helix"    # Reference template by name
+
+WAFER SETTINGS EXPLAINED
+========================
+
+cylinder_diameter: 2.0
+  The diameter of the cylinder that the wafers are sliced from.
+  This determines the basic size of each wafer.
+
+min_height: 1.0
+  The minimum height (thickness) that any wafer can have.
+  Prevents creating wafers that are too thin to be practical.
+
+max_chord: 0.5
+  The maximum distance the straight line between wafer ends can
+  deviate from the actual curve. Smaller values = more accurate
+  curve following but more wafers. Larger values = fewer wafers
+  but less accurate curve following.
+
+TIPS AND BEST PRACTICES
+========================
+
+1. START SIMPLE
+   Begin with basic curves (linear, circle) before attempting
+   complex shapes (knots, custom curves).
+
+2. USE COMMENTS
+   Add comments with # to document your choices:
+   # This creates the main structural helix
+   - operation: "build_segment"
+
+3. TEST INCREMENTALLY
+   Build one segment at a time, verify it looks correct, then
+   add the next segment.
+
+4. BACKUP WORKING CONFIGS
+   Keep copies of configurations that work well.
+
+5. PARAMETER RELATIONSHIPS
+   - More points = smoother curves but slower processing
+   - Smaller max_chord = more accurate but more wafers
+   - Larger min_height = fewer wafers but less curve accuracy
+
+6. COORDINATE SYSTEM
+   - X: typically left/right
+   - Y: typically front/back
+   - Z: typically up/down
+   - Rotations follow right-hand rule
+
+7. UNITS
+   All measurements are in FreeCAD model units (typically millimeters).
+
+8. VISUALIZATION
+   Set add_curve_vertices: true to see the curve path before
+   building wafers.
+
+TROUBLESHOOTING
+===============
+
+Common Issues:
+
+"No feasible solution exists"
+  - Reduce max_chord value
+  - Increase min_height value
+  - Check curve has reasonable curvature for cylinder diameter
+
+"Wafer creation failed"
+  - Check cylinder_diameter is positive
+  - Verify curve has enough points
+  - Ensure curve doesn't have duplicate points
+
+"Transform failed"
+  - Check transformation parameters are valid
+  - Verify axis names are "x", "y", or "z"
+  - Ensure rotation angles are reasonable
+
+File Format Errors:
+  - Check YAML indentation (use spaces, not tabs)
+  - Verify all brackets and quotes are properly closed
+  - Use a YAML validator online to check syntax
+
+EXAMPLE COMPLETE FILE
+=====================
+
+See the project.yaml file for a complete working example that
+demonstrates all the major features and proper formatting.
+
+GETTING HELP
+=============
+
+1. Check this guide for parameter explanations
+2. Examine the example project.yaml file
+3. Start with simple configurations and add complexity gradually
+4. Use FreeCAD's Python console to debug issues
+5. Check the trace file (if enabled) for detailed build information
+
+================================================================================
+END OF USER GUIDE
+================================================================================
