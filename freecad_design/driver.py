@@ -272,11 +272,8 @@ class Driver(object):
                 min_height=min_height,
                 max_chord=max_chord
             )
-            # After creating the follower and before processing wafers:
-            if add_curve_vertices:
-                # Pass the segment's base placement to align coordinates
-                follower.add_curve_visualization(f"{name}_vertices", segment.get_lcs_base().Placement)
-            # Add debugging  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
+
+            # Add debugging
             curve_info = follower.get_curve_info()
             print(f"Curve info: {curve_info}")
             print(f"First 5 curve points:")
@@ -285,6 +282,7 @@ class Driver(object):
             print(f"Last 5 curve points:")
             for i, point in enumerate(follower.curve_points[-5:], len(follower.curve_points) - 5):
                 print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
+
             print(f"\n=== COORDINATE DEBUGGING ===")
             print(f"Curve start point: {follower.curve_points[0]}")
             print(f"Curve end point: {follower.curve_points[-1]}")
@@ -293,14 +291,28 @@ class Driver(object):
             segment_base = segment.get_lcs_base()
             print(f"Segment base placement: {segment_base.Placement}")
 
-            # Check first wafer position
-            if segment.get_wafer_count() > 0:
-                first_wafer = segment.wafer_list[0]
-                print(f"First wafer LCS: {first_wafer.get_top().Placement}")
-                # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-
             # Process wafers
-            follower.process_wafers(add_curve_vertices=add_curve_vertices, debug=True)
+            follower.process_wafers(add_curve_vertices=False, debug=True)  # Don't add vertices yet
+
+            # Fuse wafers if any were created
+            if segment.get_wafer_count() > 0:
+                segment.fuse_wafers()
+                segment_obj = segment.get_segment_object()
+
+                if segment_obj:
+                    print(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
+
+                    # NOW add curve vertices after wafer geometry is created and fused
+                    if add_curve_vertices:
+                        print("Adding aligned curve vertices...")
+                        follower.add_curve_visualization()
+
+                    # Relocate segment if enabled
+                    self.relocate_segment()
+                else:
+                    print(f"Warning: Segment '{name}' created wafers but fusing failed")
+            else:
+                print(f"Warning: No wafers created for segment '{name}'")
 
             # Fuse wafers if any were created
             if segment.get_wafer_count() > 0:
@@ -395,12 +407,19 @@ class Driver(object):
         global_settings = self.project_config.get('global_settings', {})
         output_files = self.project_config.get('output_files', {})
 
+        direct = ""
+        if output_files.get('working_directory', False):
+            direct = output_files.get('working_directory', "")
+
         if global_settings.get('print_cuts', False):
             cuts_file = output_files.get('cuts_file', 'cutting_list.txt')
+            cuts_file = direct + cuts_file
+            print(f"CUTS: {cuts_file}")
             self.build_cut_list(cuts_file)
 
         if global_settings.get('print_place', False):
             place_file = output_files.get('place_file', 'placement_list.txt')
+            place_file = direct + place_file
             self.build_place_list(place_file)
 
     def _legacy_workflow(self) -> None:

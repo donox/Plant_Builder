@@ -249,6 +249,7 @@ class CurveFollower:
 
         return start_angle, end_angle, rotation_angle, wafer_type
 
+
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
 
@@ -302,6 +303,7 @@ class CurveFollower:
 
         return wafers
 
+
     def _correct_lift_angles(self, wafers: List[Tuple]) -> List[Tuple]:
         """Correct lift angles so adjacent wafers have complementary angles.
 
@@ -333,6 +335,7 @@ class CurveFollower:
                                      corrected_end_angle, rotation_angle, wafer_type))
 
         return corrected_wafers
+
 
     def _calculate_outside_height(self, start_point: np.ndarray, end_point: np.ndarray,
                                   start_angle: float, end_angle: float, rotation_angle: float) -> float:
@@ -396,6 +399,7 @@ class CurveFollower:
 
         return outside_height
 
+
     def add_wafer_from_curve_data(self, start_point: np.ndarray, end_point: np.ndarray,
                                   start_angle: float, end_angle: float, rotation_angle: float,
                                   wafer_type: str, debug: bool = True) -> None:
@@ -454,6 +458,7 @@ class CurveFollower:
             print(f"  ERROR creating wafer {wafer_num}: {e}")
             raise
 
+
     def get_curve_info(self) -> Dict[str, Any]:
         """Get information about the curve being followed.
 
@@ -463,88 +468,58 @@ class CurveFollower:
         return self.curves.get_curve_info()
 
     def add_curve_visualization(self, group_name: str = None) -> str:
-        """Add visual vertices along the curve for debugging/visualization."""
+        """Add visual vertices along the curve aligned with wafer geometry."""
         if group_name is None:
             group_name = "curve_vertices"
 
-        # Get the segment's base LCS to align coordinate systems
-        segment_base_placement = self.segment.get_lcs_base().Placement
+        # Get the segment object to extract coordinate transformations
+        segment_obj = self.segment.get_segment_object()
 
-        # Use the Curves class method but transform the coordinates
-        return self.curves.add_visualization_vertices(group_name, segment_base_placement)
+        if segment_obj:
+            # Use segment coordinate system for alignment
+            return self.curves.add_visualization_vertices(segment_obj, group_name)
+        else:
+            # Fallback: try using segment base LCS coordinate system
+            segment_base = self.segment.get_lcs_base()
+            if segment_base:
+                print("Using segment base LCS for coordinate alignment")
+                return self.curves.add_visualization_vertices_with_lcs(segment_base, group_name)
+            else:
+                print("Warning: No coordinate reference found, using raw coordinates")
+                return self.curves.add_visualization_vertices(None, group_name)
 
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
-        """Main processing method that creates and adds wafers to the segment.
-
-        Orchestrates the complete wafer generation process from feasibility
-        checking through final wafer creation.
-
-        Args:
-            add_curve_vertices: Whether to add visual vertices along the curve
-            debug: Whether to print detailed processing information
-
-        Raises:
-            ValueError: If no feasible solution exists for the curve geometry
-        """
+        """Main processing method that creates and adds wafers to the segment."""
         # Step 1: Check feasibility
         if not self.check_feasibility():
             raise ValueError("No feasible solution exists - curve has too tight curvature")
-
-        # Step 1.5: Optionally add curve vertices for visualization
-        if add_curve_vertices:
-            self.add_curve_visualization()
 
         # Step 2: Create wafer list
         wafers = self.create_wafer_list()
         if debug:
             print(f"Created {len(wafers)} wafers before lift angle correction")
-            for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(wafers):
-                print(f"Raw Wafer {i + 1}: type={wafer_type}, "
-                      f"start_angle={math.degrees(start_angle):.1f}°, "
-                      f"end_angle={math.degrees(end_angle):.1f}°")
 
         # Step 3: Correct lift angles for complementary cutting
         corrected_wafers = self._correct_lift_angles(wafers)
         if debug:
             print(f"Applied lift angle corrections for complementary cutting")
-            for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(corrected_wafers):
-                print(f"Corrected Wafer {i + 1}: type={wafer_type}, "
-                      f"start_angle={math.degrees(start_angle):.1f}°, "
-                      f"end_angle={math.degrees(end_angle):.1f}°")
 
         # Step 4: Process each wafer using the adapter
         if debug:
             print(f"\n=== Processing {len(corrected_wafers)} wafers ===")
 
-        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(corrected_wafers):
+        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
+                corrected_wafers):
             if debug:
                 print(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
             self.add_wafer_from_curve_data(start_point, end_point, start_angle,
                                            end_angle, rotation_angle, wafer_type, debug)
 
+        # Step 5: Add curve vertices AFTER wafer creation so we can use wafer coordinate system
+        if add_curve_vertices:
+            if debug:
+                print(f"\nAdding aligned curve visualization vertices...")
+            self.add_curve_visualization()
+
         if debug:
             print(f"\n=== Finished processing all wafers ===")
-
-# Example usage:
-# curve_spec = {
-#     'type': 'helical',
-#     'parameters': {
-#         'radius': 10,
-#         'pitch': 2.5,
-#         'turns': 4,
-#         'points': 100
-#     },
-#     'transformations': [
-#         {'operation': 'scale', 'factor': 1.5}
-#     ]
-# }
-#
-# curve_follower = CurveFollower(
-#     doc=FreeCAD.ActiveDocument,
-#     segment=my_flex_segment,
-#     cylinder_diameter=2.0,
-#     curve_spec=curve_spec,
-#     min_height=1.0,
-#     max_chord=0.5
-# )
-# curve_follower.process_wafers()

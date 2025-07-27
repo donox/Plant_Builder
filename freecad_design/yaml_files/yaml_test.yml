@@ -11,13 +11,14 @@ metadata:
 global_settings:
   remove_existing: true
   relocate_segments: true
-  print_cuts: false
+  print_cuts: true
   print_place: false
   show_lcs: true
   temp_file: "temp_construction.dat"
 
 # Output file settings
 output_files:
+  working_directory: "/home/don/Documents/Temp/FreeCAD/"
   cuts_file: "cutting_list.txt"
   place_file: "placement_list.txt"
   trace_file: "build_trace.log"

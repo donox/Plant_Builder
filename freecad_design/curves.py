@@ -8,6 +8,7 @@ import math
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import FreeCAD
+import Part
 
 
 class Curves:
@@ -152,17 +153,8 @@ class Curves:
             'end_point': points[-1].tolist()
         }
 
-    def add_visualization_vertices(self, group_name: str = None,
-                                   base_placement: Any = None) -> str:
-        """Add visual vertices at each curve point in FreeCAD.
-
-        Args:
-            group_name: Name of the document group (auto-generated if None)
-            segment_placement: FlexSegment placement to align coordinates
-
-        Returns:
-            Name of the created group
-        """
+    def add_visualization_vertices(self, segment_obj=None, group_name: str = None) -> str:
+        """Add visual vertices aligned with FlexSegment coordinate system."""
         if group_name is None:
             curve_type = self.curve_spec.get('type', 'curve')
             group_name = f"{curve_type}_vertices"
@@ -178,22 +170,26 @@ class Curves:
         # Add vertices for each curve point
         vertices = []
         for i, point in enumerate(self.transformed_curve):
-            vertex = self.doc.addObject('Part::Vertex', f"{group_name}_point_{i}")
+            if segment_obj:
+                # Extract coordinate transformation from FlexSegment geometry
+                segment_transform = segment_obj.getGlobalPlacement()
+                # Transform curve coordinates to match wafer geometry coordinate system
+                transformed_point = segment_transform.multVec(FreeCAD.Vector(*point))
 
-            if base_placement:
-                # Transform curve point to match segment coordinate system
-                curve_vector = FreeCAD.Vector(point[0], point[1], point[2])
-                transformed_point = base_placement.multiply(FreeCAD.Placement(curve_vector, FreeCAD.Rotation()))
-                vertex.X = float(transformed_point.Base.x)
-                vertex.Y = float(transformed_point.Base.y)
-                vertex.Z = float(transformed_point.Base.z)
+                # Create vertex at transformed coordinates
+                import Part
+                vertex_shape = Part.Vertex(transformed_point)
+                vertex_obj = self.doc.addObject("Part::Feature", f"{group_name}_point_{i}")
+                vertex_obj.Shape = vertex_shape
             else:
-                # Use raw coordinates
-                vertex.X = float(point[0])
-                vertex.Y = float(point[1])
-                vertex.Z = float(point[2])
+                # Fallback: use direct coordinate assignment
+                vertex_obj = self.doc.addObject('Part::Vertex', f"{group_name}_point_{i}")
+                vertex_obj.X = float(point[0])
+                vertex_obj.Y = float(point[1])
+                vertex_obj.Z = float(point[2])
+                vertex_obj.Placement = FreeCAD.Placement()
 
-            vertices.append(vertex)
+            vertices.append(vertex_obj)
 
         # Add all vertices to the group
         point_group.addObjects(vertices)
@@ -525,6 +521,40 @@ class Curves:
                 raise ValueError(f"Invalid plane: {plane}. Use 'xy', 'xz', or 'yz'")
 
         return curve_points
+
+    def add_visualization_vertices_with_lcs(self, lcs_obj, group_name: str = None) -> str:
+        """Add vertices using LCS coordinate system as reference."""
+        if group_name is None:
+            curve_type = self.curve_spec.get('type', 'curve')
+            group_name = f"{curve_type}_vertices"
+
+        # Find or create the point group
+        point_groups = self.doc.getObjectsByLabel(group_name)
+        if point_groups:
+            self.doc.removeObject(point_groups[0].Name)
+
+        point_group = self.doc.addObject("App::DocumentObjectGroup", group_name)
+
+        # Add vertices using LCS placement
+        vertices = []
+        lcs_placement = lcs_obj.Placement
+
+        for i, point in enumerate(self.transformed_curve):
+            # Transform point using LCS coordinate system
+            local_vector = FreeCAD.Vector(*point)
+            global_position = lcs_placement.multVec(local_vector)
+
+            import Part
+            vertex_shape = Part.Vertex(global_position)
+            vertex_obj = self.doc.addObject("Part::Feature", f"{group_name}_point_{i}")
+            vertex_obj.Shape = vertex_shape
+
+            vertices.append(vertex_obj)
+
+        point_group.addObjects(vertices)
+        print(f"Added {len(vertices)} vertices aligned with LCS to group '{group_name}'")
+
+        return group_name
 
     @classmethod
     def get_available_curves(cls) -> List[str]:
