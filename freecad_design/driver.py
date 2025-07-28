@@ -166,8 +166,19 @@ class Driver(object):
         self.process_arrow_command()
         self._generate_output_files()
 
+        FreeCAD.ActiveDocument.recompute()
+        FreeCADGui.updateGui()
+
+        # Try to refresh the 3D view
+        try:
+            view = FreeCADGui.activeDocument().activeView()
+            if view:
+                view.fitAll()
+        except:
+            pass
+
         if self.do_trace and self.trace_file:
-            self.trace_file.close()
+                self.trace_file.close()
 
     def _execute_operation(self, operation: Dict[str, Any]) -> None:
         """Execute a single workflow operation.
@@ -292,7 +303,7 @@ class Driver(object):
             print(f"Segment base placement: {segment_base.Placement}")
 
             # Process wafers
-            follower.process_wafers(add_curve_vertices=False, debug=True)  # Don't add vertices yet
+            follower.process_wafers(add_curve_vertices=False, debug=True)
 
             # Fuse wafers if any were created
             if segment.get_wafer_count() > 0:
@@ -302,27 +313,15 @@ class Driver(object):
                 if segment_obj:
                     print(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
 
-                    # NOW add curve vertices after wafer geometry is created and fused
+                    # Add curve vertices BEFORE relocation
                     if add_curve_vertices:
-                        print("Adding aligned curve vertices...")
+                        print("Adding curve vertices...")
                         follower.add_curve_visualization()
 
-                    # Relocate segment if enabled
+                    # Relocate segment - ONLY CALL THIS ONCE!
                     self.relocate_segment()
-                else:
-                    print(f"Warning: Segment '{name}' created wafers but fusing failed")
-            else:
-                print(f"Warning: No wafers created for segment '{name}'")
+                    print(f"Completed relocation for segment '{name}'")
 
-            # Fuse wafers if any were created
-            if segment.get_wafer_count() > 0:
-                segment.fuse_wafers()
-                segment_obj = segment.get_segment_object()
-
-                if segment_obj:
-                    print(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
-                    # Relocate segment if enabled
-                    self.relocate_segment()
                 else:
                     print(f"Warning: Segment '{name}' created wafers but fusing failed")
             else:
@@ -456,29 +455,60 @@ class Driver(object):
 
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
+        import traceback
+
         if not self.relocate_segments_tf:
-            print("Relocation disabled - segments will stay at origin")           # !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            print("Relocation disabled - segments will stay at origin")
             return
 
         if not self.segment_list:
-            print("No segments to relocate")        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            print("No segments to relocate")
             return
 
         segment = self.segment_list[-1]
-        print(f"Relocating segment: {segment.get_segment_name()}")    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        print(f"Current compound transform: {self.compound_transform}")     # !!!!!!!!!!!!!!!!
+        segment_name = segment.get_segment_name()
+
+        # Debug: Show call stack to find duplicate calls
+        print(f"\n=== RELOCATE_SEGMENT CALLED FOR: {segment_name} ===")
+        print("Call stack:")
+        for line in traceback.format_stack()[-3:-1]:  # Last 2 calls before this one
+            print(f"  {line.strip()}")
+
+        # Check if this segment was already relocated
+        if hasattr(segment, 'already_relocated') and segment.already_relocated:
+            print(f"WARNING: Segment {segment_name} already relocated - SKIPPING!")
+            return
+
+        print(f"Segment count: {len(self.segment_list)}")
+        print(f"Current compound transform BEFORE: {self.compound_transform}")
+
         angle = segment.get_segment_rotation()
         segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
                                              FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
+        print(f"Segment rotation: {segment_rotation}")
 
         if self.first_segment:
             self.first_segment = False
             self.compound_transform = segment_rotation
+            print("First segment - using segment rotation as base")
         else:
+            old_transform = self.compound_transform
             self.compound_transform = self.compound_transform.multiply(segment_rotation)
+            print(f"Multiplied: {old_transform} * {segment_rotation} = {self.compound_transform}")
 
+        print(f"Applying transform to segment...")
         segment.move_to_top(self.compound_transform)
-        self.compound_transform = self.compound_transform.multiply(segment.get_transform_to_top())
+
+        segment_to_top_transform = segment.get_transform_to_top()
+        print(f"Segment to top transform: {segment_to_top_transform}")
+
+        old_compound = self.compound_transform
+        self.compound_transform = self.compound_transform.multiply(segment_to_top_transform)
+        print(f"Final compound: {old_compound} * {segment_to_top_transform} = {self.compound_transform}")
+
+        # Mark this segment as relocated
+        segment.already_relocated = True
+        print(f"=== COMPLETED RELOCATION FOR: {segment_name} ===\n")
 
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""
@@ -536,6 +566,7 @@ class Driver(object):
                 print("No segments available for arrow placement")
                 return
 
+            # Place arrow on the first segment
             segment_list_top = self.segment_list[0]
 
             # Check if the LCS object still exists
@@ -554,9 +585,14 @@ class Driver(object):
 
             new_place = lcs_top.Placement.multiply(self.compound_transform)
 
-            # Create arrow visualization
-            arrow_name = f"Arrow_{point_nbr}"
-            arrow(arrow_name, new_place, size)
+            # Create arrow visualization with segment-specific name
+            segment_name = segment_list_top.get_segment_name()
+            arrow_name = f"{segment_name}_Arrow_{point_nbr}"
+            arrow_obj = arrow(arrow_name, new_place, size)
+
+            # Register arrow with the segment
+            segment_list_top.register_arrow(arrow_obj)
+
             print(f"Added arrow '{arrow_name}' at point {point_nbr}")
 
         except Exception as e:

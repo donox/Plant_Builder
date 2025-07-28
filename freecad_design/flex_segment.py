@@ -26,6 +26,15 @@ class FlexSegment(object):
         self.lcs_base = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_base")
         self.lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_top")
         self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "_lcs_group")
+        # Create main segment group for organization
+        self.main_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "segment_group")
+        self.visualization_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "visualization")
+        self.main_group.addObject(self.visualization_group)
+        self.main_group.addObject(self.lcs_group)
+        self.transform_callbacks = []
+        self._setup_transform_properties()
+        self.already_relocated = False  # Track relocation status
+
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
         # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
@@ -138,6 +147,9 @@ class FlexSegment(object):
         fuse.ViewObject.DisplayMode = "Shaded"
         fuse.Placement = self.lcs_base.Placement
         self.segment_object = fuse
+        # Add the fused result to the main group
+        if self.segment_object:
+            self.main_group.addObject(self.segment_object)
         self.doc.recompute()
 
     def get_segment_rotation(self):
@@ -158,10 +170,6 @@ class FlexSegment(object):
 
     def move_content_to_zero(self, transform):
         """Relocate to a zero base corresponding to a new build.  Transform is lcs_base.inverse()"""
-        self.move_content(transform)
-
-    def move_to_top(self, transform):
-        """Apply transform to reposition segment."""
         self.move_content(transform)
 
     def remove_prior_version(self):
@@ -276,6 +284,264 @@ class FlexSegment(object):
         tr = l1.inverse().multiply(l2)
         # print(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
         return tr
+
+    def _setup_transform_properties(self):
+        """Add custom properties to store transformation data."""
+        if not hasattr(self.lcs_base, 'AppliedTransformMatrix'):
+            # Store the 4x4 transformation matrix as a string (FreeCAD can't store Matrix directly)
+            self.lcs_base.addProperty("App::PropertyString", "AppliedTransformMatrix",
+                                      "Transform", "Applied transformation matrix as string")
+            self.lcs_base.addProperty("App::PropertyStringList", "CurveVerticesGroups",
+                                      "Transform", "Names of associated curve vertex groups")
+            self.lcs_base.addProperty("App::PropertyBool", "HasStoredTransform",
+                                      "Transform", "Whether this segment has a stored transform")
+
+        # Initialize
+        self.lcs_base.HasStoredTransform = False
+        self.lcs_base.CurveVerticesGroups = []
+
+    def store_applied_transform(self, transform):
+        """Store transform in FreeCAD object properties for persistence."""
+        if transform:
+            # Convert FreeCAD.Placement to matrix and store as string
+            matrix = transform.toMatrix()
+            matrix_str = ",".join([str(matrix.A[i]) for i in range(16)])
+
+            self.lcs_base.AppliedTransformMatrix = matrix_str
+            self.lcs_base.HasStoredTransform = True
+
+            print(f"Stored transform matrix in FreeCAD object: {self.lcs_base.Label}")
+        else:
+            self.lcs_base.HasStoredTransform = False
+
+    def get_stored_transform(self):
+        """Retrieve stored transform from FreeCAD object properties."""
+        if self.lcs_base.HasStoredTransform and self.lcs_base.AppliedTransformMatrix:
+            try:
+                # Parse matrix string back to FreeCAD.Matrix
+                matrix_values = [float(x) for x in self.lcs_base.AppliedTransformMatrix.split(',')]
+                matrix = FreeCAD.Matrix()
+                for i in range(16):
+                    matrix.A[i] = matrix_values[i]
+
+                # Convert matrix back to Placement
+                return FreeCAD.Placement(matrix)
+            except Exception as e:
+                print(f"Error retrieving stored transform: {e}")
+                return None
+        return None
+
+    def register_curve_vertices_group(self, group_name):
+        """Register a curve vertices group with this segment."""
+        # Store the group name
+        current_groups = list(self.lcs_base.CurveVerticesGroups)
+        if group_name not in current_groups:
+            current_groups.append(group_name)
+            self.lcs_base.CurveVerticesGroups = current_groups
+
+        # Force document recompute before trying to find objects
+        self.doc.recompute()
+
+        # Find and move the vertex group into this segment's visualization group
+        vertex_groups = self.doc.getObjectsByLabel(group_name)
+        if vertex_groups:
+            vertex_group = vertex_groups[0]
+            try:
+                # Remove from document root if it's there
+                if hasattr(vertex_group, 'removeFromDocument'):
+                    pass  # It's already in the document
+
+                # Add to visualization group
+                self.visualization_group.addObject(vertex_group)
+                print(f"Successfully moved vertex group '{group_name}' to visualization group")
+            except Exception as e:
+                print(f"Failed to move vertex group to visualization group: {e}")
+        else:
+            print(f"Warning: Could not find vertex group '{group_name}' to move to visualization group")
+
+    def register_arrow(self, arrow_obj):
+        """Register an arrow with this segment's visualization group."""
+        if arrow_obj:
+            self.visualization_group.addObject(arrow_obj)
+            print(f"Added arrow '{arrow_obj.Label}' to segment visualization group")
+
+    def register_transform_callback(self, callback_func):
+        """Register a function to be called when segment is transformed."""
+        self.transform_callbacks.append(callback_func)
+
+    def move_to_top(self, transform):
+        """Apply transform to reposition segment."""
+        self.move_content(transform)
+
+        # Store transform in FreeCAD properties for persistence
+        self.store_applied_transform(transform)
+
+        # Apply to registered curve vertices
+        self._transform_registered_vertices(transform)
+
+        self.doc.recompute()
+        FreeCADGui.updateGui()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
+
+        # Call Python callbacks
+        for callback in self.transform_callbacks:
+            callback(transform)
+
+    def _transform_registered_vertices(self, transform):
+        """Transform all registered curve vertex groups."""
+        for group_name in self.lcs_base.CurveVerticesGroups:
+            curve_groups = self.doc.getObjectsByLabel(group_name)
+            if curve_groups:
+                vertex_group_obj = curve_groups[0]
+
+                # Transform each individual vertex in the group
+                for vertex_obj in vertex_group_obj.OutList:
+                    if hasattr(vertex_obj, 'Placement'):
+                        current_placement = vertex_obj.Placement
+                        new_placement = transform.multiply(current_placement)
+                        vertex_obj.Placement = new_placement
+
+                        # Force refresh this specific object
+                        vertex_obj.touch()
+                        if hasattr(vertex_obj, 'ViewObject'):
+                            vertex_obj.ViewObject.Visibility = False
+                            vertex_obj.ViewObject.Visibility = True
+
+                print(f"Transformed vertex group '{group_name}' with {len(vertex_group_obj.OutList)} vertices")
+            else:
+                print(f"Warning: Could not find vertex group '{group_name}' for transformation")
+
+        # Force document recompute after all vertex transforms
+        self.doc.recompute()
+
+    @staticmethod
+    def find_segments_with_transforms(doc=None):
+        """Find all segments in document that have stored transforms."""
+        if doc is None:
+            doc = FreeCAD.ActiveDocument
+
+        segments_with_transforms = []
+
+        for obj in doc.Objects:
+            if hasattr(obj, 'HasStoredTransform') and obj.HasStoredTransform:
+                segments_with_transforms.append(obj)
+
+        return segments_with_transforms
+
+    @staticmethod
+    def apply_transform_to_segment_and_vertices(segment_lcs_obj, new_transform):
+        """Apply a new transform to a segment and its associated vertices (for external macros)."""
+        try:
+            # Get the segment object (find by LCS reference)
+            segment_name = segment_lcs_obj.Label.replace('_lcs_base', '')
+            segment_objects = [obj for obj in segment_lcs_obj.Document.Objects
+                               if obj.Label.startswith(segment_name) and hasattr(obj, 'Shape')]
+
+            # Apply transform to segment geometry
+            for seg_obj in segment_objects:
+                current_placement = seg_obj.Placement
+                new_placement = new_transform.multiply(current_placement)
+                seg_obj.Placement = new_placement
+
+            # Apply to registered curve vertices
+            for group_name in segment_lcs_obj.CurveVerticesGroups:
+                curve_groups = segment_lcs_obj.Document.getObjectsByLabel(group_name)
+                if curve_groups:
+                    vertex_group_obj = curve_groups[0]
+                    for vertex_obj in vertex_group_obj.OutList:
+                        current_placement = vertex_obj.Placement
+                        new_placement = new_transform.multiply(current_placement)
+                        vertex_obj.Placement = new_placement
+
+            # Update stored transform
+            if hasattr(segment_lcs_obj, 'AppliedTransformMatrix'):
+                old_transform = FlexSegment._parse_stored_transform(segment_lcs_obj)
+                combined_transform = new_transform.multiply(old_transform) if old_transform else new_transform
+                FlexSegment._store_transform_in_object(segment_lcs_obj, combined_transform)
+
+            print(f"Applied external transform to segment {segment_name}")
+
+        except Exception as e:
+            print(f"Error applying external transform: {e}")
+
+    @staticmethod
+    def _parse_stored_transform(lcs_obj):
+        """Helper to parse stored transform from FreeCAD object."""
+        if hasattr(lcs_obj, 'AppliedTransformMatrix') and lcs_obj.AppliedTransformMatrix:
+            try:
+                matrix_values = [float(x) for x in lcs_obj.AppliedTransformMatrix.split(',')]
+                matrix = FreeCAD.Matrix()
+                for i in range(16):
+                    matrix.A[i] = matrix_values[i]
+                return FreeCAD.Placement(matrix)
+            except:
+                return None
+        return None
+
+    def store_pending_curve_vertices(self, group_name, curve_points):
+        """Store curve points to create vertices AFTER transformation."""
+        if not hasattr(self, 'pending_vertices'):
+            self.pending_vertices = {}
+        self.pending_vertices[group_name] = curve_points
+
+    def move_to_top(self, transform):
+        """Apply transform to reposition segment."""
+        self.move_content(transform)
+
+        # Store transform in FreeCAD properties for persistence
+        self.store_applied_transform(transform)
+
+        # NOW create vertices in their final transformed positions
+        self._create_transformed_vertices(transform)
+
+        # Call Python callbacks
+        for callback in self.transform_callbacks:
+            callback(transform)
+
+    def _create_transformed_vertices(self, transform):
+        """Create vertices directly in their final transformed positions."""
+        if not hasattr(self, 'pending_vertices'):
+            return
+
+        for group_name, curve_points in self.pending_vertices.items():
+            # Remove any existing group
+            existing_groups = self.doc.getObjectsByLabel(group_name)
+            for group in existing_groups:
+                self.doc.removeObject(group.Name)
+
+            # Create new group
+            point_group = self.doc.addObject("App::DocumentObjectGroup", group_name)
+            point_group.Label = group_name
+
+            # Create vertices directly in final positions
+            vertices = []
+            for i, point in enumerate(curve_points):
+                vertex_name = f"{group_name}_point_{i}"
+                vertex_obj = self.doc.addObject('Part::Vertex', vertex_name)
+
+                # Apply transform to original point to get final position
+                original_placement = FreeCAD.Placement(FreeCAD.Vector(*point), FreeCAD.Rotation())
+                final_placement = transform.multiply(original_placement)
+
+                vertex_obj.Placement = final_placement
+                vertices.append(vertex_obj)
+
+            # Add to group and visualization
+            point_group.addObjects(vertices)
+            self.visualization_group.addObject(point_group)
+
+            print(f"Created {len(vertices)} vertices in final positions for group '{group_name}'")
+
+        # Clear pending vertices
+        self.pending_vertices = {}
+
+    @staticmethod
+    def _store_transform_in_object(lcs_obj, transform):
+        """Helper to store transform in FreeCAD object."""
+        matrix = transform.toMatrix()
+        matrix_str = ",".join([str(matrix.A[i]) for i in range(16)])
+        lcs_obj.AppliedTransformMatrix = matrix_str
+        lcs_obj.HasStoredTransform = True
 
 
 

@@ -193,10 +193,13 @@ class CurveFollower:
 
         return tangent / np.linalg.norm(tangent)
 
-    def _calculate_ellipse_parameters(self, start_point: np.ndarray, end_point: np.ndarray,
-                                      start_index: int, end_index: int, is_first_wafer: bool = False,
-                                      is_last_wafer: bool = False) -> Tuple[float, float, float, str]:
-        """Calculate ellipse angles and wafer type for the wafer ends.
+    def _calculate_ellipse_parameters(
+            self, start_point: np.ndarray, end_point: np.ndarray,
+            start_index: int, end_index: int,
+            is_first_wafer: bool = False, is_last_wafer: bool = False
+    ) -> Tuple[float, float, float, str]:
+        """
+        Calculate ellipse angles and wafer type for the wafer ends.
 
         Determines the cutting angles needed to create proper elliptical or
         circular cross-sections at each end of the wafer.
@@ -224,31 +227,42 @@ class CurveFollower:
         # Determine wafer type and angles
         if is_first_wafer:
             # First wafer: start is circular (perpendicular to curve), end is elliptical
-            start_angle = 0.0  # 0 degrees - perpendicular to curve gives circular cross-section
+            start_angle = 0.0
             end_angle = math.acos(np.clip(np.abs(np.dot(end_tangent, chord_unit)), 0, 1))
-            wafer_type = "CE"  # Circle-Ellipse
+            wafer_type = "CE"
         elif is_last_wafer:
-            # Last wafer: start is elliptical, end is circular (perpendicular to curve)
+            # Last wafer: start is elliptical, end is circular
             start_angle = math.acos(np.clip(np.abs(np.dot(start_tangent, chord_unit)), 0, 1))
-            end_angle = 0.0  # 0 degrees - perpendicular to curve gives circular cross-section
-            wafer_type = "EC"  # Ellipse-Circle
+            end_angle = 0.0
+            wafer_type = "EC"
         else:
             # Middle wafers: both ends are elliptical
             start_angle = math.acos(np.clip(np.abs(np.dot(start_tangent, chord_unit)), 0, 1))
             end_angle = math.acos(np.clip(np.abs(np.dot(end_tangent, chord_unit)), 0, 1))
-            wafer_type = "EE"  # Ellipse-Ellipse
+            wafer_type = "EE"
 
-        # Calculate rotation angle between ellipse major axes
-        cross_product = np.cross(start_tangent, end_tangent)
-        if isinstance(cross_product, np.ndarray):
-            rotation_angle = math.atan2(np.linalg.norm(cross_product),
-                                        np.dot(start_tangent, end_tangent))
+        # --- FIXED ROTATION ANGLE CALCULATION ---
+        def project_onto_plane(v, normal):
+            return v - np.dot(v, normal) * normal
+
+        v1_proj = project_onto_plane(start_tangent, chord_unit)
+        v2_proj = project_onto_plane(end_tangent, chord_unit)
+
+        v1_norm = np.linalg.norm(v1_proj)
+        v2_norm = np.linalg.norm(v2_proj)
+
+        if v1_norm < 1e-9 or v2_norm < 1e-9:
+            # Degenerate case: no twist detectable
+            rotation_angle = 0.0
         else:
-            rotation_angle = math.atan2(abs(cross_product),
-                                        np.dot(start_tangent, end_tangent))
+            v1_proj /= v1_norm
+            v2_proj /= v2_norm
+            cross = np.cross(v1_proj, v2_proj)
+            dot = np.dot(v1_proj, v2_proj)
+            sign = np.sign(np.dot(cross, chord_unit))
+            rotation_angle = sign * math.acos(np.clip(dot, -1.0, 1.0))
 
         return start_angle, end_angle, rotation_angle, wafer_type
-
 
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
@@ -303,7 +317,6 @@ class CurveFollower:
 
         return wafers
 
-
     def _correct_lift_angles(self, wafers: List[Tuple]) -> List[Tuple]:
         """Correct lift angles so adjacent wafers have complementary angles.
 
@@ -335,7 +348,6 @@ class CurveFollower:
                                      corrected_end_angle, rotation_angle, wafer_type))
 
         return corrected_wafers
-
 
     def _calculate_outside_height(self, start_point: np.ndarray, end_point: np.ndarray,
                                   start_angle: float, end_angle: float, rotation_angle: float) -> float:
@@ -399,7 +411,6 @@ class CurveFollower:
 
         return outside_height
 
-
     def add_wafer_from_curve_data(self, start_point: np.ndarray, end_point: np.ndarray,
                                   start_angle: float, end_angle: float, rotation_angle: float,
                                   wafer_type: str, debug: bool = True) -> None:
@@ -458,7 +469,6 @@ class CurveFollower:
             print(f"  ERROR creating wafer {wafer_num}: {e}")
             raise
 
-
     def get_curve_info(self) -> Dict[str, Any]:
         """Get information about the curve being followed.
 
@@ -468,25 +478,20 @@ class CurveFollower:
         return self.curves.get_curve_info()
 
     def add_curve_visualization(self, group_name: str = None) -> str:
-        """Add visual vertices along the curve aligned with wafer geometry."""
+        """Add visual vertices along the curve for debugging/visualization."""
         if group_name is None:
-            group_name = "curve_vertices"
+            segment_name = self.segment.get_segment_name()
+            group_name = f"{segment_name}_curve_vertices"  # Make it unique per segment
 
-        # Get the segment object to extract coordinate transformations
-        segment_obj = self.segment.get_segment_object()
+        print(f"Creating curve vertices with group name: '{group_name}'")
 
-        if segment_obj:
-            # Use segment coordinate system for alignment
-            return self.curves.add_visualization_vertices(segment_obj, group_name)
-        else:
-            # Fallback: try using segment base LCS coordinate system
-            segment_base = self.segment.get_lcs_base()
-            if segment_base:
-                print("Using segment base LCS for coordinate alignment")
-                return self.curves.add_visualization_vertices_with_lcs(segment_base, group_name)
-            else:
-                print("Warning: No coordinate reference found, using raw coordinates")
-                return self.curves.add_visualization_vertices(None, group_name)
+        # Create vertices at origin (same as wafer creation)
+        vertex_group_name = self.curves.add_visualization_vertices(None, group_name)
+
+        # Register with segment using FreeCAD properties AND grouping
+        self.segment.register_curve_vertices_group(vertex_group_name)
+
+        return vertex_group_name
 
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
         """Main processing method that creates and adds wafers to the segment."""

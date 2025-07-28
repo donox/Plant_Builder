@@ -159,42 +159,33 @@ class Curves:
             curve_type = self.curve_spec.get('type', 'curve')
             group_name = f"{curve_type}_vertices"
 
-        # Find or create the point group
-        point_groups = self.doc.getObjectsByLabel(group_name)
-        if point_groups:
-            # Remove existing group to recreate
-            self.doc.removeObject(point_groups[0].Name)
+        # Remove existing group to avoid conflicts
+        existing_groups = self.doc.getObjectsByLabel(group_name)
+        for group in existing_groups:
+            self.doc.removeObject(group.Name)
 
+        # Create new group with proper internal name
         point_group = self.doc.addObject("App::DocumentObjectGroup", group_name)
+        point_group.Label = group_name
 
         # Add vertices for each curve point
         vertices = []
         for i, point in enumerate(self.transformed_curve):
-            if segment_obj:
-                # Extract coordinate transformation from FlexSegment geometry
-                segment_transform = segment_obj.getGlobalPlacement()
-                # Transform curve coordinates to match wafer geometry coordinate system
-                transformed_point = segment_transform.multVec(FreeCAD.Vector(*point))
-
-                # Create vertex at transformed coordinates
-                import Part
-                vertex_shape = Part.Vertex(transformed_point)
-                vertex_obj = self.doc.addObject("Part::Feature", f"{group_name}_point_{i}")
-                vertex_obj.Shape = vertex_shape
-            else:
-                # Fallback: use direct coordinate assignment
-                vertex_obj = self.doc.addObject('Part::Vertex', f"{group_name}_point_{i}")
-                vertex_obj.X = float(point[0])
-                vertex_obj.Y = float(point[1])
-                vertex_obj.Z = float(point[2])
-                vertex_obj.Placement = FreeCAD.Placement()
-
+            vertex_name = f"{group_name}_point_{i}"
+            vertex_obj = self.doc.addObject('Part::Vertex', vertex_name)
+            vertex_obj.X = float(point[0])
+            vertex_obj.Y = float(point[1])
+            vertex_obj.Z = float(point[2])
+            vertex_obj.Placement = FreeCAD.Placement()
             vertices.append(vertex_obj)
 
         # Add all vertices to the group
         point_group.addObjects(vertices)
-        print(f"Added {len(vertices)} vertices to group '{group_name}'")
 
+        # Force recompute to ensure objects are created
+        self.doc.recompute()
+
+        print(f"Added {len(vertices)} vertices to group '{group_name}'")
         return group_name
 
     # Transformation methods
@@ -526,7 +517,7 @@ class Curves:
         """Add vertices using LCS coordinate system as reference."""
         if group_name is None:
             curve_type = self.curve_spec.get('type', 'curve')
-            group_name = f"{curve_type}_vertices"
+            group_name = f"{curve_type}_vertices_lcs"
 
         # Find or create the point group
         point_groups = self.doc.getObjectsByLabel(group_name)
@@ -555,6 +546,20 @@ class Curves:
         print(f"Added {len(vertices)} vertices aligned with LCS to group '{group_name}'")
 
         return group_name
+
+    def add_curve_visualization(self, group_name: str = None) -> str:
+        """Add visual vertices along the curve for debugging/visualization."""
+        if group_name is None:
+            segment_name = self.segment.get_segment_name()
+            group_name = f"{segment_name}_curve_vertices"
+
+        # Create vertices at origin (same as wafer creation)
+        vertex_group_name = self.curves.add_visualization_vertices(None, group_name)
+
+        # Register with segment using FreeCAD properties AND grouping
+        self.segment.register_curve_vertices_group(vertex_group_name)
+
+        return vertex_group_name
 
     @classmethod
     def get_available_curves(cls) -> List[str]:
