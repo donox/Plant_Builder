@@ -11,7 +11,7 @@ metadata:
 global_settings:
   remove_existing: true
   relocate_segments: true
-  print_cuts: false
+  print_cuts: true
   print_place: false
   show_lcs: false
   temp_file: "temp_construction.dat"
@@ -31,11 +31,66 @@ workflow:
       - "test_helix.*"
       - "Curve.*"
       - "temp.*"
+      - "close"
+      - "comp"
 
   - operation: "set_position"
     description: "Set starting position and orientation"
     position: [0, 0, 0]          # x, y, z coordinates
     rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "test_heli_1"
+    description: "Vertical base columnr"
+
+    # Curve specification using new Curves class
+    curve_spec:
+      type: "linear"
+      parameters:
+        length: 5.0
+        points: 10
+    wafer_settings:
+      cylinder_diameter: 1.75
+      min_height: 1.0
+      max_chord: 0.3
+
+    # Segment control settings
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "Curve Left"
+    description: "Turn away from center 45 degrees"
+
+    curve_spec:
+      type: "circle"
+      parameters:
+        radius: 8.0        # Match the traditional helix
+        points: 20
+      transformations:
+        - operation: "rotate"
+          axis: "z"
+          angle: 225
+      segment:
+        start_fraction: 0.0
+        end_fraction: 0.25
+
+    wafer_settings:
+      cylinder_diameter: 1.75
+      min_height: 0.5          # Much smaller
+      max_chord: 0.2            # Much tighter
+
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: false
+
 
   - operation: "build_segment"
     segment_type: "curve_follower"
@@ -49,7 +104,7 @@ workflow:
         radius: 8.0
         pitch: 4.0
         turns: 3.0
-        points: 80
+        points: 650
       transformations:
         - operation: "scale"
           factor: 1.0
@@ -58,14 +113,13 @@ workflow:
           angle: 0
       segment:
         start_fraction: 0.0
-        end_fraction: 0.1
-
+        end_fraction: 1.0
     # Wafer construction parameters
     wafer_settings:
-      cylinder_diameter: 2.0
+      cylinder_diameter: 1.5
       min_height: 0.8
-      max_chord: 0.15
-
+      max_chord: 0.2
+      max_angular_span: 45
     # Segment control settings
     segment_settings:
       show_lcs: false
@@ -73,115 +127,109 @@ workflow:
       rotate_segment: 0.0
       add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
 
-  - operation: "build_segment"
-    segment_type: "curve_follower"
-    name: "test_helix_2"
-    description: "Build helical structure using curve follower"
-
-    curve_spec:
-      type: "helical"
-      parameters:
-        radius: 8.0        # Match the traditional helix
-        pitch: 6.0         # Larger pitch for better spacing
-        turns: 2.5         # Fewer turns
-        points: 60
-      transformations: [ ]   # Remove transformations for now
-      segment:
-        start_fraction: 0.0
-        end_fraction: 0.1
-
-    wafer_settings:
-      cylinder_diameter: 1.5    # Match traditional helix
-      min_height: 0.4           # Much smaller
-      max_chord: 0.2            # Much tighter
-
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-      add_curve_vertices: false
-
-
-
-
-  - operation: "build_segment"
-    segment_type: "helix"
-    name: "comparison_helix"
-    description: "Traditional helix for comparison"
-
-    helix_settings:
-      lift_angle: 9.0
-      rotate_angle: 0.0
-      wafer_count: 4
-      outside_height: 1.0
-      cylinder_diameter: 1.5
-
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-
-#  - operation: "add_arrows"
-#    description: "Add directional arrows for visualization"
-#    size: 5.0
-#    point_number: 10
-
-# Alternative workflow configurations (can be selected)
-workflows:
-  simple_test:
-    - operation: "build_segment"
-      segment_type: "curve_follower"
-      name: "simple_curve"
-      curve_spec:
-        type: "linear"
-        parameters:
-          length: 50.0
-          points: 50
-      wafer_settings:
-        cylinder_diameter: 2.0
-        min_height: 1.0
-        max_chord: 0.3
-
-  complex_knot:
-    - operation: "build_segment"
-      segment_type: "curve_follower"
-      name: "overhand_knot"
-      curve_spec:
-        type: "overhand_knot"
-        parameters:
-          scale: 10.0
-          points: 200
-          increment: 1.0
-        transformations:
-          - operation: "rotate"
-            axis: "x"
-            angle: 45
-      wafer_settings:
-        cylinder_diameter: 1.5
-        min_height: 0.8
-        max_chord: 0.2
-
-# Template definitions for reusable curve specifications
-curve_templates:
-  standard_helix:
-    type: "helical"
-    parameters:
-      radius: 10.0
-      pitch: 2.5
-      turns: 4.0
-      points: 100
-
-  tight_helix:
-    type: "helical"
-    parameters:
-      radius: 5.0
-      pitch: 1.5
-      turns: 6.0
-      points: 150
-
-  test_knot:
-    type: "overhand_knot"
-    parameters:
-      scale: 8.0
-      points: 180
-      increment: 1.2
+#  - operation: "build_segment"
+#    segment_type: "curve_follower"
+#    name: "test_helix_2"
+#    description: "Build helical structure using curve follower"
+#    curve_spec:
+#      type: "helical"
+#      parameters:
+#        radius: 8.0        # Match the traditional helix
+#        pitch: 6.0         # Larger pitch for better spacing
+#        turns: 2.5         # Fewer turns
+#        points: 60
+#      transformations: [ ]   # Remove transformations for now
+#      segment:
+#        start_fraction: 0.0
+#        end_fraction: 0.1
+#    wafer_settings:
+#      cylinder_diameter: 1.5    # Match traditional helix
+#      min_height: 0.4           # Much smaller
+#      max_chord: 0.2            # Much tighter
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#      add_curve_vertices: false
+#
+#  - operation: "build_segment"
+#    segment_type: "helix"
+#    name: "comparison_helix"
+#    description: "Traditional helix for comparison"
+#
+#    helix_settings:
+#      lift_angle: 9.0
+#      rotate_angle: 0.0
+#      wafer_count: 4
+#      outside_height: 1.0
+#      cylinder_diameter: 1.5
+#
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#
+##  - operation: "add_arrows"
+##    description: "Add directional arrows for visualization"
+##    size: 5.0
+##    point_number: 10
+#
+## Alternative workflow configurations (can be selected)
+#workflows:
+#  simple_test:
+#    - operation: "build_segment"
+#      segment_type: "curve_follower"
+#      name: "simple_curve"
+#      curve_spec:
+#        type: "linear"
+#        parameters:
+#          length: 50.0
+#          points: 50
+#      wafer_settings:
+#        cylinder_diameter: 2.0
+#        min_height: 1.0
+#        max_chord: 0.3
+#
+#  complex_knot:
+#    - operation: "build_segment"
+#      segment_type: "curve_follower"
+#      name: "overhand_knot"
+#      curve_spec:
+#        type: "overhand_knot"
+#        parameters:
+#          scale: 10.0
+#          points: 200
+#          increment: 1.0
+#        transformations:
+#          - operation: "rotate"
+#            axis: "x"
+#            angle: 45
+#      wafer_settings:
+#        cylinder_diameter: 1.5
+#        min_height: 0.8
+#        max_chord: 0.2
+#
+## Template definitions for reusable curve specifications
+#curve_templates:
+#  standard_helix:
+#    type: "helical"
+#    parameters:
+#      radius: 10.0
+#      pitch: 2.5
+#      turns: 4.0
+#      points: 100
+#
+#  tight_helix:
+#    type: "helical"
+#    parameters:
+#      radius: 5.0
+#      pitch: 1.5
+#      turns: 6.0
+#      points: 150
+#
+#  test_knot:
+#    type: "overhand_knot"
+#    parameters:
+#      scale: 8.0
+#      points: 180
+#      increment: 1.2

@@ -11,7 +11,7 @@ import FreeCAD
 import FreeCADGui
 from .curves import Curves  # Import the new Curves class
 
-
+debug = True
 class CurveFollower:
     """Creates wafer slices along a curved cylinder path.
 
@@ -120,6 +120,34 @@ class CurveFollower:
 
         return np.array(curvatures)
 
+    def validate_and_adjust_curve_sampling(self) -> Dict[str, Any]:
+        """Validate curve sampling density and estimate required wafer count.
+
+        Returns:
+            Dictionary with validation results and recommendations
+        """
+        # Use the Curves class validation method
+        validation_result = self.curves.validate_curve_sampling(self.min_height, self.max_chord)
+
+        # if validation_result['status'] == 'insufficient_sampling':v
+
+        return validation_result
+
+    def _estimate_required_wafers(self) -> int:
+        """Estimate number of wafers needed based on geometric constraints.
+
+        Returns:
+            Estimated wafer count
+        """
+        if self.curve_length == 0:
+            return 1
+
+        # Conservative estimate: average wafer spans min_height with some margin
+        avg_wafer_length = max(self.min_height * 1.5, self.curve_length / 20)
+        estimated_count = max(3, int(self.curve_length / avg_wafer_length))
+
+        return estimated_count
+
     def check_feasibility(self) -> bool:
         """Check if a feasible solution exists for the given curve and cylinder.
 
@@ -164,14 +192,47 @@ class CurveFollower:
         chord_unit = chord_vector / chord_length
 
         max_distance = 0.0
-        for point in curve_segment[1:-1]:
+        for i, point in enumerate(curve_segment[1:-1]):
             point_vector = point - start_point
             projection_length = np.dot(point_vector, chord_unit)
             projection_point = start_point + projection_length * chord_unit
             distance = np.linalg.norm(point - projection_point)
             max_distance = max(max_distance, distance)
+            if i < 3:  # Debug first few points
+                print(f"      Point {i}: {point}, distance: {distance:.4f}")
+
+        print(f"    Max chord distance: {max_distance:.4f}")
 
         return max_distance
+
+    def _check_segment_collinearity(self, start_point: np.ndarray, end_point: np.ndarray,
+                                    start_index: int, end_index: int) -> bool:
+        """Check if a wafer segment is approximately collinear.
+
+        Args:
+            start_point: Start point of wafer
+            end_point: End point of wafer
+            start_index: Index of start point in curve
+            end_index: Index of end point in curve  # Add this parameter
+
+        Returns:
+            True if segment is nearly collinear
+        """
+        if end_index <= start_index:
+            return True
+
+        curve_segment = self.curve_points[start_index:end_index + 1]
+        chord_distance = self._calculate_chord_distance(start_point, end_point, curve_segment)
+        chord_length = np.linalg.norm(end_point - start_point)
+        threshold = self.max_chord * 0.1
+
+        is_collinear = chord_distance < threshold
+
+        # DEBUG OUTPUT
+        print(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
+              f"chord_len={chord_length:.4f}, collinear={is_collinear}")
+
+        return is_collinear
 
     def _get_tangent_at_index(self, index: int) -> np.ndarray:
         """Get the tangent vector at a specific curve point index.
@@ -224,8 +285,26 @@ class CurveFollower:
         chord_vector = end_point - start_point
         chord_unit = chord_vector / np.linalg.norm(chord_vector)
 
+        # Check for collinearity
+        is_collinear = self._check_segment_collinearity(start_point, end_point, start_index, end_index)
+
         # Determine wafer type and angles
-        if is_first_wafer:
+        if is_collinear:
+            # Collinear case: use parallel cuts
+            start_angle = 0.0
+            end_angle = 0.0
+            rotation_angle = 0.0
+
+            if is_first_wafer and is_last_wafer:
+                wafer_type = "CC"  # Single wafer spanning entire curve
+            elif is_first_wafer:
+                wafer_type = "CC"  # First wafer, but more follow
+            elif is_last_wafer:
+                wafer_type = "CC"  # Last wafer
+            else:
+                wafer_type = "CC"  # Middle wafer
+
+        elif is_first_wafer:
             # First wafer: start is circular (perpendicular to curve), end is elliptical
             start_angle = 0.0
             end_angle = math.acos(np.clip(np.abs(np.dot(end_tangent, chord_unit)), 0, 1))
@@ -241,10 +320,34 @@ class CurveFollower:
             end_angle = math.acos(np.clip(np.abs(np.dot(end_tangent, chord_unit)), 0, 1))
             wafer_type = "EE"
 
-        # --- FIXED ROTATION ANGLE CALCULATION ---
+        # Calculate rotation angle (only for non-collinear cases)
+        if not is_collinear:
+            rotation_angle = self._calculate_local_twist(start_tangent, end_tangent, chord_unit)
+        else:
+            rotation_angle = 0.0
+
+        return start_angle, end_angle, rotation_angle, wafer_type
+
+    def _calculate_local_twist(self, start_tangent: np.ndarray, end_tangent: np.ndarray,
+                              chord_unit: np.ndarray) -> float:
+        """Calculate the local twist angle between two tangent vectors.
+
+        This represents the incremental rotation of the cutting plane as it
+        moves along the curve segment.
+
+        Args:
+            start_tangent: Tangent vector at start of segment
+            end_tangent: Tangent vector at end of segment
+            chord_unit: Unit vector along chord between endpoints
+
+        Returns:
+            Rotation angle in radians
+        """
         def project_onto_plane(v, normal):
+            """Project vector v onto plane perpendicular to normal."""
             return v - np.dot(v, normal) * normal
 
+        # Project tangents onto plane perpendicular to chord
         v1_proj = project_onto_plane(start_tangent, chord_unit)
         v2_proj = project_onto_plane(end_tangent, chord_unit)
 
@@ -252,17 +355,27 @@ class CurveFollower:
         v2_norm = np.linalg.norm(v2_proj)
 
         if v1_norm < 1e-9 or v2_norm < 1e-9:
-            # Degenerate case: no twist detectable
-            rotation_angle = 0.0
-        else:
-            v1_proj /= v1_norm
-            v2_proj /= v2_norm
-            cross = np.cross(v1_proj, v2_proj)
-            dot = np.dot(v1_proj, v2_proj)
-            sign = np.sign(np.dot(cross, chord_unit))
-            rotation_angle = sign * math.acos(np.clip(dot, -1.0, 1.0))
+            # Degenerate case: tangents parallel to chord
+            return 0.0
 
-        return start_angle, end_angle, rotation_angle, wafer_type
+        # Normalize projected vectors
+        v1_proj /= v1_norm
+        v2_proj /= v2_norm
+
+        # Calculate rotation angle
+        cross = np.cross(v1_proj, v2_proj)
+        dot = np.dot(v1_proj, v2_proj)
+
+        # Determine sign of rotation using chord direction
+        if isinstance(cross, np.ndarray):
+            sign = np.sign(np.dot(cross, chord_unit))
+        else:
+            sign = np.sign(cross)
+
+        rotation_angle = sign * math.acos(np.clip(dot, -1.0, 1.0))
+
+        return rotation_angle
+
 
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
@@ -317,35 +430,120 @@ class CurveFollower:
 
         return wafers
 
-    def _correct_lift_angles(self, wafers: List[Tuple]) -> List[Tuple]:
-        """Correct lift angles so adjacent wafers have complementary angles.
-
-        Ensures that adjacent wafers can be cut from a single cylinder using
-        a single cutting plane by making their adjoining angles equal.
+    def _determine_consistent_wafer_types(self, wafers: List[Tuple]) -> List[Tuple]:
+        """Ensure wafer types form a consistent cutting sequence.
 
         Args:
             wafers: List of wafer tuples from create_wafer_list()
 
         Returns:
-            List of corrected wafer tuples with same structure
+            List of corrected wafer tuples with consistent types
         """
         if len(wafers) <= 1:
             return wafers
 
         corrected_wafers = []
 
+        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, initial_type) in enumerate(wafers):
+
+            # Find the indices for this wafer segment
+            start_index = self._find_point_index(start_point)
+            end_index = self._find_point_index(end_point)
+
+            # Determine actual wafer type based on adjacent wafers and collinearity
+            is_collinear = self._check_segment_collinearity(start_point, end_point,
+                                                            start_index, end_index)
+
+            if i == 0:
+                # First wafer
+                start_type = 'C'  # Always circular
+            else:
+                # Start type must match previous wafer's end type
+                prev_end_type = corrected_wafers[i - 1][5][1]  # Get end type from previous wafer
+                start_type = prev_end_type
+
+            if is_collinear:
+                # For collinear segments, end type same as start type
+                end_type = start_type
+                corrected_start_angle = 0.0 if start_type == 'C' else start_angle
+                corrected_end_angle = 0.0  # Parallel cut
+                corrected_rotation = 0.0  # No twist
+            else:
+                # Normal case: calculate end type based on geometry
+                if i == len(wafers) - 1:
+                    # Last wafer: end is always circular
+                    end_type = 'C'
+                    corrected_end_angle = 0.0
+                else:
+                    # Middle wafer: end is elliptical
+                    end_type = 'E'
+                    corrected_end_angle = end_angle
+
+                corrected_start_angle = 0.0 if start_type == 'C' else start_angle
+                corrected_rotation = rotation_angle
+
+            # Construct wafer type string
+            wafer_type = start_type + end_type
+
+            corrected_wafers.append((
+                start_point, end_point,
+                corrected_start_angle, corrected_end_angle,
+                corrected_rotation, wafer_type
+            ))
+
+        return corrected_wafers
+
+    def _find_point_index(self, point: np.ndarray) -> int:
+        """Find the index of a point in the curve points array.
+
+        Args:
+            point: Point to find
+
+        Returns:
+            Index of the point, or 0 if not found
+        """
+        for i, curve_point in enumerate(self.curve_points):
+            if np.allclose(point, curve_point, atol=1e-6):
+                return i
+        return 0
+
+    def _correct_rotation_angles(self, wafers: List[Tuple]) -> List[Tuple]:
+        """Correct rotation angles so adjacent wafers have complementary cuts.
+
+        Ensures that adjacent wafers can be cut from a single cylinder using
+        compatible rotation angles.
+
+        Args:
+            wafers: List of wafer tuples
+
+        Returns:
+            List of corrected wafer tuples with complementary rotation angles
+        """
+        if len(wafers) <= 1:
+            return wafers
+
+        corrected_wafers = []
+        cumulative_rotation = 0.0
+
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(wafers):
-            corrected_start_angle = start_angle
-            corrected_end_angle = end_angle
 
-            # For adjacent wafers, make angles complementary
-            if i > 0:  # Not the first wafer
-                # Current wafer's start should complement previous wafer's end
-                prev_end_angle = corrected_wafers[i - 1][3]  # Previous wafer's corrected end angle
-                corrected_start_angle = prev_end_angle  # Make them equal for complementary cutting
+            if i == 0:
+                # First wafer: use calculated rotation as-is
+                corrected_rotation = rotation_angle
+            else:
+                # Subsequent wafers: ensure complementary cutting
+                # The start of this wafer should align with the end of the previous wafer
+                prev_wafer = corrected_wafers[i-1]
+                prev_end_rotation = prev_wafer[4]  # Previous wafer's rotation
 
-            corrected_wafers.append((start_point, end_point, corrected_start_angle,
-                                     corrected_end_angle, rotation_angle, wafer_type))
+                # For adjacent cuts to be complementary, rotations should be additive
+                corrected_rotation = rotation_angle
+
+            # Track cumulative rotation for debugging
+            cumulative_rotation += corrected_rotation
+
+            corrected_wafers.append((start_point, end_point, start_angle,
+                                   end_angle, corrected_rotation, wafer_type))
 
         return corrected_wafers
 
@@ -453,6 +651,13 @@ class CurveFollower:
             print(f"  Rotation: {math.degrees(rotation):.2f}°")
             print(f"  Outside height: {outside_height:.4f}")
             print(f"  Wafer type: {wafer_type}")
+            print(f"=== Wafer {wafer_num} ===  (additional debug for vertical helix)")
+            print(f"  BEFORE FlexSegment.add_wafer():")
+            print(f"    lift (radians): {lift:.6f} ({math.degrees(lift):.2f}°)")
+            print(f"    rotation (radians): {rotation:.6f} ({math.degrees(rotation):.2f}°)")
+            print(f"    cylinder_diameter: {self.cylinder_diameter}")
+            print(f"    outside_height: {outside_height:.4f}")
+            print(f"    wafer_type: {wafer_type}")
 
             # Validation checks
             if outside_height <= 0:
@@ -495,6 +700,31 @@ class CurveFollower:
 
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
         """Main processing method that creates and adds wafers to the segment."""
+
+        # Step 0: Validate curve sampling
+#         validation_result = self.validate_and_adjust_curve_sampling()
+#
+#         if validation_result['status'] == 'insufficient_sampling':
+#             error_msg = f"""
+# CURVE SAMPLING ERROR:
+# Current points: {validation_result['current_points']}
+# Recommended points: {validation_result['recommended_points']}
+#
+# Please update your YAML configuration:
+# curve_spec:
+#   parameters:
+#     points: {validation_result['recommended_points']}
+#
+# Current average segment length: {format_mixed(validation_result.get('avg_segment_length', 'N/A'))}
+# Recommended segment length: {format_mixed(validation_result.get('recommended_segment_length', 'N/A'))}
+# """
+#             raise ValueError(error_msg)
+
+        # if debug:
+        #     print(f"Curve sampling validation: {validation_result['message']}")
+        #     if 'estimated_wafers' in validation_result:
+        #         print(f"Estimated wafer count needed: {validation_result['estimated_wafers']}")
+
         # Step 1: Check feasibility
         if not self.check_feasibility():
             raise ValueError("No feasible solution exists - curve has too tight curvature")
@@ -502,14 +732,19 @@ class CurveFollower:
         # Step 2: Create wafer list
         wafers = self.create_wafer_list()
         if debug:
-            print(f"Created {len(wafers)} wafers before lift angle correction")
+            print(f"Created {len(wafers)} wafers before corrections")
 
-        # Step 3: Correct lift angles for complementary cutting
-        corrected_wafers = self._correct_lift_angles(wafers)
+        # Step 3: Apply wafer type consistency
+        consistent_wafers = self._determine_consistent_wafer_types(wafers)
         if debug:
-            print(f"Applied lift angle corrections for complementary cutting")
+            print(f"Applied wafer type consistency corrections")
 
-        # Step 4: Process each wafer using the adapter
+        # Step 4: Correct rotation angles for complementary cutting
+        corrected_wafers = self._correct_rotation_angles(consistent_wafers)
+        if debug:
+            print(f"Applied rotation angle corrections for complementary cutting")
+
+        # Step 5: Process each wafer using the adapter
         if debug:
             print(f"\n=== Processing {len(corrected_wafers)} wafers ===")
 
@@ -520,11 +755,18 @@ class CurveFollower:
             self.add_wafer_from_curve_data(start_point, end_point, start_angle,
                                            end_angle, rotation_angle, wafer_type, debug)
 
-        # Step 5: Add curve vertices AFTER wafer creation so we can use wafer coordinate system
+        # Step 6: Add curve vertices AFTER wafer creation so we can use wafer coordinate system
         if add_curve_vertices:
-            if debug:
-                print(f"\nAdding aligned curve visualization vertices...")
-            self.add_curve_visualization()
+           if debug:
+               print(f"\nAdding aligned curve visualization vertices...")
+           self.add_curve_visualization()
 
-        if debug:
-            print(f"\n=== Finished processing all wafers ===")
+           if debug:
+               print(f"\n=== Finished processing all wafers ===")
+
+
+def format_mixed(result):
+    if isinstance(result, float):
+        return f"{result:.4f}"
+    else:
+        return result

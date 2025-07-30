@@ -561,6 +561,44 @@ class Curves:
 
         return vertex_group_name
 
+    def validate_curve_sampling(self, min_height: float, max_chord: float) -> Dict[str, Any]:
+        """Validate that curve has reasonable sampling for geometry calculations."""
+
+        if len(self.transformed_curve) < 10:
+            return {
+                'status': 'insufficient_points',
+                'current_points': len(self.transformed_curve),
+                'message': 'Curve must have at least 10 points for geometry calculations',
+                'recommended_points': 50,
+                'current_points': len(self.transformed_curve),
+            }
+
+        # Check if curve points are so sparse that we miss geometric features
+        # This should be based on curve complexity, not wafer constraints
+        diffs = np.diff(self.transformed_curve, axis=0)
+        segment_lengths = np.sqrt(np.sum(diffs ** 2, axis=1))
+        max_segment_length = np.max(segment_lengths)
+
+        # Only fail if curve segments are ridiculously large
+        curve_diameter = np.max(self.transformed_curve, axis=0) - np.min(self.transformed_curve, axis=0)
+        max_reasonable_segment = np.max(
+            curve_diameter) / 20  # Curve should have at least 20 segments across its diameter
+
+        if max_segment_length > max_reasonable_segment:
+            recommended_points = int(len(self.transformed_curve) * max_segment_length / max_reasonable_segment)
+            return {
+                'status': 'insufficient_sampling',
+                'current_points': len(self.transformed_curve),
+                'recommended_points': recommended_points,
+                'message': f'Curve segments too coarse for accurate geometry'
+            }
+
+        return {
+            'status': 'adequate',
+            'current_points': len(self.transformed_curve),
+            'message': 'Curve sampling is adequate'
+        }
+
     @classmethod
     def get_available_curves(cls) -> List[str]:
         """Get list of available built-in curve types.
