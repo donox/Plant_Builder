@@ -1,9 +1,11 @@
+import sys
+
 import numpy as np
 import csv
-from .wafer import Wafer
+from wafer import Wafer
 import FreeCAD
 import FreeCADGui
-from .utilities import position_to_str
+from utilities import position_to_str
 
 
 class FlexSegment(object):
@@ -34,36 +36,192 @@ class FlexSegment(object):
         self.transform_callbacks = []
         self._setup_transform_properties()
         self.already_relocated = False  # Track relocation status
+        self.stopper = False
 
+    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
+                  start_pos=None, end_pos=None):
+        """Add a wafer with optional 3D positioning data.
 
-    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
-        # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
-        # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
+        CORRECTED: LCS z-axis should be perpendicular to cutting plane, not along wafer.
+        """
+
+        # Initialize wafer_count if not exists
+        if not hasattr(self, 'wafer_count'):
+            self.wafer_count = 0
+
+        # Only increment wafer_count ONCE
         self.wafer_count += 1
+
+        print(f"\n=== Creating Wafer {self.wafer_count} ===")
+        print(f"  Type: {wafer_type}")
+        print(f"  Lift: {np.rad2deg(lift):.2f}°")
+        print(f"  Rotation: {np.rad2deg(rotation):.2f}°")
+
+        # Create wafer objects
         name_base = self.prefix + str(self.wafer_count)
         wafer_name = name_base + "_w"
         wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
-        wafer.set_parameters(lift, rotation, cylinder_diameter, outside_height, wafer_type="EE")
+        wafer.set_parameters(lift, rotation, cylinder_diameter, outside_height, wafer_type=wafer_type)
+
         lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
         lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
         self.lcs_group.addObjects([lcs1, lcs2])
-        wafer.lift_lcs(lcs2, wafer_type)
-        matrix = lcs2.Placement.toMatrix()
-        matrix.rotateZ(-rotation)
-        lcs2.Placement = FreeCAD.Placement(matrix)
+
         if not self.show_lcs:
             lcs1.Visibility = False
             lcs2.Visibility = False
-        wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
-        # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
 
-        lcs1.Placement = self.lcs_top.Placement
-        lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
-        wafer_loft = wafer.get_wafer()
-        wafer_loft.Placement = lcs1.Placement
-        self.wafer_list.append(wafer)
-        self.lcs_top.Placement = lcs2.Placement
+        # CORRECTED BISECTING PLANE IMPLEMENTATION
+        if start_pos is not None and end_pos is not None:
+            # Calculate wafer direction vector (chord)
+            wafer_vector = end_pos - start_pos
+            wafer_length = np.linalg.norm(wafer_vector)
 
+            if wafer_length > 1e-6:
+                wafer_direction = wafer_vector / wafer_length
+                wafer_axis = FreeCAD.Vector(wafer_direction[0], wafer_direction[1], wafer_direction[2])
+
+                # For first wafer
+                if self.wafer_count == 1:
+                    # Start cut is perpendicular to wafer axis
+                    # Create perpendicular vectors
+                    if abs(wafer_axis.z) < 0.9:
+                        x_axis = FreeCAD.Vector(0, 0, 1).cross(wafer_axis)
+                    else:
+                        x_axis = FreeCAD.Vector(1, 0, 0).cross(wafer_axis)
+
+                    x_axis.normalize()
+                    y_axis = wafer_axis.cross(x_axis)
+                    y_axis.normalize()
+
+                    # For perpendicular cut, z-axis is along wafer direction
+                    rotation_matrix = FreeCAD.Matrix(
+                        x_axis.x, y_axis.x, wafer_axis.x, 0,
+                        x_axis.y, y_axis.y, wafer_axis.y, 0,
+                        x_axis.z, y_axis.z, wafer_axis.z, 0,
+                        0, 0, 0, 1
+                    )
+
+                    lcs1.Placement = FreeCAD.Placement(
+                        FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2]),
+                        FreeCAD.Rotation(rotation_matrix)
+                    )
+
+                    # Store initial frame
+                    self._initial_x_axis = x_axis
+                    self._initial_y_axis = y_axis
+
+                else:
+                    # Use previous wafer's end LCS
+                    if hasattr(self, '_last_lcs2_placement'):
+                        lcs1.Placement = self._last_lcs2_placement
+                    else:
+                        # Fallback
+                        print("WARNING: No previous LCS2 found")
+                        lcs1.Placement = self.lcs_top.Placement
+
+                # For lcs2 (end cut)
+                if wafer_type[1] == 'C':  # Circular end
+                    # Perpendicular cut at end
+                    if abs(wafer_axis.z) < 0.9:
+                        x_axis = FreeCAD.Vector(0, 0, 1).cross(wafer_axis)
+                    else:
+                        x_axis = FreeCAD.Vector(1, 0, 0).cross(wafer_axis)
+
+                    x_axis.normalize()
+                    y_axis = wafer_axis.cross(x_axis)
+                    y_axis.normalize()
+
+                    rotation_matrix = FreeCAD.Matrix(
+                        x_axis.x, y_axis.x, wafer_axis.x, 0,
+                        x_axis.y, y_axis.y, wafer_axis.y, 0,
+                        x_axis.z, y_axis.z, wafer_axis.z, 0,
+                        0, 0, 0, 1
+                    )
+
+                    lcs2.Placement = FreeCAD.Placement(
+                        FreeCAD.Vector(end_pos[0], end_pos[1], end_pos[2]),
+                        FreeCAD.Rotation(rotation_matrix)
+                    )
+
+                else:  # Elliptical end
+                    # Need to calculate the bisecting plane normal
+
+                    # Get the next wafer's direction (if available)
+                    next_wafer_dir = None
+                    if self.wafer_count < 9:  # Assuming we know there will be a next wafer
+                        # This is a simplification - in reality we'd need to look ahead
+                        # For now, use the lift angle to determine the tilt
+
+                        # Create a rotation that tilts the cutting plane
+                        # Start with perpendicular orientation
+                        if abs(wafer_axis.z) < 0.9:
+                            x_axis = FreeCAD.Vector(0, 0, 1).cross(wafer_axis)
+                        else:
+                            x_axis = FreeCAD.Vector(1, 0, 0).cross(wafer_axis)
+
+                        x_axis.normalize()
+                        y_axis = wafer_axis.cross(x_axis)
+                        y_axis.normalize()
+
+                        # Apply tilt around x-axis (lift angle)
+                        tilt_matrix = FreeCAD.Matrix()
+                        tilt_matrix.rotateX(lift)
+
+                        # Apply to create tilted normal
+                        base_matrix = FreeCAD.Matrix(
+                            x_axis.x, y_axis.x, wafer_axis.x, 0,
+                            x_axis.y, y_axis.y, wafer_axis.y, 0,
+                            x_axis.z, y_axis.z, wafer_axis.z, 0,
+                            0, 0, 0, 1
+                        )
+
+                        tilted_matrix = base_matrix.multiply(tilt_matrix)
+
+                        # Apply rotation for EE wafers
+                        if wafer_type == "EE" and abs(rotation) > 1e-6:
+                            rotation_matrix = FreeCAD.Matrix()
+                            rotation_matrix.rotateZ(rotation)
+                            tilted_matrix = tilted_matrix.multiply(rotation_matrix)
+                            print(f"  Applied EE rotation of {np.rad2deg(rotation):.2f}°")
+
+                        lcs2.Placement = FreeCAD.Placement(
+                            FreeCAD.Vector(end_pos[0], end_pos[1], end_pos[2]),
+                            FreeCAD.Rotation(tilted_matrix)
+                        )
+
+                # Store for next wafer
+                self._last_lcs2_placement = lcs2.Placement
+
+                # Update lcs_top
+                self.lcs_top.Placement = lcs2.Placement
+
+                print(
+                    f"  LCS1 at: [{lcs1.Placement.Base.x:.3f}, {lcs1.Placement.Base.y:.3f}, {lcs1.Placement.Base.z:.3f}]")
+                print(
+                    f"  LCS2 at: [{lcs2.Placement.Base.x:.3f}, {lcs2.Placement.Base.y:.3f}, {lcs2.Placement.Base.z:.3f}]")
+
+        else:
+            # Legacy positioning fallback
+            lcs1.Placement = self.lcs_top.Placement
+            lcs2.Placement = lcs1.Placement
+            wafer.lift_lcs(lcs2, wafer_type)
+            matrix = lcs2.Placement.toMatrix()
+            matrix.rotateZ(-rotation)
+            lcs2.Placement = FreeCAD.Placement(matrix)
+            self.lcs_top.Placement = lcs2.Placement
+
+        # Create the wafer geometry
+        try:
+            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
+            self._last_wafer = wafer
+            self.wafer_list.append(wafer)
+        except Exception as e:
+            print(f"ERROR creating wafer: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"  ✅ Wafer {self.wafer_count} completed")
     def add_wafer_rectangle(self, lift, rotation, long_side, outside_height, wafer_type="EE"):
         # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
         # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.

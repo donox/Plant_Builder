@@ -2,7 +2,7 @@ import numpy as np
 import time
 import FreeCAD
 import Part
-from . import utilities
+import utilities
 
 
 class Wafer(object):
@@ -29,54 +29,89 @@ class Wafer(object):
         self.outside_height = outside_height
         self.wafer_type = wafer_type
 
-    def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name):
-        """Make a wafer by cutting a cylinder with the xy-planes of two lcs's."""
-        # TODO: if xy-planes are parallel, need to handle special cases (2 - co-linear z-axis and not)
+    def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name, previous_end_ellipse=None):
+        """Make a wafer by cutting a cylinder with the xy-planes of two lcs's.
+
+        CORRECTED: Creates a proper cylinder and cuts it with planes.
+        """
+        import Part
+
         self.lcs_top = lcs2
         self.lcs_base = lcs1
         self.cylinder_radius = cylinder_diameter / 2
         self.wafer_name = wafer_name
 
-        # create a cylinder between lcs1 and lcs2 with the cylinder axis
-        # along the path between the origin points of the lcs's
-        wafer_1 = self.wafer_type[0]
-        wafer_2 = self.wafer_type[1]
-        if wafer_1 == 'E':
-            e1 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
-            e1.MinorRadius = self.cylinder_radius
-            if self.lift_angle:
-                e1.MajorRadius = self.cylinder_radius / np.cos(self.lift_angle)
-            else:
-                e1.MajorRadius = self.cylinder_radius
-        elif wafer_1 == 'C':
-            e1 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
-            e1.Radius = self.cylinder_radius
-        else:
-            raise ValueError(f"Unrecognized Wafer Type: {wafer_1}")
-        e1.Placement = lcs1.Placement
-        e1.Visibility = False
-        if wafer_2 == 'E':
-            e2 = self.app.activeDocument().addObject('Part::Ellipse', self.parm_set + "e1")
-            e2.MinorRadius = self.cylinder_radius
-            if self.lift_angle:
-                e2.MajorRadius = self.cylinder_radius / np.cos(self.lift_angle)
-            else:
-                e2.MajorRadius = self.cylinder_radius
-        elif wafer_2 == 'C':
-            e2 = self.app.activeDocument().addObject('Part::Circle', self.parm_set + "e1")
-            e2.Radius = self.cylinder_radius
-        else:
-            raise ValueError(f"Unrecognized Wafer Type: {wafer_2}")
-        e2.Placement = lcs2.Placement
-        e2.Visibility = False
-        e_edge = e2.Shape.Edges[0]
-        e_normal = e_edge.normalAt(0)   # normal to edge lies in plane of the ellipse
-        self.angle = 90 - np.rad2deg(e_normal.getAngle(self.app.Vector(0, 0, 1)))
-        # print(f"{e_edge} at angle: {self.angle}")
-        self.wafer = self.app.activeDocument().addObject('Part::Loft', wafer_name)
-        self.wafer.Sections = [e1, e2]
-        self.wafer.Solid = True
-        self.wafer.Visibility = True
+        # Get positions and the wafer axis (chord)
+        pos1 = lcs1.Placement.Base
+        pos2 = lcs2.Placement.Base
+        wafer_axis = pos2 - pos1
+        wafer_length = wafer_axis.Length
+
+        if wafer_length < 1e-6:
+            raise ValueError("Wafer has zero length")
+
+        wafer_axis.normalize()
+
+        # Create a cylinder along the wafer axis
+        # The cylinder should be slightly longer than needed to ensure clean cuts
+        cylinder_start = pos1 - wafer_axis * 0.1  # Start a bit before
+        cylinder_length = wafer_length + 0.2  # Make it a bit longer
+
+        # Create the cylinder
+        cylinder = Part.makeCylinder(
+            self.cylinder_radius,
+            cylinder_length,
+            cylinder_start,
+            wafer_axis
+        )
+
+        # Create cutting tools based on LCS orientations
+        # For lcs1 (start cut)
+        plane_size = cylinder_diameter * 3
+        normal1 = lcs1.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+
+        # Create a box for cutting (more reliable than halfspaces)
+        # The box extends from the plane in the direction we want to remove
+        box1_base = pos1 - normal1 * cylinder_diameter
+        box1 = Part.makeBox(
+            plane_size, plane_size, cylinder_diameter,
+            box1_base - FreeCAD.Vector(plane_size / 2, plane_size / 2, 0)
+        )
+        # Orient the box with the cutting plane
+        box1.Placement.Rotation = lcs1.Placement.Rotation
+        box1.Placement.Base = pos1 - normal1 * cylinder_diameter
+
+        # Cut the start
+        temp_shape = cylinder.cut(box1)
+
+        # For lcs2 (end cut)
+        normal2 = lcs2.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+        box2_base = pos2 + normal2 * 0.001  # Start just past the cut point
+        box2 = Part.makeBox(
+            plane_size, plane_size, cylinder_diameter,
+            box2_base - FreeCAD.Vector(plane_size / 2, plane_size / 2, 0)
+        )
+        box2.Placement.Rotation = lcs2.Placement.Rotation
+        box2.Placement.Base = pos2 + normal2 * 0.001
+
+        # Cut the end
+        final_shape = temp_shape.cut(box2)
+
+        # Create the wafer object
+        self.wafer = self.app.activeDocument().addObject("Part::Feature", wafer_name)
+        self.wafer.Shape = final_shape
+        self.wafer.ViewObject.Transparency = 0
+
+        # Store reference
+        self.end_ellipse = None  # We don't have ellipse objects anymore
+
+        # Calculate angle for reporting
+        self.angle = 90 - np.rad2deg(normal2.getAngle(self.app.Vector(0, 0, 1)))
+
+        print(f"    Created cylinder cut between {lcs1.Label} and {lcs2.Label}")
+        print(f"    Cylinder axis: [{wafer_axis.x:.3f}, {wafer_axis.y:.3f}, {wafer_axis.z:.3f}]")
+        print(
+            f"    Cut normals: start=[{normal1.x:.3f}, {normal1.y:.3f}, {normal1.z:.3f}], end=[{normal2.x:.3f}, {normal2.y:.3f}, {normal2.z:.3f}]")
 
     @staticmethod
     def _make_rectangle(long_side, short_side):

@@ -14,13 +14,13 @@ import sys
 import math
 import yaml
 from typing import Dict, Any, List, Optional
-from .wafer import Wafer
-from .flex_segment import FlexSegment
-from .curve_follower import CurveFollower
-from .curves import Curves
-from .make_helix import MakeHelix
-from .make_rectangle import MakeRectangle
-from . import utilities
+from wafer import Wafer
+from flex_segment import FlexSegment
+from curve_follower import CurveFollower
+from curves import Curves
+from make_helix import MakeHelix
+from make_rectangle import MakeRectangle
+import utilities
 import pydevd_pycharm
 
 
@@ -70,6 +70,7 @@ class Driver(object):
         self.do_trace = None
         self.relocate_segments_tf = None
         self._set_up_trace()
+        self.stopper = False
 
         # Utility functions
         self.get_object_by_label = self._gobj()
@@ -90,6 +91,8 @@ class Driver(object):
             ValueError: If required sections are missing
         """
         try:
+            print(f"YAML FILE PATH: {yaml_file_path}")
+            yaml_file_path = "/home/don/FreecadProjects/Macros/PyMacros/PlantBuilder/src/yaml_files/small.yml"   #  !!!!!!!!!!!!!!!
             with open(yaml_file_path, 'r') as file:
                 self.project_config = yaml.safe_load(file)
 
@@ -230,7 +233,9 @@ class Driver(object):
 
         if not name:
             raise ValueError("Segment name is required")
-
+        if self.stopper:
+            raise ValueError("END HERE")
+        self.stopper = False
         # Remove existing objects with this name
         self.remove_objects_re(rf"{name}.*")
 
@@ -286,17 +291,17 @@ class Driver(object):
 
             # Add debugging
             curve_info = follower.get_curve_info()
-            print(f"Curve info: {curve_info}")
-            print(f"First 5 curve points:")
-            for i, point in enumerate(follower.curve_points[:5]):
-                print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
-            print(f"Last 5 curve points:")
-            for i, point in enumerate(follower.curve_points[-5:], len(follower.curve_points) - 5):
-                print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
-
-            print(f"\n=== COORDINATE DEBUGGING ===")
-            print(f"Curve start point: {follower.curve_points[0]}")
-            print(f"Curve end point: {follower.curve_points[-1]}")
+            # print(f"Curve info: {curve_info}")
+            # print(f"First 5 curve points:")print
+            # for i, point in enumerate(follower.curve_points[:5]):
+            #     print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
+            # print(f"Last 5 curve points:")
+            # for i, point in enumerate(follower.curve_points[-5:], len(follower.curve_points) - 5):
+            #     print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
+            #
+            # print(f"\n=== COORDINATE DEBUGGING ===")
+            # print(f"Curve start point: {follower.curve_points[0]}")
+            # print(f"Curve end point: {follower.curve_points[-1]}")
 
             # Get the actual segment base position
             segment_base = segment.get_lcs_base()
@@ -308,6 +313,7 @@ class Driver(object):
             # Fuse wafers if any were created
             if segment.get_wafer_count() > 0:
                 segment.fuse_wafers()
+
                 segment_obj = segment.get_segment_object()
 
                 if segment_obj:
@@ -469,10 +475,10 @@ class Driver(object):
         segment_name = segment.get_segment_name()
 
         # Debug: Show call stack to find duplicate calls
-        print(f"\n=== RELOCATE_SEGMENT CALLED FOR: {segment_name} ===")
-        print("Call stack:")
-        for line in traceback.format_stack()[-3:-1]:  # Last 2 calls before this one
-            print(f"  {line.strip()}")
+        # print(f"\n=== RELOCATE_SEGMENT CALLED FOR: {segment_name} ===")
+        # print("Call stack:")
+        # for line in traceback.format_stack()[-3:-1]:  # Last 2 calls before this one
+        #     print(f"  {line.strip()}")
 
         # Check if this segment was already relocated
         if hasattr(segment, 'already_relocated') and segment.already_relocated:

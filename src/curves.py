@@ -599,6 +599,122 @@ class Curves:
             'message': 'Curve sampling is adequate'
         }
 
+    # In curves.py, add this method to the Curves class:
+
+    def calculate_required_point_density(self, max_chord_error: float) -> Dict[str, Any]:
+        """Analyze if current curve points provide adequate density for given chord error tolerance.
+
+        This works with ANY curve points regardless of how they were generated.
+
+        Args:
+            max_chord_error: Maximum allowed deviation between chord and curve segment
+
+        Returns:
+            Dict with analysis results and recommendations
+        """
+        if len(self.transformed_curve) < 3:
+            return {
+                'status': 'insufficient_points',
+                'current_points': len(self.transformed_curve),
+                'recommended_points': 50,
+                'message': 'Need at least 3 points for chord error analysis'
+            }
+
+        # Calculate chord errors for all existing segments
+        max_observed_error = 0.0
+        segment_errors = []
+
+        for i in range(len(self.transformed_curve) - 1):
+            start_point = self.transformed_curve[i]
+            end_point = self.transformed_curve[i + 1]
+
+            # For adjacent points, chord error is just the deviation from straight line
+            # (This is a simplified version - for longer segments you'd need the full calculation)
+            segment_length = np.linalg.norm(end_point - start_point)
+            segment_errors.append(segment_length)
+            max_observed_error = max(max_observed_error, segment_length)
+
+        avg_segment_length = np.mean(segment_errors)
+
+        # If average segment length is much larger than acceptable chord error,
+        # we probably need more points
+        if avg_segment_length > max_chord_error * 2:  # Rough heuristic
+            # Estimate how many more points we'd need
+            density_ratio = avg_segment_length / max_chord_error
+            recommended_points = int(len(self.transformed_curve) * density_ratio)
+
+            return {
+                'status': 'insufficient_density',
+                'current_points': len(self.transformed_curve),
+                'recommended_points': min(recommended_points, 1000),  # Cap it
+                'avg_segment_length': avg_segment_length,
+                'max_chord_error_tolerance': max_chord_error,
+                'message': f'Average segment length {avg_segment_length:.4f} exceeds tolerance'
+            }
+
+        return {
+            'status': 'adequate_density',
+            'current_points': len(self.transformed_curve),
+            'avg_segment_length': avg_segment_length,
+            'message': 'Current point density is adequate'
+        }
+
+    def calculate_optimal_points(self, max_chord_error: float = 0.2) -> int:
+        """Calculate optimal point count based on curve complexity and chord error tolerance.
+
+        Args:
+            max_chord_error: Maximum allowed deviation between chord and curve
+
+        Returns:
+            Recommended number of points for this curve type
+        """
+        curve_type = self.curve_spec.get('type')
+        parameters = self.curve_spec.get('parameters', {})
+
+        if curve_type == 'helical':
+            return self._calculate_helical_points(parameters, max_chord_error)
+        elif curve_type == 'circle':
+            return self._calculate_circular_points(parameters, max_chord_error)
+        elif curve_type == 'linear':
+            return max(10, parameters.get('points', 50))  # Linear curves are simple
+        else:
+            # Generic calculation for other curve types
+            return self._calculate_generic_points(parameters, max_chord_error)
+
+    def _calculate_helical_points(self, params: Dict[str, Any], max_chord_error: float) -> int:
+        """Calculate optimal points for helical curves."""
+        radius = params.get('radius', 10.0)
+        pitch = params.get('pitch', 2.5)
+        turns = params.get('turns', 1.0)
+
+        # Calculate helical curve properties
+        circumference = 2 * math.pi * radius
+        total_arc_length = turns * math.sqrt(circumference ** 2 + pitch ** 2)
+
+        def chord_error_for_segment_length(segment_length):
+            if segment_length <= 0:
+                return 0.0
+
+            half_length = segment_length / 2
+            if half_length >= radius:
+                return float('inf')
+
+            circular_chord_error = radius - math.sqrt(radius ** 2 - half_length ** 2)
+            helix_factor = 1.0 + (pitch / circumference) ** 2
+            return circular_chord_error * helix_factor
+
+        min_segments = 20
+        max_segments = 1000
+
+        for num_segments in range(min_segments, max_segments):
+            segment_length = total_arc_length / num_segments
+            chord_error = chord_error_for_segment_length(segment_length)
+            if chord_error <= max_chord_error:
+                return num_segments
+        return max_segments
+
+    # ... add similar methods for other curve types
+
     @classmethod
     def get_available_curves(cls) -> List[str]:
         """Get list of available built-in curve types.
