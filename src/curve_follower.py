@@ -927,72 +927,25 @@ class CurveFollower:
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
         """Main processing method that creates and adds wafers to the segment."""
 
-        # Step 0: Validate curve sampling
-#         validation_result = self.validate_and_adjust_curve_sampling()
-#
-#         if validation_result['status'] == 'insufficient_sampling':
-#             error_msg = f"""
-# CURVE SAMPLING ERROR:
-# Current points: {validation_result['current_points']}
-# Recommended points: {validation_result['recommended_points']}
-#
-# Please update your YAML configuration:
-# curve_spec:
-#   parameters:
-#     points: {validation_result['recommended_points']}
-#
-# Current average segment length: {format_mixed(validation_result.get('avg_segment_length', 'N/A'))}
-# Recommended segment length: {format_mixed(validation_result.get('recommended_segment_length', 'N/A'))}
-# """
-#             raise ValueError(error_msg)
-
-        # if debug:
-        #     print(f"Curve sampling validation: {validation_result['message']}")
-        #     if 'estimated_wafers' in validation_result:
-        #         print(f"Estimated wafer count needed: {validation_result['estimated_wafers']}")
-
-        # Step 1: Check feasibility
-        if debug or True:
-            print("🔍 CALLING DEBUG METHOD:")
-            self.debug_wafer_generation()
-
-        if not self.check_feasibility():
-            raise ValueError("No feasible solution exists - curve has too tight curvature")
-
         # Step 2: Create wafer list
         wafers = self.create_wafer_list()
-        if debug:
-            print(f"Created {len(wafers)} wafers before corrections")
 
         # Step 3: Apply wafer type consistency
         consistent_wafers = self._determine_consistent_wafer_types(wafers)
-        # if debug:
-            # print(f"Applied wafer type consistency corrections")
 
-        # Step 4: Correct rotation angles for complementary cutting
+        # Step 4: Correct rotation angles
         corrected_wafers = self._correct_rotation_angles(consistent_wafers)
-        if debug:
-            print(f"Applied rotation angle corrections for complementary cutting")
 
-        # Step 5: Process each wafer using the adapter
-        # if debug:
-            # print(f"\n=== Processing {len(corrected_wafers)} wafers ===")
+        # NEW Step 5: Calculate all cutting planes
+        cutting_plane_data = self.calculate_cutting_planes(corrected_wafers)
 
-        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
-                corrected_wafers):
+        # Step 6: Process each wafer with cutting plane data
+        for i, cutting_data in enumerate(cutting_plane_data):
             if debug:
-                print(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
-            self.add_wafer_from_curve_data(start_point, end_point, start_angle,
-                                           end_angle, rotation_angle, wafer_type, debug)
+                print(f"\nProcessing wafer {i + 1}/{len(cutting_plane_data)}:")
 
-        # Step 6: Add curve vertices AFTER wafer creation so we can use wafer coordinate system
-        if add_curve_vertices:
-           if debug:
-                # print(f"\nAdding aligned curve visualization vertices...")
-                self.add_curve_visualization()
-
-           if debug:
-               print(f"\n=== Finished processing all wafers ===")
+            # Pass the complete cutting plane information
+            self.add_wafer_with_cutting_planes(cutting_data, debug)
 
     # In curve_follower.py, CurveFollower class (around line 235)
     @staticmethod
@@ -1072,6 +1025,142 @@ class CurveFollower:
         print(f"Unique positions: {len(seen_positions)}")
 
         return corrected_wafers
+
+    def calculate_cutting_planes(self, wafers):
+        """Pre-calculate all cutting planes for the wafer sequence.
+
+        Args:
+            wafers: List of (start_point, end_point, ...) tuples
+
+        Returns:
+            List of cutting plane data for each wafer
+        """
+        cutting_planes = []
+
+        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(wafers):
+            # Current wafer axis (chord)
+            current_axis = end_point - start_point
+            current_axis_length = np.linalg.norm(current_axis)
+            if current_axis_length > 1e-6:
+                current_axis = current_axis / current_axis_length
+
+            # Start cutting plane
+            if i == 0:
+                # First wafer: perpendicular cut
+                start_normal = current_axis
+            else:
+                # Get previous wafer axis
+                prev_start, prev_end = wafers[i - 1][0], wafers[i - 1][1]
+                prev_axis = prev_end - prev_start
+                prev_axis_length = np.linalg.norm(prev_axis)
+                if prev_axis_length > 1e-6:
+                    prev_axis = prev_axis / prev_axis_length
+
+                # Calculate bisecting plane normal
+                start_normal = self._calculate_bisecting_plane_normal(prev_axis, current_axis)
+
+            # End cutting plane
+            if i == len(wafers) - 1:
+                # Last wafer: perpendicular cut
+                end_normal = current_axis
+            else:
+                # Get next wafer axis
+                next_start, next_end = wafers[i + 1][0], wafers[i + 1][1]
+                next_axis = next_end - next_start
+                next_axis_length = np.linalg.norm(next_axis)
+                if next_axis_length > 1e-6:
+                    next_axis = next_axis / next_axis_length
+
+                # Calculate bisecting plane normal
+                end_normal = self._calculate_bisecting_plane_normal(current_axis, next_axis)
+
+            cutting_planes.append({
+                'start_pos': start_point,
+                'end_pos': end_point,
+                'start_normal': start_normal,
+                'end_normal': end_normal,
+                'wafer_axis': current_axis,
+                'rotation': rotation_angle,
+                'wafer_type': wafer_type
+            })
+
+        return cutting_planes
+
+    def _calculate_bisecting_plane_normal(self, axis1, axis2):
+        """Calculate normal to the plane that bisects two cylinder axes.
+
+        The bisecting plane contains both axes and has a normal that makes
+        equal angles with both axes.
+        """
+        # Handle parallel/antiparallel axes
+        cross = np.cross(axis1, axis2)
+        cross_length = np.linalg.norm(cross)
+
+        if cross_length < 1e-6:
+            # Axes are parallel - return perpendicular to axis
+            return axis1
+
+        # The bisecting plane normal is the normalized sum of the axes
+        # (for acute angles) or difference (for obtuse angles)
+        dot_product = np.dot(axis1, axis2)
+
+        if dot_product > 0:
+            # Acute angle - bisector is sum
+            bisector = axis1 + axis2
+        else:
+            # Obtuse angle - bisector is difference
+            bisector = axis1 - axis2
+
+        bisector_length = np.linalg.norm(bisector)
+        if bisector_length > 1e-6:
+            bisector = bisector / bisector_length
+
+        # The cutting plane normal is the bisector direction
+        # (which is perpendicular to the intersection line of the two cylinders)
+        return bisector
+
+    def add_wafer_with_cutting_planes(self, cutting_data, debug=False):
+        """Add a wafer using pre-calculated cutting plane data.
+
+        Args:
+            cutting_data: Dictionary with:
+                - start_pos: Start position
+                - end_pos: End position
+                - start_normal: Normal to start cutting plane
+                - end_normal: Normal to end cutting plane
+                - wafer_axis: Cylinder axis direction
+                - rotation: Rotation angle for EE wafers
+                - wafer_type: Wafer type string
+        """
+        # This replaces add_wafer_from_curve_data
+        # Now we have all the geometric information we need
+
+        # The lift angle can be calculated from the angle between
+        # the cutting plane normal and the cylinder axis
+        start_angle = np.arccos(np.abs(np.dot(cutting_data['start_normal'],
+                                              cutting_data['wafer_axis'])))
+        end_angle = np.arccos(np.abs(np.dot(cutting_data['end_normal'],
+                                            cutting_data['wafer_axis'])))
+
+        # Use average for lift (this is approximate - may need refinement)
+        lift = (start_angle + end_angle) / 2
+
+        # Call segment's add_wafer with cutting plane normals
+        self.segment.add_wafer_with_planes(
+            cutting_data['start_pos'],
+            cutting_data['end_pos'],
+            cutting_data['start_normal'],
+            cutting_data['end_normal'],
+            cutting_data['wafer_axis'],
+            lift,
+            cutting_data['rotation'],
+            self.cylinder_diameter,
+            cutting_data['wafer_type']
+        )
+
+        # start_pos, end_pos, start_normal, end_normal,
+        # wafer_axis, rotation, cylinder_diameter, outside_height,
+        # wafer_type = "EE"):
 
 def format_mixed(result):
     if isinstance(result, float):

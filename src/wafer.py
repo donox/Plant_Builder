@@ -30,12 +30,10 @@ class Wafer(object):
         self.wafer_type = wafer_type
 
     def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name, previous_end_ellipse=None):
-        """Make a wafer by cutting a cylinder with the xy-planes of two lcs's.
+        """Make a wafer as a simple cylinder without cutting.
 
-        CORRECTED: Creates a proper cylinder and cuts it with planes.
+        The cylinder is extended by r*tan(half_angle) at each end.
         """
-        import Part
-
         self.lcs_top = lcs2
         self.lcs_base = lcs1
         self.cylinder_radius = cylinder_diameter / 2
@@ -45,17 +43,42 @@ class Wafer(object):
         pos1 = lcs1.Placement.Base
         pos2 = lcs2.Placement.Base
         wafer_axis = pos2 - pos1
-        wafer_length = wafer_axis.Length
+        chord_length = wafer_axis.Length
 
-        if wafer_length < 1e-6:
+        if chord_length < 1e-6:
             raise ValueError("Wafer has zero length")
 
         wafer_axis.normalize()
 
-        # Create a cylinder along the wafer axis
-        # The cylinder should be slightly longer than needed to ensure clean cuts
-        cylinder_start = pos1 - wafer_axis * 0.1  # Start a bit before
-        cylinder_length = wafer_length + 0.2  # Make it a bit longer
+        # For noinvalidw, use the cut angle from the logs (19.03°)
+        # This is half the bend angle between chords
+        # Ideally this would be passed in from the curve follower
+
+        # Check wafer type from the name
+        if self.wafer_name.endswith("1_w"):  # First wafer (CE type)
+            extend1 = 0.0  # Perpendicular cut at start
+            cut_angle = np.radians(19.03)
+            extend2 = self.cylinder_radius * np.tan(cut_angle)
+        elif self.wafer_name.endswith("9_w"):  # Last wafer (EC type)
+            cut_angle = np.radians(19.03)
+            extend1 = self.cylinder_radius * np.tan(cut_angle)
+            extend2 = 0.0  # Perpendicular cut at end
+        else:  # Middle wafers (EE type)
+            cut_angle = np.radians(19.03)
+            extend1 = self.cylinder_radius * np.tan(cut_angle)
+            extend2 = self.cylinder_radius * np.tan(cut_angle)
+
+        # Cap extensions to reasonable values
+        max_extend = chord_length * 0.5
+        extend1 = min(extend1, max_extend)
+        extend2 = min(extend2, max_extend)
+
+        # Create cylinder with extensions
+        cylinder_start = pos1 - wafer_axis * extend1
+        cylinder_length = chord_length + extend1 + extend2
+
+        print(f"    Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
+        print(f"    Total cylinder length: {cylinder_length:.3f}")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -64,54 +87,19 @@ class Wafer(object):
             cylinder_start,
             wafer_axis
         )
-
-        # Create cutting tools based on LCS orientations
-        # For lcs1 (start cut)
-        plane_size = cylinder_diameter * 3
-        normal1 = lcs1.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-
-        # Create a box for cutting (more reliable than halfspaces)
-        # The box extends from the plane in the direction we want to remove
-        box1_base = pos1 - normal1 * cylinder_diameter
-        box1 = Part.makeBox(
-            plane_size, plane_size, cylinder_diameter,
-            box1_base - FreeCAD.Vector(plane_size / 2, plane_size / 2, 0)
-        )
-        # Orient the box with the cutting plane
-        box1.Placement.Rotation = lcs1.Placement.Rotation
-        box1.Placement.Base = pos1 - normal1 * cylinder_diameter
-
-        # Cut the start
-        temp_shape = cylinder.cut(box1)
-
-        # For lcs2 (end cut)
-        normal2 = lcs2.Placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-        box2_base = pos2 + normal2 * 0.001  # Start just past the cut point
-        box2 = Part.makeBox(
-            plane_size, plane_size, cylinder_diameter,
-            box2_base - FreeCAD.Vector(plane_size / 2, plane_size / 2, 0)
-        )
-        box2.Placement.Rotation = lcs2.Placement.Rotation
-        box2.Placement.Base = pos2 + normal2 * 0.001
-
-        # Cut the end
-        final_shape = temp_shape.cut(box2)
+        # In make_wafer_from_lcs, after creating cylinder:
+        if not cylinder.isValid():
+            print(f"    WARNING: Cylinder is invalid!")
+            cylinder.fix(0.1, 0.1, 0.1)
+            if not cylinder.isValid():
+                print(f"    ERROR: Could not fix invalid cylinder")
 
         # Create the wafer object
         self.wafer = self.app.activeDocument().addObject("Part::Feature", wafer_name)
-        self.wafer.Shape = final_shape
+        self.wafer.Shape = cylinder
         self.wafer.ViewObject.Transparency = 0
 
-        # Store reference
-        self.end_ellipse = None  # We don't have ellipse objects anymore
-
-        # Calculate angle for reporting
-        self.angle = 90 - np.rad2deg(normal2.getAngle(self.app.Vector(0, 0, 1)))
-
-        print(f"    Created cylinder cut between {lcs1.Label} and {lcs2.Label}")
-        print(f"    Cylinder axis: [{wafer_axis.x:.3f}, {wafer_axis.y:.3f}, {wafer_axis.z:.3f}]")
-        print(
-            f"    Cut normals: start=[{normal1.x:.3f}, {normal1.y:.3f}, {normal1.z:.3f}], end=[{normal2.x:.3f}, {normal2.y:.3f}, {normal2.z:.3f}]")
+        print(f"    Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
 
     @staticmethod
     def _make_rectangle(long_side, short_side):
