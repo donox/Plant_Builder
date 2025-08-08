@@ -29,10 +29,14 @@ class Wafer(object):
         self.outside_height = outside_height
         self.wafer_type = wafer_type
 
-    def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name, previous_end_ellipse=None):
+    def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name,
+                            start_cut_angle=None, end_cut_angle=None,
+                            previous_end_ellipse=None):
         """Make a wafer as a simple cylinder without cutting.
 
-        The cylinder is extended by r*tan(half_angle) at each end.
+        Args:
+            start_cut_angle: Angle of start cutting plane (radians)
+            end_cut_angle: Angle of end cutting plane (radians)
         """
         self.lcs_top = lcs2
         self.lcs_base = lcs1
@@ -50,23 +54,18 @@ class Wafer(object):
 
         wafer_axis.normalize()
 
-        # For noinvalidw, use the cut angle from the logs (19.03°)
-        # This is half the bend angle between chords
-        # Ideally this would be passed in from the curve follower
+        # Determine extensions based on cut angles
+        epsilon = 0.001  # Small value to avoid numerical issues
 
-        # Check wafer type from the name
-        if self.wafer_name.endswith("1_w"):  # First wafer (CE type)
-            extend1 = 0.0  # Perpendicular cut at start
-            cut_angle = np.radians(19.03)
-            extend2 = self.cylinder_radius * np.tan(cut_angle)
-        elif self.wafer_name.endswith("9_w"):  # Last wafer (EC type)
-            cut_angle = np.radians(19.03)
-            extend1 = self.cylinder_radius * np.tan(cut_angle)
-            extend2 = 0.0  # Perpendicular cut at end
-        else:  # Middle wafers (EE type)
-            cut_angle = np.radians(19.03)
-            extend1 = self.cylinder_radius * np.tan(cut_angle)
-            extend2 = self.cylinder_radius * np.tan(cut_angle)
+        if start_cut_angle is not None and start_cut_angle > 0:
+            extend1 = self.cylinder_radius * np.tan(start_cut_angle) + epsilon
+        else:
+            extend1 = epsilon
+
+        if end_cut_angle is not None and end_cut_angle > 0:
+            extend2 = self.cylinder_radius * np.tan(end_cut_angle) + epsilon
+        else:
+            extend2 = epsilon
 
         # Cap extensions to reasonable values
         max_extend = chord_length * 0.5
@@ -77,8 +76,8 @@ class Wafer(object):
         cylinder_start = pos1 - wafer_axis * extend1
         cylinder_length = chord_length + extend1 + extend2
 
-        print(f"    Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
-        print(f"    Total cylinder length: {cylinder_length:.3f}")
+        print(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
+        print(f"      Total cylinder length: {cylinder_length:.3f}")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -87,19 +86,20 @@ class Wafer(object):
             cylinder_start,
             wafer_axis
         )
-        # In make_wafer_from_lcs, after creating cylinder:
+
+        # Verify the shape is valid
         if not cylinder.isValid():
-            print(f"    WARNING: Cylinder is invalid!")
+            print(f"      WARNING: Created cylinder is not valid!")
             cylinder.fix(0.1, 0.1, 0.1)
             if not cylinder.isValid():
-                print(f"    ERROR: Could not fix invalid cylinder")
+                print(f"      ERROR: Could not fix invalid cylinder")
 
         # Create the wafer object
         self.wafer = self.app.activeDocument().addObject("Part::Feature", wafer_name)
         self.wafer.Shape = cylinder
         self.wafer.ViewObject.Transparency = 0
 
-        print(f"    Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
+        print(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
 
     @staticmethod
     def _make_rectangle(long_side, short_side):

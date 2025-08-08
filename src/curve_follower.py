@@ -1120,47 +1120,61 @@ class CurveFollower:
         return bisector
 
     def add_wafer_with_cutting_planes(self, cutting_data, debug=False):
-        """Add a wafer using pre-calculated cutting plane data.
+        """Add a wafer using pre-calculated cutting plane data."""
 
-        Args:
-            cutting_data: Dictionary with:
-                - start_pos: Start position
-                - end_pos: End position
-                - start_normal: Normal to start cutting plane
-                - end_normal: Normal to end cutting plane
-                - wafer_axis: Cylinder axis direction
-                - rotation: Rotation angle for EE wafers
-                - wafer_type: Wafer type string
-        """
-        # This replaces add_wafer_from_curve_data
-        # Now we have all the geometric information we need
+        # Calculate the actual cut angles from the cutting plane normals
+        start_angle = np.arccos(np.clip(np.abs(np.dot(cutting_data['start_normal'],
+                                                      cutting_data['wafer_axis'])), 0, 1))
+        end_angle = np.arccos(np.clip(np.abs(np.dot(cutting_data['end_normal'],
+                                                    cutting_data['wafer_axis'])), 0, 1))
 
-        # The lift angle can be calculated from the angle between
-        # the cutting plane normal and the cylinder axis
-        start_angle = np.arccos(np.abs(np.dot(cutting_data['start_normal'],
-                                              cutting_data['wafer_axis'])))
-        end_angle = np.arccos(np.abs(np.dot(cutting_data['end_normal'],
-                                            cutting_data['wafer_axis'])))
+        # For wafer parameter calculation
+        if cutting_data['wafer_type'][0] == 'C':
+            lift_start = 0.0  # Circular start
+        else:
+            lift_start = start_angle
 
-        # Use average for lift (this is approximate - may need refinement)
-        lift = (start_angle + end_angle) / 2
+        if cutting_data['wafer_type'][1] == 'C':
+            lift_end = 0.0  # Circular end
+        else:
+            lift_end = end_angle
 
-        # Call segment's add_wafer with cutting plane normals
-        self.segment.add_wafer_with_planes(
+        # Average lift for the wafer (used for height calculations)
+        lift = (lift_start + lift_end) / 2.0
+
+        # Calculate outside height based on geometry
+        chord_length = np.linalg.norm(cutting_data['end_pos'] - cutting_data['start_pos'])
+        outside_height = self._calculate_outside_height(
             cutting_data['start_pos'],
             cutting_data['end_pos'],
-            cutting_data['start_normal'],
-            cutting_data['end_normal'],
-            cutting_data['wafer_axis'],
-            lift,
-            cutting_data['rotation'],
-            self.cylinder_diameter,
-            cutting_data['wafer_type']
+            lift_start,
+            lift_end,
+            cutting_data['rotation']
         )
 
-        # start_pos, end_pos, start_normal, end_normal,
-        # wafer_axis, rotation, cylinder_diameter, outside_height,
-        # wafer_type = "EE"):
+        if debug:
+            print(f"  Cutting plane normals:")
+            print(f"    Start: [{cutting_data['start_normal'][0]:.3f}, "
+                  f"{cutting_data['start_normal'][1]:.3f}, {cutting_data['start_normal'][2]:.3f}]")
+            print(f"    End: [{cutting_data['end_normal'][0]:.3f}, "
+                  f"{cutting_data['end_normal'][1]:.3f}, {cutting_data['end_normal'][2]:.3f}]")
+            print(f"  Cut angles: start={np.rad2deg(start_angle):.1f}°, "
+                  f"end={np.rad2deg(end_angle):.1f}°")
+
+        # Pass the cut angles to the segment
+        self.segment.add_wafer_with_planes(
+            start_pos=cutting_data['start_pos'],
+            end_pos=cutting_data['end_pos'],
+            start_normal=cutting_data['start_normal'],
+            end_normal=cutting_data['end_normal'],
+            wafer_axis=cutting_data['wafer_axis'],
+            rotation=cutting_data['rotation'],
+            cylinder_diameter=self.cylinder_diameter,
+            outside_height=outside_height,
+            wafer_type=cutting_data['wafer_type'],
+            start_cut_angle=start_angle,  # ADD THIS
+            end_cut_angle=end_angle  # ADD THIS
+        )
 
 def format_mixed(result):
     if isinstance(result, float):

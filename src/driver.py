@@ -59,8 +59,6 @@ class Driver(object):
 
         # Build state
         self.segment_list = []
-        self.compound_transform = None
-        self.first_segment = True
         self.handle_arrows = None
         self.path_place_list = None
 
@@ -218,13 +216,14 @@ class Driver(object):
         position = operation.get('position', [0, 0, 0])
         rotation = operation.get('rotation', [0, 0, 0])
 
-        pos = FreeCAD.Vector(position[0], position[1], position[2])
-        rot = FreeCAD.Rotation(rotation[0], rotation[1], rotation[2])
-
-        self.compound_transform = FreeCAD.Placement(pos, rot)
-        self.first_segment = False
-
+        # For now, just log - we could implement initial positioning here if needed
         print(f"Set position: {position}, rotation: {rotation}")
+
+        # If you want to actually move the first segment to a different starting position:
+        # self.initial_position = FreeCAD.Placement(
+        #     FreeCAD.Vector(position[0], position[1], position[2]),
+        #     FreeCAD.Rotation(rotation[0], rotation[1], rotation[2])
+        # )
 
     def _execute_build_segment(self, operation: Dict[str, Any]) -> None:
         """Execute build_segment operation."""
@@ -461,8 +460,6 @@ class Driver(object):
 
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
-        import traceback
-
         if not self.relocate_segments_tf:
             print("Relocation disabled - segments will stay at origin")
             return
@@ -474,47 +471,45 @@ class Driver(object):
         segment = self.segment_list[-1]
         segment_name = segment.get_segment_name()
 
-        # Debug: Show call stack to find duplicate calls
-        # print(f"\n=== RELOCATE_SEGMENT CALLED FOR: {segment_name} ===")
-        # print("Call stack:")
-        # for line in traceback.format_stack()[-3:-1]:  # Last 2 calls before this one
-        #     print(f"  {line.strip()}")
-
         # Check if this segment was already relocated
         if hasattr(segment, 'already_relocated') and segment.already_relocated:
             print(f"WARNING: Segment {segment_name} already relocated - SKIPPING!")
             return
 
-        print(f"Segment count: {len(self.segment_list)}")
-        print(f"Current compound transform BEFORE: {self.compound_transform}")
+        print(f"\nRelocating segment: {segment_name}")
+        print(f"Segment index: {len(self.segment_list) - 1}")
 
-        angle = segment.get_segment_rotation()
-        segment_rotation = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0),
-                                             FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle))
-        print(f"Segment rotation: {segment_rotation}")
+        if len(self.segment_list) == 1:
+            # First segment - it's already positioned by the curve follower
+            # Just mark it as relocated and report its end position
+            print(f"First segment - already positioned by curve follower")
+            segment_end = segment.get_lcs_top().Placement
+            print(f"First segment ends at: {segment_end.Base}")
 
-        if self.first_segment:
-            self.first_segment = False
-            self.compound_transform = segment_rotation
-            print("First segment - using segment rotation as base")
+            # Mark as relocated without moving
+            segment.already_relocated = True
+
         else:
-            old_transform = self.compound_transform
-            self.compound_transform = self.compound_transform.multiply(segment_rotation)
-            print(f"Multiplied: {old_transform} * {segment_rotation} = {self.compound_transform}")
+            # else:  # segment_index > 0
+            prev_segment = self.segment_list[-2]
+            prev_end_lcs = prev_segment.get_lcs_top()  # target (end of previous)
+            current_start = segment.get_lcs_base()  # source (base of current)
 
-        print(f"Applying transform to segment...")
-        segment.move_to_top(self.compound_transform)
+            print(f"Previous segment ends at: {prev_end_lcs.Placement.Base}")
+            print(f"Current segment starts at: {current_start.Placement.Base}")
 
-        segment_to_top_transform = segment.get_transform_to_top()
-        print(f"Segment to top transform: {segment_to_top_transform}")
+            # Full pose delta: move base of current onto end of previous
+            align = self.make_transform_align(current_start, prev_end_lcs)  # current^-1 * prev_end
 
-        old_compound = self.compound_transform
-        self.compound_transform = self.compound_transform.multiply(segment_to_top_transform)
-        print(f"Final compound: {old_compound} * {segment_to_top_transform} = {self.compound_transform}")
+            print("Applying full alignment (translation + rotation)")
+            segment.move_to_top(align)  # this should accept a Placement/Matrix, not just a vector
 
-        # Mark this segment as relocated
-        segment.already_relocated = True
-        print(f"=== COMPLETED RELOCATION FOR: {segment_name} ===\n")
+            # (Optional) keep a running transform if you use it elsewhere
+            self.compound_transform = align
+
+            segment_end = segment.get_lcs_top().Placement
+            print(f"Current segment now ends at: {segment_end.Base}")
+            segment.already_relocated = True
 
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""

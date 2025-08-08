@@ -28,11 +28,23 @@ class FlexSegment(object):
         self.lcs_base = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_base")
         self.lcs_top = self.doc.addObject('PartDesign::CoordinateSystem', self.prefix + "_lcs_top")
         self.lcs_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "_lcs_group")
+        # Create groups for organization
+        self.main_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "segment_group")
+        self.visualization_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "visualization")
+        self.wafer_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "wafers")
+
+        self.main_group.addObject(self.visualization_group)
+        self.main_group.addObject(self.lcs_group)
+        self.main_group.addObject(self.wafer_group)
+        # Create main segment group for organization
         # Create main segment group for organization
         self.main_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "segment_group")
         self.visualization_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "visualization")
+        self.wafer_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "wafers")
+
         self.main_group.addObject(self.visualization_group)
         self.main_group.addObject(self.lcs_group)
+        self.main_group.addObject(self.wafer_group)
         self.transform_callbacks = []
         self._setup_transform_properties()
         self.already_relocated = False  # Track relocation status
@@ -234,8 +246,8 @@ class FlexSegment(object):
         print(f"  ✅ Wafer {self.wafer_count} completed")
 
     def add_wafer_with_planes(self, start_pos, end_pos, start_normal, end_normal,
-                              wafer_axis, lift, rotation, cylinder_diameter, outside_height,
-                              wafer_type="EE"):
+                              wafer_axis, rotation, cylinder_diameter, outside_height,
+                              wafer_type="EE", start_cut_angle=0.0, end_cut_angle=0.0):
         """Add a wafer with explicit cutting plane definitions.
 
         This method creates a wafer with precisely defined cutting planes,
@@ -368,7 +380,15 @@ class FlexSegment(object):
             wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
 
             # Create the geometry
-            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
+            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name,
+                                      start_cut_angle, end_cut_angle)
+
+            # Add wafer object to the wafer group
+            wafer_obj = wafer.get_wafer()
+            if wafer_obj and hasattr(self, 'wafer_group'):
+                self.wafer_group.addObject(wafer_obj)
+                # Hide individual wafer since we'll show the fused result
+                wafer_obj.Visibility = False
 
             # Store in list
             self.wafer_list.append(wafer)
@@ -518,15 +538,24 @@ class FlexSegment(object):
         return self.rotate_segment
 
     def move_content(self, transform):
+        """Move all segment content by the given transform."""
         if self.segment_object:
-            pl = self.segment_object.Placement
-            self.segment_object.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-            pl = self.lcs_top.Placement
-            self.lcs_top.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-            pl = self.lcs_base.Placement
-            self.lcs_base.Placement = pl.multiply(pl.inverse()).multiply(transform).multiply(pl)
-            # print(f"LABELS: {self.segment_object.Label}, {self.lcs_base.Label}, {self.lcs_top.Label}")
-            # self.trace("MOVE", self.prefix, self.lcs_top.Label, self.lcs_top.Placement)
+            # Simply apply the transform to each object
+            self.segment_object.Placement = transform.multiply(self.segment_object.Placement)
+            self.lcs_top.Placement = transform.multiply(self.lcs_top.Placement)
+            self.lcs_base.Placement = transform.multiply(self.lcs_base.Placement)
+
+            # Also move all wafers
+            for wafer in self.wafer_list:
+                wafer_obj = wafer.get_wafer()
+                if wafer_obj:
+                    wafer_obj.Placement = transform.multiply(wafer_obj.Placement)
+
+            # Move the groups too
+            if hasattr(self, 'main_group'):
+                self.main_group.touch()
+
+            print(f"Moved segment {self.get_segment_name()} to {self.lcs_base.Placement.Base}")
         else:
             print(f"NO CONTENT: {self.get_segment_name()} has no content to move.")
 
