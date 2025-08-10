@@ -36,15 +36,7 @@ class FlexSegment(object):
         self.main_group.addObject(self.visualization_group)
         self.main_group.addObject(self.lcs_group)
         self.main_group.addObject(self.wafer_group)
-        # Create main segment group for organization
-        # Create main segment group for organization
-        self.main_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "segment_group")
-        self.visualization_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "visualization")
-        self.wafer_group = self.doc.addObject("App::DocumentObjectGroup", self.prefix + "wafers")
 
-        self.main_group.addObject(self.visualization_group)
-        self.main_group.addObject(self.lcs_group)
-        self.main_group.addObject(self.wafer_group)
         self.transform_callbacks = []
         self._setup_transform_properties()
         self.already_relocated = False  # Track relocation status
@@ -235,7 +227,19 @@ class FlexSegment(object):
 
         # Create the wafer geometry
         try:
-            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name)
+            # Calculate cut angles based on wafer type and lift
+            if wafer_type[0] == 'C':  # Circular start
+                start_cut_angle = 0.0
+            else:  # Elliptical start
+                start_cut_angle = lift  # Or calculate based on geometry
+
+            if wafer_type[1] == 'C':  # Circular end
+                end_cut_angle = 0.0
+            else:  # Elliptical end
+                end_cut_angle = lift  # Or calculate based on geometry
+
+            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name,
+                                      start_cut_angle, end_cut_angle)
             self._last_wafer = wafer
             self.wafer_list.append(wafer)
         except Exception as e:
@@ -297,7 +301,7 @@ class FlexSegment(object):
 
         # Set up LCS1 (start cutting plane)
         # Z-axis is the cutting plane normal
-        z1 = fc_start_normal
+        z1 = fc_wafer_axis
 
         # X-axis is in the plane containing both cylinder axes (if not first wafer)
         # For first wafer or circular cuts, choose arbitrary perpendicular
@@ -399,6 +403,7 @@ class FlexSegment(object):
             traceback.print_exc()
 
         print(f"  ✅ Wafer {self.wafer_count} completed")
+
     def add_wafer_rectangle(self, lift, rotation, long_side, outside_height, wafer_type="EE"):
         # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
         # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
@@ -458,16 +463,6 @@ class FlexSegment(object):
             raise ValueError(f"lcs_base not set")
         return self.lcs_base
 
-    def get_transform_to_top(self):    # Does this need changing
-        if self.to_build:
-            if not self.transform_to_top:
-                # print(f"TO TOP: Base: {self.lcs_base.Placement}. Top: {self.lcs_top.Placement}")
-                self.transform_to_top = self.make_transform_align(self.lcs_base, self.lcs_top)
-            return self.transform_to_top
-        else:
-            print(f"NO TRANSFORM: {self.get_segment_name()}, BUILD? {self.to_build}")
-            raise ValueError("Segment has no valid transform to top as it was created in prior run.")
-
     def fuse_wafers(self):
         """Fuse wafers using sequential binary fusion for robustness."""
         name = self.get_segment_name()
@@ -524,8 +519,17 @@ class FlexSegment(object):
 
         fuse.Visibility = True
         fuse.ViewObject.DisplayMode = "Shaded"
-        fuse.Placement = self.lcs_base.Placement
+        # fuse.Placement = self.lcs_base.Placement
         self.segment_object = fuse
+
+        # DEBUG: Check bounds of fused object
+        if fuse.Shape.BoundBox.isValid():
+            bb = fuse.Shape.BoundBox
+            print(f"\n🔍 FUSED GEOMETRY BOUNDS for {self.get_segment_name()}:")
+            print(f"   Min: [{bb.XMin:.3f}, {bb.YMin:.3f}, {bb.ZMin:.3f}]")
+            print(f"   Max: [{bb.XMax:.3f}, {bb.YMax:.3f}, {bb.ZMax:.3f}]")
+            print(f"   Base LCS: {self.lcs_base.Placement.Base}")
+            print(f"   Top LCS: {self.lcs_top.Placement.Base}")
 
         # Add the fused result to the main group
         if self.segment_object:
@@ -540,12 +544,15 @@ class FlexSegment(object):
     def move_content(self, transform):
         """Move all segment content by the given transform."""
         if self.segment_object:
-            # Simply apply the transform to each object
-            self.segment_object.Placement = transform.multiply(self.segment_object.Placement)
+            # Apply transform to the segment object
+            current_placement = self.segment_object.Placement
+            self.segment_object.Placement = transform.multiply(current_placement)
+
+            # Move LCS objects
             self.lcs_top.Placement = transform.multiply(self.lcs_top.Placement)
             self.lcs_base.Placement = transform.multiply(self.lcs_base.Placement)
 
-            # Also move all wafers
+            # Also move individual wafers if they exist
             for wafer in self.wafer_list:
                 wafer_obj = wafer.get_wafer()
                 if wafer_obj:
@@ -555,13 +562,9 @@ class FlexSegment(object):
             if hasattr(self, 'main_group'):
                 self.main_group.touch()
 
-            print(f"Moved segment {self.get_segment_name()} to {self.lcs_base.Placement.Base}")
+            print(f"Moved segment {self.get_segment_name()} - base now at {self.lcs_base.Placement.Base}")
         else:
             print(f"NO CONTENT: {self.get_segment_name()} has no content to move.")
-
-    def move_content_to_zero(self, transform):
-        """Relocate to a zero base corresponding to a new build.  Transform is lcs_base.inverse()"""
-        self.move_content(transform)
 
     def remove_prior_version(self):
         # TODO: not do so if making cut list???
@@ -704,23 +707,6 @@ class FlexSegment(object):
             print(f"Stored transform matrix in FreeCAD object: {self.lcs_base.Label}")
         else:
             self.lcs_base.HasStoredTransform = False
-
-    def get_stored_transform(self):
-        """Retrieve stored transform from FreeCAD object properties."""
-        if self.lcs_base.HasStoredTransform and self.lcs_base.AppliedTransformMatrix:
-            try:
-                # Parse matrix string back to FreeCAD.Matrix
-                matrix_values = [float(x) for x in self.lcs_base.AppliedTransformMatrix.split(',')]
-                matrix = FreeCAD.Matrix()
-                for i in range(16):
-                    matrix.A[i] = matrix_values[i]
-
-                # Convert matrix back to Placement
-                return FreeCAD.Placement(matrix)
-            except Exception as e:
-                print(f"Error retrieving stored transform: {e}")
-                return None
-        return None
 
     def register_curve_vertices_group(self, group_name):
         """Register a curve vertices group with this segment."""
@@ -868,12 +854,6 @@ class FlexSegment(object):
             except:
                 return None
         return None
-
-    def store_pending_curve_vertices(self, group_name, curve_points):
-        """Store curve points to create vertices AFTER transformation."""
-        if not hasattr(self, 'pending_vertices'):
-            self.pending_vertices = {}
-        self.pending_vertices[group_name] = curve_points
 
     def move_to_top(self, transform):
         """Apply transform to reposition segment."""

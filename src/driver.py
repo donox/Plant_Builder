@@ -19,7 +19,6 @@ from flex_segment import FlexSegment
 from curve_follower import CurveFollower
 from curves import Curves
 from make_helix import MakeHelix
-from make_rectangle import MakeRectangle
 import utilities
 import pydevd_pycharm
 
@@ -216,14 +215,13 @@ class Driver(object):
         position = operation.get('position', [0, 0, 0])
         rotation = operation.get('rotation', [0, 0, 0])
 
-        # For now, just log - we could implement initial positioning here if needed
-        print(f"Set position: {position}, rotation: {rotation}")
+        # Store initial position for first segment
+        self.initial_position = FreeCAD.Placement(
+            FreeCAD.Vector(position[0], position[1], position[2]),
+            FreeCAD.Rotation(rotation[0], rotation[1], rotation[2])
+        )
 
-        # If you want to actually move the first segment to a different starting position:
-        # self.initial_position = FreeCAD.Placement(
-        #     FreeCAD.Vector(position[0], position[1], position[2]),
-        #     FreeCAD.Rotation(rotation[0], rotation[1], rotation[2])
-        # )
+        print(f"Set initial position: {position}, rotation: {rotation}")
 
     def _execute_build_segment(self, operation: Dict[str, Any]) -> None:
         """Execute build_segment operation."""
@@ -242,8 +240,6 @@ class Driver(object):
             self._build_curve_follower_segment(operation)
         elif segment_type == 'helix':
             self._build_helix_segment(operation)
-        elif segment_type == 'rectangle':
-            self._build_rectangle_segment(operation)
         else:
             raise ValueError(f"Unknown segment type: {segment_type}")
 
@@ -458,6 +454,36 @@ class Driver(object):
     def _get_workflow(self):
         return self.get_parm("workflow")
 
+    def validate_segment_connection(self, prev_segment, curr_segment):
+        """Validate that two segments can be connected properly.
+
+        Args:
+            prev_segment: Previous segment (must end with circular cut)
+            curr_segment: Current segment (must start with circular cut)
+
+        Raises:
+            ValueError: If segments cannot be connected
+        """
+        if not prev_segment.wafer_list:
+            raise ValueError(f"Previous segment {prev_segment.get_segment_name()} has no wafers")
+
+        if not curr_segment.wafer_list:
+            raise ValueError(f"Current segment {curr_segment.get_segment_name()} has no wafers")
+
+        # Check last wafer of previous segment
+        last_wafer = prev_segment.wafer_list[-1]
+        if hasattr(last_wafer, 'wafer_type'):
+            if last_wafer.wafer_type[1] != 'C':
+                raise ValueError(
+                    f"Previous segment {prev_segment.get_segment_name()} must end with circular cut, found {last_wafer.wafer_type}")
+
+        # Check first wafer of current segment
+        first_wafer = curr_segment.wafer_list[0]
+        if hasattr(first_wafer, 'wafer_type'):
+            if first_wafer.wafer_type[0] != 'C':
+                raise ValueError(
+                    f"Current segment {curr_segment.get_segment_name()} must start with circular cut, found {first_wafer.wafer_type}")
+
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
         if not self.relocate_segments_tf:
@@ -471,6 +497,39 @@ class Driver(object):
         segment = self.segment_list[-1]
         segment_name = segment.get_segment_name()
 
+        if len(self.segment_list) > 1:
+            # Validate connection before relocating
+            prev_segment = self.segment_list[-2]
+            curr_segment = self.segment_list[-1]
+
+            # DEBUG
+            # Get the last wafer of previous segment and first wafer of current
+            if prev_segment.wafer_list and curr_segment.wafer_list:
+                last_wafer = prev_segment.wafer_list[-1]
+                first_wafer = curr_segment.wafer_list[0]
+
+                print(f"\n🔍 SEGMENT JOIN DEBUG:")
+                print(
+                    f"   Previous segment '{prev_segment.get_segment_name()}' last wafer type: {getattr(last_wafer, 'wafer_type', 'unknown')}")
+                print(
+                    f"   Current segment '{curr_segment.get_segment_name()}' first wafer type: {getattr(first_wafer, 'wafer_type', 'unknown')}")
+
+                # After alignment, check the gap
+                prev_end_lcs = prev_segment.get_lcs_top()
+                curr_start_lcs = curr_segment.get_lcs_base()
+
+                print(f"   After alignment:")
+                print(f"     Previous end LCS: {prev_end_lcs.Placement.Base}")
+                print(f"     Current start LCS: {curr_start_lcs.Placement.Base}")
+                print(
+                    f"     Gap between LCS positions: {(curr_start_lcs.Placement.Base - prev_end_lcs.Placement.Base).Length:.6f}")
+
+            try:
+                self.validate_segment_connection(prev_segment, curr_segment)
+            except ValueError as e:
+                print(f"WARNING: Segment connection validation failed: {e}")
+                # Continue anyway for now, but could raise here
+
         # Check if this segment was already relocated
         if hasattr(segment, 'already_relocated') and segment.already_relocated:
             print(f"WARNING: Segment {segment_name} already relocated - SKIPPING!")
@@ -480,36 +539,84 @@ class Driver(object):
         print(f"Segment index: {len(self.segment_list) - 1}")
 
         if len(self.segment_list) == 1:
-            # First segment - it's already positioned by the curve follower
-            # Just mark it as relocated and report its end position
-            print(f"First segment - already positioned by curve follower")
+            # First segment - check if we have an initial position
+            if hasattr(self, 'initial_position') and self.initial_position:
+                # Move to initial position
+                print(f"Moving first segment to initial position: {self.initial_position.Base}")
+                segment.move_to_top(self.initial_position)
+            else:
+                # First segment stays at origin (where it was created)
+                print(f"First segment stays at origin")
+
+            # Record where it ends
             segment_end = segment.get_lcs_top().Placement
             print(f"First segment ends at: {segment_end.Base}")
 
-            # Mark as relocated without moving
-            segment.already_relocated = True
 
         else:
-            # else:  # segment_index > 0
+
+            # Get the previous segment's end position
+
             prev_segment = self.segment_list[-2]
-            prev_end_lcs = prev_segment.get_lcs_top()  # target (end of previous)
-            current_start = segment.get_lcs_base()  # source (base of current)
+            curr_segment = self.segment_list[-1]
+            prev_end_lcs = prev_segment.get_lcs_top()
 
+            # Get current segment's start position
+            current_start_lcs = segment.get_lcs_base()
+
+            # DEBUG: Print the orientations
+            print(f"Previous segment end LCS rotation: {prev_end_lcs.Placement.Rotation.Q}")
+            print(f"Current segment start LCS rotation: {current_start_lcs.Placement.Rotation.Q}")
+
+            # Calculate the full transformation (position AND rotation)
+            align_transform = self.make_transform_align(current_start_lcs, prev_end_lcs)
             print(f"Previous segment ends at: {prev_end_lcs.Placement.Base}")
-            print(f"Current segment starts at: {current_start.Placement.Base}")
+            print(f"Current segment starts at: {curr_start_lcs.Placement.Base}")
 
-            # Full pose delta: move base of current onto end of previous
-            align = self.make_transform_align(current_start, prev_end_lcs)  # current^-1 * prev_end
+            print(f"Alignment transform: {align_transform}")
+            print(f"  Position: {align_transform.Base}")
+            print(f"  Rotation: {align_transform.Rotation.Q}")
 
-            print("Applying full alignment (translation + rotation)")
-            segment.move_to_top(align)  # this should accept a Placement/Matrix, not just a vector
+            # Move this segment
 
-            # (Optional) keep a running transform if you use it elsewhere
-            self.compound_transform = align
+            segment.move_to_top(align_transform)
 
+            # Verify the join
+            new_start = segment.get_lcs_base().Placement
+            print(f"After alignment:")
+            print(f"  New start position: {new_start.Base}")
+            print(f"  Should match previous end: {prev_end_lcs.Placement.Base}")
+            print(f"  Actual gap: {(new_start.Base - prev_end_lcs.Placement.Base).Length:.6f}")
+
+            # DEBUG: Check if the alignment worked
+            after_start = segment.get_lcs_base().Placement
+            print(f"After alignment - segment base: {after_start}")
+            print(f"Should match previous end: {prev_end_lcs.Placement}")
+
+            # Report where this segment ends
             segment_end = segment.get_lcs_top().Placement
             print(f"Current segment now ends at: {segment_end.Base}")
-            segment.already_relocated = True
+
+        # Apply any segment rotation if specified
+        angle = segment.get_segment_rotation()
+        if angle != 0:
+            print(f"Applying segment rotation: {angle} degrees")
+            # Get current base position
+            base_pos = segment.get_lcs_base().Placement
+
+            # Create rotation around the base
+            rotation = FreeCAD.Placement(
+                FreeCAD.Vector(0, 0, 0),
+                FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle)
+            )
+
+            # Apply rotation
+            transform = base_pos.multiply(rotation).multiply(base_pos.inverse())
+            segment.move_content(transform)
+
+        # Mark this segment as relocated
+        segment.already_relocated = True
+        print(f"Segment '{segment_name}' relocation complete\n")
 
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""

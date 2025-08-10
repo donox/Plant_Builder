@@ -30,13 +30,12 @@ class Wafer(object):
         self.wafer_type = wafer_type
 
     def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name,
-                            start_cut_angle=None, end_cut_angle=None,
-                            previous_end_ellipse=None):
-        """Make a wafer as a simple cylinder without cutting.
+                            start_cut_angle=None, end_cut_angle=None):
+        """Create a wafer from two LCS objects.
 
         Args:
-            start_cut_angle: Angle of start cutting plane (radians)
-            end_cut_angle: Angle of end cutting plane (radians)
+            start_cut_angle: Angle in radians (0 for circular cut)
+            end_cut_angle: Angle in radians (0 for circular cut)
         """
         self.lcs_top = lcs2
         self.lcs_base = lcs1
@@ -57,15 +56,24 @@ class Wafer(object):
         # Determine extensions based on cut angles
         epsilon = 0.001  # Small value to avoid numerical issues
 
-        if start_cut_angle is not None and start_cut_angle > 0:
-            extend1 = self.cylinder_radius * np.tan(start_cut_angle) + epsilon
-        else:
+        # Check the wafer type characters directly
+        if self.wafer_type[0] == 'C':  # Circular start
             extend1 = epsilon
+        else:  # Elliptical start
+            if start_cut_angle is not None and abs(start_cut_angle) > 0.001:
+                extend1 = self.cylinder_radius * np.tan(abs(start_cut_angle)) + epsilon
+            else:
+                extend1 = epsilon
 
-        if end_cut_angle is not None and end_cut_angle > 0:
-            extend2 = self.cylinder_radius * np.tan(end_cut_angle) + epsilon
-        else:
+        if self.wafer_type[1] == 'C':  # Circular end
             extend2 = epsilon
+        else:  # Elliptical end
+            if end_cut_angle is not None and abs(end_cut_angle) > 0.001:
+                extend2 = self.cylinder_radius * np.tan(abs(end_cut_angle)) + epsilon
+            else:
+                extend2 = epsilon
+
+        print(f"        Extensions based on type {self.wafer_type}: extend1={extend1:.3f}, extend2={extend2:.3f}")
 
         # Cap extensions to reasonable values
         max_extend = chord_length * 0.5
@@ -75,9 +83,18 @@ class Wafer(object):
         # Create cylinder with extensions
         cylinder_start = pos1 - wafer_axis * extend1
         cylinder_length = chord_length + extend1 + extend2
+        cylinder_end = pos1 + wafer_axis * (chord_length + extend2)
 
         print(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
         print(f"      Total cylinder length: {cylinder_length:.3f}")
+        # DEBUG: Print the relationship between LCS and actual geometry
+        print(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
+        print(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
+        print(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
+        print(f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
+        print(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
+        print(f"           Offset from LCS1 to cylinder start: {extend1:.3f} (backwards)")
+        print(f"           Offset from LCS2 to cylinder end: {(cylinder_end - pos2).Length:.3f}")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -150,10 +167,6 @@ class Wafer(object):
         self.wafer.Sections = [e1, e2]
         self.wafer.Solid = True
         self.wafer.Visibility = True
-
-    def rotate_to_vertical(self, x_ang, y_ang):
-        self.wafer.Placement.Matrix.rotateX(x_ang)
-        self.wafer.Placement.Matrix.rotateY(y_ang)
 
     def get_lift_angle(self):
         return self.lift_angle
@@ -253,6 +266,13 @@ class Wafer(object):
         # vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
         # angle = vec2.getAngle(vec)
         # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
+
+    def validate_segment_join(segment1_last_wafer, segment2_first_wafer):
+        # Check that segment1 ends with 'C' and segment2 starts with 'C'
+        if segment1_last_wafer.wafer_type[1] != 'C':
+            raise ValueError("Segment must end with circular cut for joining")
+        if segment2_first_wafer.wafer_type[0] != 'C':
+            raise ValueError("Segment must start with circular cut for joining")
 
 
 def convert_angle(angle):

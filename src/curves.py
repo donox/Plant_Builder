@@ -330,7 +330,8 @@ class Curves:
         return curve_points
 
     def _generate_helical(self, radius: float = 10.0, pitch: float = 2.5,
-                          turns: float = 4.0, points: int = 100) -> List[List[float]]:
+                          turns: float = 4.0, points: int = 100,
+                          start_at_origin: bool = True) -> List[List[float]]:
         """Generate a helical curve.
 
         Args:
@@ -338,19 +339,17 @@ class Curves:
             pitch: Vertical distance per complete turn
             turns: Number of complete turns
             points: Number of points to generate
+            start_at_origin: If True, start at [0, 0, 0] instead of [radius, 0, 0]
 
         Returns:
             List of [x, y, z] coordinate lists
         """
         curve_points = []
-        total_angle = turns * 2 * math.pi  # Total angle to traverse
-        total_height = turns * pitch  # Total height of helix
+        total_angle = turns * 2 * math.pi
+        total_height = turns * pitch
 
         for i in range(points):
-            # Parameter goes from 0 to 1
             t = i / (points - 1)
-
-            # Angle and height are proportional to t
             angle = t * total_angle
             z = t * total_height
 
@@ -358,6 +357,12 @@ class Curves:
             y = radius * math.sin(angle)
 
             curve_points.append([x, y, z])
+
+        # If starting at origin, translate the curve so first point is at [0, 0, 0]
+        if start_at_origin and curve_points:
+            offset = curve_points[0]
+            curve_points = [[p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]]
+                            for p in curve_points]
 
         return curve_points
 
