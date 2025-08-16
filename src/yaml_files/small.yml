@@ -113,7 +113,12 @@ workflow:
 #          angle: 0
       segment:
         start_fraction: 0.0
-        end_fraction: .2
+        end_fraction: .8
+#    curve_spec:
+#      type: "linear"
+#      parameters:
+#        length: 15.0
+#        points: 10
     # Wafer construction parameters
     wafer_settings:
       cylinder_diameter: 1.5
@@ -141,7 +146,7 @@ workflow:
       transformations: [ ]   # Remove transformations for now
       segment:
         start_fraction: 0.0
-        end_fraction: 0.1
+        end_fraction: 0.6
     wafer_settings:
       cylinder_diameter: 1.5    # Match traditional helix
       min_height: 0.4           # Much smaller

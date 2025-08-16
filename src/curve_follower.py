@@ -11,7 +11,7 @@ import FreeCAD
 import FreeCADGui
 from curves import Curves  # Import the new Curves class
 
-debug = True
+debug = False
 class CurveFollower:
     """Creates wafer slices along a curved cylinder path.
 
@@ -234,8 +234,8 @@ class CurveFollower:
         is_collinear = chord_distance < threshold
 
         # DEBUG OUTPUT
-        print(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
-              f"chord_len={chord_length:.4f}, collinear={is_collinear}")
+        # print(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
+        #       f"chord_len={chord_length:.4f}, collinear={is_collinear}")
 
         return is_collinear
 
@@ -254,26 +254,10 @@ class CurveFollower:
 
         return self.curves.calculate_optimal_points(max_chord_error)
 
-    @staticmethod
-    def normalize_angle(angle_rad):
-        """Normalize angle to [-π, π] range to prevent boundary issues"""
-        if math.isnan(angle_rad) or math.isinf(angle_rad):
-            return 0.0
-
-        # Use remainder for clean normalization to [-π, π]
-        normalized = math.remainder(angle_rad, 2 * math.pi)
-
-        # Avoid exact boundary values that cause test failures
-        epsilon = 1e-10
-        if abs(abs(normalized) - math.pi) < epsilon:
-            normalized = math.copysign(math.pi - epsilon, normalized)
-
-        return normalized
-
     def _calculate_ellipse_parameters(
-            self, start_point: np.ndarray, end_point: np.ndarray,
-            start_index: int, end_index: int,
-            is_first_wafer: bool = False, is_last_wafer: bool = False
+        self, start_point: np.ndarray, end_point: np.ndarray,
+        start_index: int, end_index: int,
+        is_first_wafer: bool = False, is_last_wafer: bool = False
     ) -> Tuple[float, float, float, str]:
         """
         Calculate ellipse angles and wafer type for the wafer ends.
@@ -303,8 +287,16 @@ class CurveFollower:
         rotation_angle = 0.0
 
         # For first wafer, start is always circular
+        # For first wafer, start is always circular
+        # For first wafer, start is always circular
         if is_first_wafer:
+            # First wafer always has a perpendicular cut (circular)
+            # This is 0° in the wafer's local coordinate system
             start_angle = 0.0
+
+            # DEBUG
+            # print(f"    First wafer start: perpendicular cut")
+            # print(f"      Chord unit vector: [{chord_unit[0]:.3f}, {chord_unit[1]:.3f}, {chord_unit[2]:.3f}]")
 
             # For the end cut, we need the angle to the NEXT wafer
             if end_index < len(self.curve_points) - 1:
@@ -328,7 +320,7 @@ class CurveFollower:
                     print(
                         f"    First wafer end: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(end_angle):.2f}°")
 
-            wafer_type = "CE"
+            wafer_type = "CE" if end_angle > 0.01 else "CC"
 
         elif is_last_wafer:
             # For the start cut, we need the angle from the PREVIOUS wafer
@@ -414,8 +406,8 @@ class CurveFollower:
         end_angle = np.clip(end_angle, 0, max_angle)
 
         # DEBUG summary
-        print(
-            f"    Final: start={np.rad2deg(start_angle):.2f}°, end={np.rad2deg(end_angle):.2f}°, rot={np.rad2deg(rotation_angle):.2f}°, type={wafer_type}")
+        # print(
+        #     f"    Final: start={np.rad2deg(start_angle):.2f}°, end={np.rad2deg(end_angle):.2f}°, rot={np.rad2deg(rotation_angle):.2f}°, type={wafer_type}")
 
         return start_angle, end_angle, rotation_angle, wafer_type
 
@@ -691,25 +683,91 @@ class CurveFollower:
     def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
         """Main processing method that creates and adds wafers to the segment."""
 
-        # Step 2: Create wafer list
+        # Step 1: Create wafer list
         wafers = self.create_wafer_list()
 
-        # Step 3: Apply wafer type consistency
+        # Step 2: Apply wafer type consistency
         consistent_wafers = self._determine_consistent_wafer_types(wafers)
 
-        # Step 4: Correct rotation angles
+        # Step 3: Correct rotation angles
         corrected_wafers = self._correct_rotation_angles(consistent_wafers)
 
-        # NEW Step 5: Calculate all cutting planes
-        cutting_plane_data = self.calculate_cutting_planes(corrected_wafers)
-
-        # Step 6: Process each wafer with cutting plane data
-        for i, cutting_data in enumerate(cutting_plane_data):
+        # Step 4: Process each wafer
+        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
+                corrected_wafers):
             if debug:
-                print(f"\nProcessing wafer {i + 1}/{len(cutting_plane_data)}:")
+                print(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
 
-            # Pass the complete cutting plane information
-            self.add_wafer_with_cutting_planes(cutting_data, debug)
+            # Call add_wafer_from_curve_data with the wafer data
+            self.add_wafer_from_curve_data(
+                start_point,
+                end_point,
+                start_angle,
+                end_angle,
+                rotation_angle,
+                wafer_type,
+                debug=debug
+            )
+
+        # Step 5: Add curve visualization if requested
+        if add_curve_vertices:
+            self.add_curve_visualization()
+
+    def add_wafer_from_curve_data(self, start_point, end_point, start_angle,
+                                  end_angle, rotation_angle, wafer_type, debug=False):
+        """Add a wafer using curve-derived data.
+
+        This method converts curve data into the format expected by flex_segment.add_wafer()
+
+        Args:
+            start_point: numpy array [x, y, z]
+            end_point: numpy array [x, y, z]
+            start_angle: float, start cut angle in radians
+            end_angle: float, end cut angle in radians
+            rotation_angle: float, rotation angle in radians
+            wafer_type: str, type of wafer (CE, EE, EC, CC)
+            debug: bool, whether to print debug info
+        """
+
+        if debug:
+            import traceback
+            print(f"\n🔥 ENTERING add_wafer_from_curve_data() - Future wafer #{self.segment.wafer_count + 1}")
+            print(f"    Start: [{start_point[0]:.3f}, {start_point[1]:.3f}, {start_point[2]:.3f}]")
+            print(f"    End:   [{end_point[0]:.3f}, {end_point[1]:.3f}, {end_point[2]:.3f}]")
+            print(f"    Type: {wafer_type}")
+            print(f"    CALL STACK:")
+            for line in traceback.format_stack()[-3:-1]:
+                print(f"      {line.strip()}")
+
+        # Calculate the lift based on wafer type and angles
+        lift = self._calculate_lift(start_angle, end_angle, wafer_type)
+
+        # Calculate outside height
+        outside_height = self._calculate_outside_height(start_point, end_point,
+                                                        start_angle, end_angle, rotation_angle)
+
+        # Get curve tangent at start point for first wafer
+        curve_tangent = None
+        if self.segment.wafer_count == 0:  # First wafer
+            # Calculate tangent from curve
+            start_idx = self._find_point_index(start_point)
+            if start_idx < len(self.curve_points) - 1:
+                tangent_vec = self.curve_points[start_idx + 1] - self.curve_points[start_idx]
+                tangent_vec = tangent_vec / np.linalg.norm(tangent_vec)
+                curve_tangent = FreeCAD.Vector(tangent_vec[0], tangent_vec[1], tangent_vec[2])
+
+        # Keep positions as numpy arrays - no conversion needed!
+        # The add_wafer method in flex_segment expects numpy arrays
+        self.segment.add_wafer(
+            lift=lift,
+            rotation=rotation_angle,
+            cylinder_diameter=self.cylinder_diameter,
+            outside_height=outside_height,
+            wafer_type=wafer_type,
+            start_pos=start_point,  # Pass numpy array directly
+            end_pos=end_point,  # Pass numpy array directly
+            curve_tangent=curve_tangent
+        )
 
     # In curve_follower.py, CurveFollower class (around line 235)
     @staticmethod
@@ -821,63 +879,109 @@ class CurveFollower:
         # (which is perpendicular to the intersection line of the two cylinders)
         return bisector
 
-    def add_wafer_with_cutting_planes(self, cutting_data, debug=False):
-        """Add a wafer using pre-calculated cutting plane data."""
+    def _calculate_lift(self, start_angle: float, end_angle: float, wafer_type: str) -> float:
+        """Calculate the lift angle for a wafer based on its cutting angles.
 
-        # Calculate the actual cut angles from the cutting plane normals
-        start_angle = np.arccos(np.clip(np.abs(np.dot(cutting_data['start_normal'],
-                                                      cutting_data['wafer_axis'])), 0, 1))
-        end_angle = np.arccos(np.clip(np.abs(np.dot(cutting_data['end_normal'],
-                                                    cutting_data['wafer_axis'])), 0, 1))
+        Args:
+            start_angle: Start cut angle in radians
+            end_angle: End cut angle in radians
+            wafer_type: Type of wafer (CE, EE, EC, CC)
 
-        # For wafer parameter calculation
-        if cutting_data['wafer_type'][0] == 'C':
-            lift_start = 0.0  # Circular start
+        Returns:
+            Lift angle in radians
+        """
+        # For most cases, use the average of the cut angles
+        # This represents the overall bend angle of the wafer
+        if wafer_type == "CC":
+            return 0.0  # No lift for straight sections
+        elif wafer_type == "CE":
+            return end_angle  # Use end angle for first wafer
+        elif wafer_type == "EC":
+            return start_angle  # Use start angle for last wafer
+        else:  # "EE"
+            return (start_angle + end_angle) / 2.0  # Average for middle wafers
+
+    def add_wafer_with_cutting_planes(self, curve, cutting_data, diameter, doc_object, base_placement):
+        """Create a wafer from curve data with angled cutting planes.
+
+        For the first wafer in a segment, establishes the segment's coordinate system
+        by aligning the Y-axis with the plane containing both the chord and the curve
+        tangent. This creates a deterministic, geometrically meaningful orientation.
+
+        Args:
+            curve: The curve object to follow
+            cutting_data: Dictionary with start/end points, normals, cut angles, and cut types
+            diameter: Wafer cylinder diameter
+            doc_object: FreeCAD document object
+            base_placement: Base placement for the segment
+        """
+        # Extract cutting data
+        start_point = cutting_data['start_point']
+        end_point = cutting_data['end_point']
+        start_normal = cutting_data['start_normal']
+        end_normal = cutting_data['end_normal']
+        wafer_type = cutting_data['type']
+        cut_rotation = cutting_data.get('rotation', 0.0)
+        start_cut_angle = cutting_data.get('start_angle', 0)
+        end_cut_angle = cutting_data.get('end_angle', 0)
+
+        # Calculate wafer properties
+        wafer_axis = (end_point - start_point).normalize()
+        chord_length = (end_point - start_point).Length
+
+        print(f"\n=== Creating Wafer {len(self.wafer_list) + 1} with cutting planes ===")
+        print(f"    Type: {wafer_type}")
+        print(f"    Rotation: {cut_rotation:.2f}°")
+
+        # Check if this is the first wafer
+        is_first_wafer = (len(self.wafer_list) == 0)
+
+        # Create coordinate system
+        if is_first_wafer:
+            # For first wafer, create deterministic orientation based on curve geometry
+            # Get the curve tangent at the start point
+            start_param = curve.getParameterByLength(0)
+            start_tangent = curve.tangent(start_param)[0]
+
+            # Z-axis is the wafer/cylinder axis
+            z_axis = wafer_axis
+
+            # Find the normal to the plane containing chord and tangent
+            plane_normal = z_axis.cross(start_tangent)
+
+            if plane_normal.Length < 0.001:
+                # Chord and tangent are parallel (straight section)
+                # Use perpendicular to Z and global Z if possible
+                if abs(z_axis.z) < 0.9:
+                    plane_normal = z_axis.cross(FreeCAD.Vector(0, 0, 1))
+                else:
+                    plane_normal = z_axis.cross(FreeCAD.Vector(1, 0, 0))
+
+            plane_normal.normalize()
+
+            # X-axis is the plane normal (perpendicular to bending plane)
+            x_axis = plane_normal
+
+            # Y-axis lies in the bending plane
+            y_axis = z_axis.cross(x_axis)
+            y_axis.normalize()
+
+            # Update base LCS orientation to match first wafer
+            placement_matrix = FreeCAD.Matrix()
+            placement_matrix.A11, placement_matrix.A21, placement_matrix.A31 = x_axis.x, x_axis.y, x_axis.z
+            placement_matrix.A12, placement_matrix.A22, placement_matrix.A32 = y_axis.x, y_axis.y, y_axis.z
+            placement_matrix.A13, placement_matrix.A23, placement_matrix.A33 = z_axis.x, z_axis.y, z_axis.z
+            placement_matrix.A14, placement_matrix.A24, placement_matrix.A34 = 0, 0, 0  # Keep at origin
+
+            self.lcs_base.Placement = FreeCAD.Placement(placement_matrix)
+
+            print(f"\n     First wafer - updating base LCS orientation")
+            print(f"       Base LCS Z-axis alignment with cylinder: {z_axis.dot(wafer_axis):.4f}")
+            print(f"       Base LCS position: {self.lcs_base.Placement.Base}")
         else:
-            lift_start = start_angle
-
-        if cutting_data['wafer_type'][1] == 'C':
-            lift_end = 0.0  # Circular end
-        else:
-            lift_end = end_angle
-
-        # Average lift for the wafer (used for height calculations)
-        lift = (lift_start + lift_end) / 2.0
-
-        # Calculate outside height based on geometry
-        chord_length = np.linalg.norm(cutting_data['end_pos'] - cutting_data['start_pos'])
-        outside_height = self._calculate_outside_height(
-            cutting_data['start_pos'],
-            cutting_data['end_pos'],
-            lift_start,
-            lift_end,
-            cutting_data['rotation']
-        )
-
-        if debug:
-            print(f"  Cutting plane normals:")
-            print(f"    Start: [{cutting_data['start_normal'][0]:.3f}, "
-                  f"{cutting_data['start_normal'][1]:.3f}, {cutting_data['start_normal'][2]:.3f}]")
-            print(f"    End: [{cutting_data['end_normal'][0]:.3f}, "
-                  f"{cutting_data['end_normal'][1]:.3f}, {cutting_data['end_normal'][2]:.3f}]")
-            print(f"  Cut angles: start={np.rad2deg(start_angle):.1f}°, "
-                  f"end={np.rad2deg(end_angle):.1f}°")
-
-        # Pass the cut angles to the segment
-        self.segment.add_wafer_with_planes(
-            start_pos=cutting_data['start_pos'],
-            end_pos=cutting_data['end_pos'],
-            start_normal=cutting_data['start_normal'],
-            end_normal=cutting_data['end_normal'],
-            wafer_axis=cutting_data['wafer_axis'],
-            rotation=cutting_data['rotation'],
-            cylinder_diameter=self.cylinder_diameter,
-            outside_height=outside_height,
-            wafer_type=cutting_data['wafer_type'],
-            start_cut_angle=start_angle,  # ADD THIS
-            end_cut_angle=end_angle  # ADD THIS
-        )
-
+            # For subsequent wafers, use the established coordinate system
+            x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
+            y_axis = self.lc
 def format_mixed(result):
     if isinstance(result, float):
         return f"{result:.4f}"

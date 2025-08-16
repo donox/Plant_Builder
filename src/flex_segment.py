@@ -43,11 +43,19 @@ class FlexSegment(object):
         self.stopper = False
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
-                  start_pos=None, end_pos=None):
+                  start_pos=None, end_pos=None, curve_tangent=None):
         """Add a wafer with optional 3D positioning data.
 
-        CORRECTED: Uses intersection plane of two cylinders approach.
-        """
+        Args:
+            lift: float, lift angle in radians
+            rotation: float, rotation angle in radians
+            cylinder_diameter: float, diameter of cylinder
+            outside_height: float, outside height of wafer
+            wafer_type: str, type of wafer (CE, EE, EC, CC)
+            start_pos: numpy array [x, y, z] or None
+            end_pos: numpy array [x, y, z] or None
+            curve_tangent: tangent to curve, if provided
+            """
 
         # Initialize wafer_count if not exists
         if not hasattr(self, 'wafer_count'):
@@ -71,6 +79,9 @@ class FlexSegment(object):
         lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
         lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
         self.lcs_group.addObjects([lcs1, lcs2])
+        wafer.lcs1 = lcs1
+        wafer.lcs2 = lcs2
+        wafer.segment = self
 
         if not self.show_lcs:
             lcs1.Visibility = False
@@ -78,8 +89,14 @@ class FlexSegment(object):
 
         # CYLINDER INTERSECTION PLANE APPROACH
         if start_pos is not None and end_pos is not None:
+            # Ensure we're working with numpy arrays
+            if not isinstance(start_pos, np.ndarray):
+                start_pos = np.array(start_pos)
+            if not isinstance(end_pos, np.ndarray):
+                end_pos = np.array(end_pos)
+
             # Current wafer axis (cylinder axis)
-            wafer_vector = end_pos - start_pos
+            wafer_vector = end_pos - start_pos  # This now works with numpy arrays
             wafer_length = np.linalg.norm(wafer_vector)
 
             if wafer_length > 1e-6:
@@ -88,20 +105,27 @@ class FlexSegment(object):
 
                 # For lcs1 (start of wafer)
                 if self.wafer_count == 1:
-                    # First wafer: perpendicular cut
-                    # Z-axis perpendicular to cylinder (along cylinder axis)
-                    z_axis = current_axis
+                    print(f"    📍 First wafer - creating initial LCS")
+                    # Calculate rotation matrix based on wafer direction
+                    z_axis = current_axis  # Along the cylinder
+                    print(f"    📍 Z-axis (current_axis): {z_axis}")
 
-                    # Create perpendicular frame
-                    if abs(z_axis.z) < 0.9:
-                        x_axis = FreeCAD.Vector(0, 0, 1).cross(z_axis)
+                    # Create consistent orientation
+                    if abs(z_axis.dot(FreeCAD.Vector(0, 0, 1))) > 0.99:
+                        # Nearly vertical - use standard axes
+                        x_axis = FreeCAD.Vector(1, 0, 0)
+                        y_axis = FreeCAD.Vector(0, 1, 0)
+                        print("    📍 Using standard orientation for vertical cylinder")
                     else:
-                        x_axis = FreeCAD.Vector(1, 0, 0).cross(z_axis)
+                        # Non-vertical - create perpendicular frame
+                        ref_vec = FreeCAD.Vector(0, 0, 1)
+                        x_axis = z_axis.cross(ref_vec).normalize()
+                        y_axis = z_axis.cross(x_axis).normalize()
+                        print(f"    📍 Created perpendicular frame for non-vertical cylinder")
+                        print(f"       X-axis: {x_axis}")
+                        print(f"       Y-axis: {y_axis}")
 
-                    x_axis.normalize()
-                    y_axis = z_axis.cross(x_axis)
-                    y_axis.normalize()
-
+                    # Create rotation matrix
                     rotation_matrix = FreeCAD.Matrix(
                         x_axis.x, y_axis.x, z_axis.x, 0,
                         x_axis.y, y_axis.y, z_axis.y, 0,
@@ -113,10 +137,9 @@ class FlexSegment(object):
                         FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2]),
                         FreeCAD.Rotation(rotation_matrix)
                     )
-
+                    print(f"    📍 Set LCS1 placement with rotation")
                 else:
-                    # Use the stored end placement from previous wafer
-                    # This ensures face-to-face joining
+                    # Use stored placement from previous wafer in same segment
                     if hasattr(self, '_last_lcs2_placement'):
                         lcs1.Placement = self._last_lcs2_placement
                     else:
@@ -129,14 +152,31 @@ class FlexSegment(object):
                 if wafer_type[1] == 'C':  # Circular end (perpendicular cut)
                     z_axis = current_axis
 
-                    if abs(z_axis.z) < 0.9:
-                        x_axis = FreeCAD.Vector(0, 0, 1).cross(z_axis)
+                    if abs(z_axis.x) < 0.001 and abs(z_axis.y) < 0.001 and abs(abs(z_axis.z) - 1.0) < 0.001:
+                        # Vertical cylinder - use standard orientation
+                        x_axis = FreeCAD.Vector(1, 0, 0)
+                        y_axis = FreeCAD.Vector(0, 1, 0)
+                        print("    📌 Using standard orientation for vertical cylinder LCS2")
                     else:
-                        x_axis = FreeCAD.Vector(1, 0, 0).cross(z_axis)
+                        # Non-vertical - existing cross product logic
+                        if abs(z_axis.z) < 0.9:
+                            x_axis = FreeCAD.Vector(0, 0, 1).cross(z_axis)
+                        else:
+                            x_axis = FreeCAD.Vector(1, 0, 0).cross(z_axis)
 
-                    x_axis.normalize()
-                    y_axis = z_axis.cross(x_axis)
-                    y_axis.normalize()
+                        x_axis.normalize()
+                        y_axis = z_axis.cross(x_axis)
+                        y_axis.normalize()
+
+                    # Add this debug:
+                    print(f"    🔍 CREATING ROTATION MATRIX for wafer {self.wafer_count}:")
+                    print(f"       Method: {'First wafer perpendicular' if self.wafer_count == 1 else 'Other'}")
+                    print(f"       Current axis: {current_axis}")
+                    print(f"       Cross product used: {x_axis}")
+                    print(f"       Resulting frame:")
+                    print(f"         X: {x_axis} (should be [1,0,0] for vertical)")
+                    print(f"         Y: {y_axis} (should be [0,1,0] for vertical)")
+                    print(f"         Z: {z_axis} (should be [0,0,1] for vertical)")
 
                     rotation_matrix = FreeCAD.Matrix(
                         x_axis.x, y_axis.x, z_axis.x, 0,
@@ -144,6 +184,13 @@ class FlexSegment(object):
                         x_axis.z, y_axis.z, z_axis.z, 0,
                         0, 0, 0, 1
                     )
+
+                    test_rot = FreeCAD.Rotation(rotation_matrix)
+                    euler = test_rot.toEuler()
+                    print(
+                        f"       Rotation will create: Yaw={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Roll={euler[2]:.1f}°")
+                    if abs(euler[0]) > 1.0 or abs(euler[1]) > 1.0 or abs(euler[2]) > 1.0:
+                        print(f"       ⚠️ WARNING: Non-identity rotation detected!")
 
                 else:  # Elliptical end (angled cut)
                     # The bisecting plane normal can be calculated from:
@@ -249,191 +296,122 @@ class FlexSegment(object):
 
         print(f"  ✅ Wafer {self.wafer_count} completed")
 
-    def add_wafer_with_planes(self, start_pos, end_pos, start_normal, end_normal,
-                              wafer_axis, rotation, cylinder_diameter, outside_height,
-                              wafer_type="EE", start_cut_angle=0.0, end_cut_angle=0.0):
-        """Add a wafer with explicit cutting plane definitions.
+    def add_wafer_with_planes(self, curve, cutting_data, diameter, doc_object, base_placement):
+        """Create a wafer from curve data with specified cutting planes.
 
-        This method creates a wafer with precisely defined cutting planes,
-        ensuring perfect face-to-face joining between adjacent wafers.
+        For the first wafer in a segment, establishes the segment's coordinate system
+        by aligning the Y-axis with the plane containing both the chord and the curve
+        tangent. This creates a deterministic, geometrically meaningful orientation.
 
         Args:
-            start_pos: Start position (numpy array)
-            end_pos: End position (numpy array)
-            start_normal: Normal vector to start cutting plane
-            end_normal: Normal vector to end cutting plane
-            wafer_axis: Unit vector along wafer (cylinder) axis
-            rotation: Rotation angle for EE wafers (radians)
-            cylinder_diameter: Diameter of the cylinder
-            outside_height: Total height of the wafer
-            wafer_type: Type string (e.g., "CE", "EE", "EC", "CC")
+            curve: The curve object to follow
+            cutting_data: Dictionary with start/end points, normals, and cut types
+            diameter: Wafer cylinder diameter
+            doc_object: FreeCAD document object
+            base_placement: Base placement for the segment
         """
+        # Extract cutting data
+        start_point = cutting_data['start_point']
+        end_point = cutting_data['end_point']
+        start_normal = cutting_data['start_normal']
+        end_normal = cutting_data['end_normal']
+        wafer_type = cutting_data['type']
+        cut_rotation = cutting_data.get('rotation', 0.0)
 
-        # Initialize wafer_count if needed
-        if not hasattr(self, 'wafer_count'):
-            self.wafer_count = 0
+        # Calculate wafer properties
+        wafer_axis = (end_point - start_point).normalize()
+        chord_length = (end_point - start_point).Length
 
-        self.wafer_count += 1
+        # Check if this is the first wafer
+        is_first_wafer = (len(self.wafer_list) == 0)
 
-        print(f"\n=== Creating Wafer {self.wafer_count} with cutting planes ===")
-        print(f"  Type: {wafer_type}")
-        print(f"  Rotation: {np.rad2deg(rotation):.2f}°")
+        # Create coordinate system
+        if is_first_wafer:
+            # For first wafer, create deterministic orientation based on curve geometry
+            # Get the curve tangent at the start point
+            start_param = curve.getParameterByLength(0)
+            start_tangent = curve.tangent(start_param)[0]
 
-        # Create wafer objects
-        name_base = self.prefix + str(self.wafer_count)
-        wafer_name = name_base + "_w"
+            # Z-axis is the wafer/cylinder axis
+            z_axis = wafer_axis
 
-        # Create LCS objects
-        lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
-        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
-        self.lcs_group.addObjects([lcs1, lcs2])
+            # Find the normal to the plane containing chord and tangent
+            plane_normal = z_axis.cross(start_tangent)
 
-        if not self.show_lcs:
-            lcs1.Visibility = False
-            lcs2.Visibility = False
+            if plane_normal.Length < 0.001:
+                # Chord and tangent are parallel (straight section)
+                # Use perpendicular to Z and global Z if possible
+                if abs(z_axis.z) < 0.9:
+                    plane_normal = z_axis.cross(FreeCAD.Vector(0, 0, 1))
+                else:
+                    plane_normal = z_axis.cross(FreeCAD.Vector(1, 0, 0))
 
-        # Convert numpy arrays to FreeCAD vectors
-        fc_start_pos = FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2])
-        fc_end_pos = FreeCAD.Vector(end_pos[0], end_pos[1], end_pos[2])
-        fc_start_normal = FreeCAD.Vector(start_normal[0], start_normal[1], start_normal[2])
-        fc_end_normal = FreeCAD.Vector(end_normal[0], end_normal[1], end_normal[2])
-        fc_wafer_axis = FreeCAD.Vector(wafer_axis[0], wafer_axis[1], wafer_axis[2])
+            plane_normal.normalize()
 
-        # Set up LCS1 (start cutting plane)
-        # Z-axis is the cutting plane normal
-        z1 = fc_wafer_axis
+            # X-axis is the plane normal (perpendicular to bending plane)
+            x_axis = plane_normal
 
-        # X-axis is in the plane containing both cylinder axes (if not first wafer)
-        # For first wafer or circular cuts, choose arbitrary perpendicular
-        if abs(z1.dot(fc_wafer_axis)) > 0.999:  # Nearly perpendicular cut
-            # Choose arbitrary x-axis perpendicular to z
-            if abs(z1.z) < 0.9:
-                x1 = FreeCAD.Vector(0, 0, 1).cross(z1)
-            else:
-                x1 = FreeCAD.Vector(1, 0, 0).cross(z1)
+            # Y-axis lies in the bending plane
+            y_axis = z_axis.cross(x_axis)
+            y_axis.normalize()
+
+            # Update base LCS orientation to match first wafer
+            placement_matrix = FreeCAD.Matrix()
+            placement_matrix.A11, placement_matrix.A21, placement_matrix.A31 = x_axis.x, x_axis.y, x_axis.z
+            placement_matrix.A12, placement_matrix.A22, placement_matrix.A32 = y_axis.x, y_axis.y, y_axis.z
+            placement_matrix.A13, placement_matrix.A23, placement_matrix.A33 = z_axis.x, z_axis.y, z_axis.z
+            placement_matrix.A14, placement_matrix.A24, placement_matrix.A34 = 0, 0, 0  # Keep at origin
+
+            self.lcs_base.Placement = FreeCAD.Placement(placement_matrix)
+
+            print(f"    First wafer - updating base LCS orientation")
+            print(f"      Base LCS Z-axis alignment with cylinder: {z_axis.dot(wafer_axis):.4f}")
+            print(f"      Base LCS position: {self.lcs_base.Placement.Base}")
         else:
-            # X-axis is perpendicular to both cutting normal and cylinder axis
-            # This makes it lie along the major axis of the ellipse
-            x1 = fc_wafer_axis.cross(z1)
+            # For subsequent wafers, use the established coordinate system
+            x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
+            y_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(0, 1, 0))
+            z_axis = wafer_axis
 
-        x1.normalize()
-        y1 = z1.cross(x1)
-        y1.normalize()
+        # Create LCS placement matrices
+        lcs1_matrix = FreeCAD.Matrix()
+        lcs1_matrix.A11, lcs1_matrix.A21, lcs1_matrix.A31 = x_axis.x, x_axis.y, x_axis.z
+        lcs1_matrix.A12, lcs1_matrix.A22, lcs1_matrix.A32 = y_axis.x, y_axis.y, y_axis.z
+        lcs1_matrix.A13, lcs1_matrix.A23, lcs1_matrix.A33 = z_axis.x, z_axis.y, z_axis.z
+        lcs1_matrix.A14, lcs1_matrix.A24, lcs1_matrix.A34 = start_point.x, start_point.y, start_point.z
 
-        # Create rotation matrix for LCS1
-        rot_matrix1 = FreeCAD.Matrix(
-            x1.x, y1.x, z1.x, 0,
-            x1.y, y1.y, z1.y, 0,
-            x1.z, y1.z, z1.z, 0,
-            0, 0, 0, 1
+        lcs2_matrix = FreeCAD.Matrix()
+        lcs2_matrix.A11, lcs2_matrix.A21, lcs2_matrix.A31 = x_axis.x, x_axis.y, x_axis.z
+        lcs2_matrix.A12, lcs2_matrix.A22, lcs2_matrix.A32 = y_axis.x, y_axis.y, y_axis.z
+        lcs2_matrix.A13, lcs2_matrix.A23, lcs2_matrix.A33 = z_axis.x, z_axis.y, z_axis.z
+        lcs2_matrix.A14, lcs2_matrix.A24, lcs2_matrix.A34 = end_point.x, end_point.y, end_point.z
+
+        # Create wafer
+        wafer = Wafer(
+            name=f"{self.name}_{len(self.wafer_list) + 1}",
+            lcs1_placement=FreeCAD.Placement(lcs1_matrix),
+            lcs2_placement=FreeCAD.Placement(lcs2_matrix),
+            wafer_type=wafer_type,
+            chord_length=chord_length,
+            diameter=diameter,
+            extension_1=cutting_data.get('extension_1', 0),
+            extension_2=cutting_data.get('extension_2', 0),
+            start_cut_angle=cutting_data.get('start_angle', 0),
+            end_cut_angle=cutting_data.get('end_angle', 0),
+            start_normal=start_normal,
+            end_normal=end_normal,
+            cut_rotation=cut_rotation,
+            doc_object=doc_object,
+            base_placement=base_placement
         )
 
-        lcs1.Placement = FreeCAD.Placement(fc_start_pos, FreeCAD.Rotation(rot_matrix1))
-
-        # Set up LCS2 (end cutting plane)
-        z2 = fc_end_normal
-
-        # Similar logic for x-axis
-        if abs(z2.dot(fc_wafer_axis)) > 0.999:  # Nearly perpendicular cut
-            if abs(z2.z) < 0.9:
-                x2 = FreeCAD.Vector(0, 0, 1).cross(z2)
-            else:
-                x2 = FreeCAD.Vector(1, 0, 0).cross(z2)
-        else:
-            x2 = fc_wafer_axis.cross(z2)
-
-        x2.normalize()
-        y2 = z2.cross(x2)
-        y2.normalize()
-
-        # Apply rotation for EE wafers
-        if wafer_type == "EE" and abs(rotation) > 1e-6:
-            # Rotate around z-axis (cutting plane normal)
-            cos_r = np.cos(rotation)
-            sin_r = np.sin(rotation)
-
-            x2_rotated = x2 * cos_r + y2 * sin_r
-            y2_rotated = -x2 * sin_r + y2 * cos_r
-
-            x2 = x2_rotated
-            y2 = y2_rotated
-
-            print(f"  Applied EE rotation of {np.rad2deg(rotation):.2f}°")
-
-        # Create rotation matrix for LCS2
-        rot_matrix2 = FreeCAD.Matrix(
-            x2.x, y2.x, z2.x, 0,
-            x2.y, y2.y, z2.y, 0,
-            x2.z, y2.z, z2.z, 0,
-            0, 0, 0, 1
-        )
-
-        lcs2.Placement = FreeCAD.Placement(fc_end_pos, FreeCAD.Rotation(rot_matrix2))
-
-        # Update lcs_top for next wafer
-        self.lcs_top.Placement = lcs2.Placement
-
-        print(f"  LCS1 at: [{lcs1.Placement.Base.x:.3f}, {lcs1.Placement.Base.y:.3f}, "
-              f"{lcs1.Placement.Base.z:.3f}]")
-        print(f"  LCS2 at: [{lcs2.Placement.Base.x:.3f}, {lcs2.Placement.Base.y:.3f}, "
-              f"{lcs2.Placement.Base.z:.3f}]")
-
-        # Create the wafer geometry using the existing make_wafer_from_lcs
-        try:
-            # Create wafer object
-            wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
-
-            # Create the geometry
-            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name,
-                                      start_cut_angle, end_cut_angle)
-
-            # Add wafer object to the wafer group
-            wafer_obj = wafer.get_wafer()
-            if wafer_obj and hasattr(self, 'wafer_group'):
-                self.wafer_group.addObject(wafer_obj)
-                # Hide individual wafer since we'll show the fused result
-                wafer_obj.Visibility = False
-
-            # Store in list
-            self.wafer_list.append(wafer)
-
-        except Exception as e:
-            print(f"ERROR creating wafer: {e}")
-            import traceback
-            traceback.print_exc()
-
-        print(f"  ✅ Wafer {self.wafer_count} completed")
-
-    def add_wafer_rectangle(self, lift, rotation, long_side, outside_height, wafer_type="EE"):
-        # Make wafer at base and move after creation.  Creating at the target location seems to confuse OCC
-        # causing some wafer to be constructed by lofting to the wrong side of the target ellipse.
-        self.wafer_count += 1
-        name_base = self.prefix + str(self.wafer_count)
-        wafer_name = name_base + "_w"
-        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
-        wafer.set_parameters(lift, rotation, long_side, outside_height, wafer_type="EE")
-        lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
-        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
-        self.lcs_group.addObjects([lcs1, lcs2])
-        wafer.lift_lcs(lcs2, wafer_type)
-        # matrix = lcs2.Placement.toMatrix()
-        # matrix.rotateZ(-rotation)
-        # lcs2.Placement = FreeCAD.Placement(matrix)
-        if not self.show_lcs:
-            lcs1.Visibility = False
-            lcs2.Visibility = False
-        wafer.make_rectangle_wafer_from_lcs(lcs1, lcs2, long_side, long_side, wafer_name)
-        # print(f"Wafer {wafer_name} angle (top ellipse) to X-Y plane: {np.round(wafer.get_angle(), 3)}")
-        matrix = lcs2.Placement.toMatrix()
-        matrix.rotateZ(-rotation)
-        lcs2.Placement = FreeCAD.Placement(matrix)
-
-        lcs1.Placement = self.lcs_top.Placement
-        lcs2.Placement = self.lcs_top.Placement.multiply(lcs2.Placement)
-        wafer_loft = wafer.get_wafer()
-        wafer_loft.Placement = lcs1.Placement
+        # Add to segment
         self.wafer_list.append(wafer)
-        self.lcs_top.Placement = lcs2.Placement
+
+        # Update segment's top LCS to match the last wafer's end
+        self.lcs_top.Placement = wafer.get_lcs2().Placement
+
+        return wafer
 
     def get_segment_name(self):
         return self.prefix[:-1]    # strip trailing underscore
@@ -517,9 +495,19 @@ class FlexSegment(object):
             fuse = self.doc.addObject("Part::Feature", name + "FusedResult")
             fuse.Shape = result
 
+        # Update base LCS to match first wafer FIRST
+        if self.wafer_list and hasattr(self.wafer_list[0], 'lcs1'):
+            first_wafer_lcs1 = self.wafer_list[0].lcs1
+            if first_wafer_lcs1.Placement.Rotation.toEuler() != self.lcs_base.Placement.Rotation.toEuler():
+                print(f"  Updating base LCS rotation to match first wafer")
+                self.lcs_base.Placement = FreeCAD.Placement(
+                    self.lcs_base.Placement.Base,  # Keep position
+                    first_wafer_lcs1.Placement.Rotation  # Update rotation
+                )
+
         fuse.Visibility = True
         fuse.ViewObject.DisplayMode = "Shaded"
-        # fuse.Placement = self.lcs_base.Placement
+        # fuse.Placement = FreeCAD.Placement
         self.segment_object = fuse
 
         # DEBUG: Check bounds of fused object
@@ -541,16 +529,53 @@ class FlexSegment(object):
     def get_segment_rotation(self):
         return self.rotate_segment
 
+    # def move_content(self, transform):
+    #     """Move all segment content by the given transform."""
+    #     if self.segment_object:
+    #         # Apply transform to the segment object
+    #         current_placement = self.segment_object.Placement
+    #         self.segment_object.Placement = transform.multiply(current_placement)
+    #
+    #         # Move LCS objects
+    #         self.lcs_top.Placement = transform.multiply(self.lcs_top.Placement)
+    #         self.lcs_base.Placement = transform.multiply(self.lcs_base.Placement)
+    #
+    #         # Also move individual wafers if they exist
+    #         for wafer in self.wafer_list:
+    #             wafer_obj = wafer.get_wafer()
+    #             if wafer_obj:
+    #                 wafer_obj.Placement = transform.multiply(wafer_obj.Placement)
+    #
+    #         # Move the groups too
+    #         if hasattr(self, 'main_group'):
+    #             self.main_group.touch()
+    #
+    #         print(f"Moved segment {self.get_segment_name()} - base now at {self.lcs_base.Placement.Base}")
+    #     else:
+    #         print(f"NO CONTENT: {self.get_segment_name()} has no content to move.")
+
     def move_content(self, transform):
         """Move all segment content by the given transform."""
-        if self.segment_object:
-            # Apply transform to the segment object
-            current_placement = self.segment_object.Placement
-            self.segment_object.Placement = transform.multiply(current_placement)
+        print(f"\n  📦 MOVE_CONTENT called for {self.get_segment_name()}")
+        print(f"    Input transform: {transform}")
+        print(f"    Transform position: {transform.Base}")
+        print(f"    Transform rotation: {transform.Rotation.toEuler()}")
 
-            # Move LCS objects
-            self.lcs_top.Placement = transform.multiply(self.lcs_top.Placement)
+        if self.segment_object:
+            print(f"    BEFORE move_content:")
+            print(f"      segment_object: {self.segment_object.Placement}")
+            print(f"      lcs_base: {self.lcs_base.Placement}")
+            print(f"      lcs_top: {self.lcs_top.Placement}")
+
+            # Apply transforms
+            self.segment_object.Placement = transform.multiply(self.segment_object.Placement)
             self.lcs_base.Placement = transform.multiply(self.lcs_base.Placement)
+            self.lcs_top.Placement = transform.multiply(self.lcs_top.Placement)
+
+            print(f"    AFTER move_content:")
+            print(f"      segment_object: {self.segment_object.Placement}")
+            print(f"      lcs_base: {self.lcs_base.Placement}")
+            print(f"      lcs_top: {self.lcs_top.Placement}")
 
             # Also move individual wafers if they exist
             for wafer in self.wafer_list:
@@ -561,11 +586,23 @@ class FlexSegment(object):
             # Move the groups too
             if hasattr(self, 'main_group'):
                 self.main_group.touch()
-
-            print(f"Moved segment {self.get_segment_name()} - base now at {self.lcs_base.Placement.Base}")
         else:
             print(f"NO CONTENT: {self.get_segment_name()} has no content to move.")
 
+        # Force visual update
+        if self.segment_object and hasattr(self.segment_object, 'ViewObject'):
+            self.segment_object.ViewObject.Visibility = False
+            self.segment_object.ViewObject.Visibility = True
+
+        # Force document recompute
+        self.doc.recompute()
+
+        # Force GUI update if available
+        try:
+            import FreeCADGui
+            FreeCADGui.updateGui()
+        except:
+            pass
     def remove_prior_version(self):
         # TODO: not do so if making cut list???
         name = self.prefix + ".+"
@@ -746,24 +783,6 @@ class FlexSegment(object):
         """Register a function to be called when segment is transformed."""
         self.transform_callbacks.append(callback_func)
 
-    def move_to_top(self, transform):
-        """Apply transform to reposition segment."""
-        self.move_content(transform)
-
-        # Store transform in FreeCAD properties for persistence
-        self.store_applied_transform(transform)
-
-        # Apply to registered curve vertices
-        self._transform_registered_vertices(transform)
-
-        self.doc.recompute()
-        FreeCADGui.updateGui()
-        FreeCADGui.SendMsgToActiveView("ViewFit")
-
-        # Call Python callbacks
-        for callback in self.transform_callbacks:
-            callback(transform)
-
     def _transform_registered_vertices(self, transform):
         """Transform all registered curve vertex groups."""
         for group_name in self.lcs_base.CurveVerticesGroups:
@@ -868,6 +887,141 @@ class FlexSegment(object):
         # Call Python callbacks
         for callback in self.transform_callbacks:
             callback(transform)
+
+    def validate_segment_geometry(self, tagline="SEGMENT VALIDATION: "):
+        """Validate that segment geometry matches LCS positions and print detailed info.
+
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not self.segment_object:
+            return False, "No segment object exists"
+
+        if not self.wafer_list:
+            return False, "No wafers in segment"
+
+        print(f"\n🔍 {tagline} {self.get_segment_name()}:")
+
+        # Print base LCS information
+        base_pos = self.lcs_base.Placement.Base
+        base_rot = self.lcs_base.Placement.Rotation.toEuler()
+        print(f"   Base LCS:")
+        print(f"     Position: [{base_pos.x:.3f}, {base_pos.y:.3f}, {base_pos.z:.3f}]")
+        print(f"     Rotation: [Yaw={base_rot[0]:.1f}°, Pitch={base_rot[1]:.1f}°, Roll={base_rot[2]:.1f}°]")
+
+        # Get wafer positions and rotations
+        first_wafer = self.wafer_list[0]
+        last_wafer = self.wafer_list[-1]
+
+        try:
+            # Try to get LCS positions and rotations from wafer objects
+            if hasattr(first_wafer, 'get_lcs1') and hasattr(first_wafer, 'get_lcs2'):
+                first_start_pos = first_wafer.get_lcs1().Placement.Base
+                first_start_rot = first_wafer.get_lcs1().Placement.Rotation.toEuler()
+                last_end_pos = last_wafer.get_lcs2().Placement.Base
+                last_end_rot = last_wafer.get_lcs2().Placement.Rotation.toEuler()
+            elif hasattr(first_wafer, 'lcs1') and hasattr(last_wafer, 'lcs2'):
+                first_start_pos = first_wafer.lcs1.Placement.Base
+                first_start_rot = first_wafer.lcs1.Placement.Rotation.toEuler()
+                last_end_pos = last_wafer.lcs2.Placement.Base
+                last_end_rot = last_wafer.lcs2.Placement.Rotation.toEuler()
+            else:
+                # Try to get from FreeCAD objects directly
+                lcs1_name = f"{self.get_segment_name()}_1_1lcs"
+                lcs2_name = f"{self.get_segment_name()}_{len(self.wafer_list)}_2lcs"
+
+                lcs1_obj = self.doc.getObject(lcs1_name)
+                lcs2_obj = self.doc.getObject(lcs2_name)
+
+                if lcs1_obj and lcs2_obj:
+                    first_start_pos = lcs1_obj.Placement.Base
+                    first_start_rot = lcs1_obj.Placement.Rotation.toEuler()
+                    last_end_pos = lcs2_obj.Placement.Base
+                    last_end_rot = lcs2_obj.Placement.Rotation.toEuler()
+                else:
+                    return False, "Cannot access wafer LCS positions"
+
+        except Exception as e:
+            return False, f"Error accessing wafer positions: {e}"
+
+        print(f"   First wafer start (LCS1):")
+        print(f"     Position: [{first_start_pos.x:.3f}, {first_start_pos.y:.3f}, {first_start_pos.z:.3f}]")
+        print(
+            f"     Rotation: [Yaw={first_start_rot[0]:.1f}°, Pitch={first_start_rot[1]:.1f}°, Roll={first_start_rot[2]:.1f}°]")
+
+        top_pos = self.lcs_top.Placement.Base
+        top_rot = self.lcs_top.Placement.Rotation.toEuler()
+        print(f"   Top LCS:")
+        print(f"     Position: [{top_pos.x:.3f}, {top_pos.y:.3f}, {top_pos.z:.3f}]")
+        print(f"     Rotation: [Yaw={top_rot[0]:.1f}°, Pitch={top_rot[1]:.1f}°, Roll={top_rot[2]:.1f}°]")
+
+        print(f"   Last wafer end (LCS2):")
+        print(f"     Position: [{last_end_pos.x:.3f}, {last_end_pos.y:.3f}, {last_end_pos.z:.3f}]")
+        print(f"     Rotation: [Yaw={last_end_rot[0]:.1f}°, Pitch={last_end_rot[1]:.1f}°, Roll={last_end_rot[2]:.1f}°]")
+
+        # Print segment object info
+        seg_pos = self.segment_object.Placement.Base
+        seg_rot = self.segment_object.Placement.Rotation.toEuler()
+        print(f"   Segment object (fused):")
+        print(f"     Position: [{seg_pos.x:.3f}, {seg_pos.y:.3f}, {seg_pos.z:.3f}]")
+        print(f"     Rotation: [Yaw={seg_rot[0]:.1f}°, Pitch={seg_rot[1]:.1f}°, Roll={seg_rot[2]:.1f}°]")
+
+        # Check segment object bounds
+        bounds = self.segment_object.Shape.BoundBox
+        if bounds.isValid():
+            print(f"     Bounds: Min=[{bounds.XMin:.3f}, {bounds.YMin:.3f}, {bounds.ZMin:.3f}] "
+                  f"Max=[{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
+
+        # Position validation
+        base_error = (base_pos - first_start_pos).Length
+        top_error = (top_pos - last_end_pos).Length
+
+        print(f"\n   Position errors:")
+        print(f"     Base LCS vs First wafer: {base_error:.6f}")
+        print(f"     Top LCS vs Last wafer: {top_error:.6f}")
+
+        # Rotation comparison
+        print(f"\n   Rotation comparisons:")
+        print(f"     Base LCS vs First wafer: ΔYaw={base_rot[0] - first_start_rot[0]:.1f}°, "
+              f"ΔPitch={base_rot[1] - first_start_rot[1]:.1f}°, ΔRoll={base_rot[2] - first_start_rot[2]:.1f}°")
+        print(f"     Top LCS vs Last wafer: ΔYaw={top_rot[0] - last_end_rot[0]:.1f}°, "
+              f"ΔPitch={top_rot[1] - last_end_rot[1]:.1f}°, ΔRoll={top_rot[2] - last_end_rot[2]:.1f}°")
+
+        # Validation result
+        if base_error > 0.001:
+            return False, f"Base LCS mismatch: {base_error:.6f} units from first wafer start"
+
+        if top_error > 0.001:
+            return False, f"Top LCS mismatch: {top_error:.6f} units from last wafer end"
+
+        return True, "Segment geometry valid"
+
+    def fix_segment_lcs_alignment(self):
+        """Fix LCS positions to match actual wafer geometry."""
+        if not self.wafer_list:
+            print(f"Cannot fix alignment - no wafers")
+            return False
+
+        try:
+            # Get actual wafer positions
+            first_wafer = self.wafer_list[0]
+            last_wafer = self.wafer_list[-1]
+
+            # Update base LCS to match first wafer
+            if hasattr(first_wafer, 'lcs1'):
+                self.lcs_base.Placement = FreeCAD.Placement(first_wafer.lcs1.Placement)
+                print(f"Updated base LCS to match first wafer: {self.lcs_base.Placement}")
+
+            # Update top LCS to match last wafer
+            if hasattr(last_wafer, 'lcs2'):
+                self.lcs_top.Placement = FreeCAD.Placement(last_wafer.lcs2.Placement)
+                print(f"Updated top LCS to match last wafer: {self.lcs_top.Placement}")
+
+            return True
+
+        except Exception as e:
+            print(f"Error fixing alignment: {e}")
+            return False
 
     def _create_transformed_vertices(self, transform):
         """Create vertices directly in their final transformed positions."""

@@ -207,7 +207,7 @@ class Driver(object):
         """Execute remove_objects operation."""
         patterns = operation.get('patterns', [])
         for pattern in patterns:
-            print(f"Removing objects matching: {pattern}")
+            # print(f"Removing objects matching: {pattern}")
             self.remove_objects_re(pattern)
 
     def _execute_set_position(self, operation: Dict[str, Any]) -> None:
@@ -300,6 +300,7 @@ class Driver(object):
 
             # Get the actual segment base position
             segment_base = segment.get_lcs_base()
+            # TODO:  Shouldn't this always be the global oriain???
             print(f"Segment base placement: {segment_base.Placement}")
 
             # Process wafers
@@ -367,36 +368,6 @@ class Driver(object):
         self.relocate_segment()
         print(f"Created helix segment '{name}' with {wafer_count} wafers")
 
-    def _build_rectangle_segment(self, operation: Dict[str, Any]) -> None:
-        """Build a rectangle segment."""
-        name = operation['name']
-        rectangle_settings = operation.get('rectangle_settings', {})
-        segment_settings = operation.get('segment_settings', {})
-
-        # Extract settings
-        lift_angle = rectangle_settings.get('lift_angle', 0.0)
-        rotate_angle = rectangle_settings.get('rotate_angle', 0.0)
-        wafer_count = rectangle_settings.get('wafer_count', 10)
-        outside_height = rectangle_settings.get('outside_height', 2.0)
-        cylinder_diameter = rectangle_settings.get('cylinder_diameter', 2.0)
-
-        show_lcs = segment_settings.get('show_lcs', True)
-        build_segment = segment_settings.get('build_segment', True)
-        rotate_segment = segment_settings.get('rotate_segment', 0.0)
-
-        temp_file = self.project_config.get('global_settings', {}).get('temp_file', 'temp.dat')
-
-        # Create segment
-        segment = FlexSegment(name, show_lcs, temp_file, build_segment, rotate_segment)
-        self.segment_list.append(segment)
-
-        # Create rectangle
-        box = MakeRectangle(segment)
-        box.create_boxes(wafer_count, cylinder_diameter, cylinder_diameter,
-                         outside_height, lift_angle, rotate_angle, name)
-
-        self.relocate_segment()
-        print(f"Created rectangle segment '{name}' with {wafer_count} wafers")
 
     def _execute_add_arrows(self, operation: Dict[str, Any]) -> None:
         """Execute add_arrows operation (deferred until after segment relocation)."""
@@ -486,138 +457,103 @@ class Driver(object):
 
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
+        # return
         if not self.relocate_segments_tf:
-            print("Relocation disabled - segments will stay at origin")
             return
 
         if not self.segment_list:
-            print("No segments to relocate")
             return
 
         segment = self.segment_list[-1]
         segment_name = segment.get_segment_name()
 
-        if len(self.segment_list) > 1:
-            # Validate connection before relocating
-            prev_segment = self.segment_list[-2]
-            curr_segment = self.segment_list[-1]
-
-            # DEBUG
-            # Get the last wafer of previous segment and first wafer of current
-            if prev_segment.wafer_list and curr_segment.wafer_list:
-                last_wafer = prev_segment.wafer_list[-1]
-                first_wafer = curr_segment.wafer_list[0]
-
-                print(f"\n🔍 SEGMENT JOIN DEBUG:")
-                print(
-                    f"   Previous segment '{prev_segment.get_segment_name()}' last wafer type: {getattr(last_wafer, 'wafer_type', 'unknown')}")
-                print(
-                    f"   Current segment '{curr_segment.get_segment_name()}' first wafer type: {getattr(first_wafer, 'wafer_type', 'unknown')}")
-
-                # After alignment, check the gap
-                prev_end_lcs = prev_segment.get_lcs_top()
-                curr_start_lcs = curr_segment.get_lcs_base()
-
-                print(f"   After alignment:")
-                print(f"     Previous end LCS: {prev_end_lcs.Placement.Base}")
-                print(f"     Current start LCS: {curr_start_lcs.Placement.Base}")
-                print(
-                    f"     Gap between LCS positions: {(curr_start_lcs.Placement.Base - prev_end_lcs.Placement.Base).Length:.6f}")
-
-            try:
-                self.validate_segment_connection(prev_segment, curr_segment)
-            except ValueError as e:
-                print(f"WARNING: Segment connection validation failed: {e}")
-                # Continue anyway for now, but could raise here
-
-        # Check if this segment was already relocated
+        # Check if already relocated
         if hasattr(segment, 'already_relocated') and segment.already_relocated:
-            print(f"WARNING: Segment {segment_name} already relocated - SKIPPING!")
             return
 
-        print(f"\nRelocating segment: {segment_name}")
-        print(f"Segment index: {len(self.segment_list) - 1}")
+        print(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
+
+        # Validate segment before relocation
+        is_valid, error_msg = segment.validate_segment_geometry()
+        if not is_valid:
+            if segment.fix_segment_lcs_alignment():
+                is_valid, error_msg = segment.validate_segment_geometry()
+                if not is_valid:
+                    raise ValueError(f"Cannot relocate invalid segment: {error_msg}")
+            else:
+                raise ValueError(f"Cannot fix segment alignment: {error_msg}")
 
         if len(self.segment_list) == 1:
-            # First segment - check if we have an initial position
+            # First segment
             if hasattr(self, 'initial_position') and self.initial_position:
-                # Move to initial position
-                print(f"Moving first segment to initial position: {self.initial_position.Base}")
+                print(f"  First segment - applying initial position: {self.initial_position}")
                 segment.move_to_top(self.initial_position)
-            else:
-                # First segment stays at origin (where it was created)
-                print(f"First segment stays at origin")
-
-            # Record where it ends
-            segment_end = segment.get_lcs_top().Placement
-            print(f"First segment ends at: {segment_end.Base}")
-
-
         else:
-
-            # Get the previous segment's end position
-
+            # Align to previous segment
             prev_segment = self.segment_list[-2]
-            curr_segment = self.segment_list[-1]
             prev_end_lcs = prev_segment.get_lcs_top()
-
-            # Get current segment's start position
             current_start_lcs = segment.get_lcs_base()
 
-            # DEBUG: Print the orientations
-            print(f"Previous segment end LCS rotation: {prev_end_lcs.Placement.Rotation.Q}")
-            print(f"Current segment start LCS rotation: {current_start_lcs.Placement.Rotation.Q}")
+            print(f"\n  🔍 BEFORE ALIGNMENT:")
+            print(f"    Previous segment '{prev_segment.get_segment_name()}' ends at:")
+            print(f"      Position: {prev_end_lcs.Placement.Base}")
+            print(f"      Rotation: {prev_end_lcs.Placement.Rotation.toEuler()}")
+            print(f"    Current segment '{segment_name}' starts at:")
+            print(f"      Position: {current_start_lcs.Placement.Base}")
+            print(f"      Rotation: {current_start_lcs.Placement.Rotation.toEuler()}")
+            print(f"    Segment object at:")
+            print(f"      Position: {segment.segment_object.Placement.Base}")
+            print(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
 
-            # Calculate the full transformation (position AND rotation)
-            align_transform = self.make_transform_align(current_start_lcs, prev_end_lcs)
-            print(f"Previous segment ends at: {prev_end_lcs.Placement.Base}")
-            print(f"Current segment starts at: {curr_start_lcs.Placement.Base}")
+            # Calculate alignment transform
+            target_placement = prev_end_lcs.Placement
+            current_placement = current_start_lcs.Placement
+            # target_placement.Rotation = rot    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            align_transform = target_placement.multiply(current_placement.inverse())
 
-            print(f"Alignment transform: {align_transform}")
-            print(f"  Position: {align_transform.Base}")
-            print(f"  Rotation: {align_transform.Rotation.Q}")
-
-            # Move this segment
-
+            print(f"\n  📐 CALCULATED TRANSFORM:")
+            print(f"    Position: {align_transform.Base}")
+            print(f"    Rotation: {align_transform.Rotation.toEuler()}")
+            # Apply the transform
+            print(f"\n  🔨 CALLING move_to_top with transform...")
             segment.move_to_top(align_transform)
+            # return # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!111
 
-            # Verify the join
-            new_start = segment.get_lcs_base().Placement
-            print(f"After alignment:")
-            print(f"  New start position: {new_start.Base}")
-            print(f"  Should match previous end: {prev_end_lcs.Placement.Base}")
-            print(f"  Actual gap: {(new_start.Base - prev_end_lcs.Placement.Base).Length:.6f}")
+            print(f"\n  🔍 AFTER ALIGNMENT:")
+            print(f"    Current segment '{segment_name}' base now at:")
+            print(f"      Position: {segment.get_lcs_base().Placement.Base}")
+            print(f"      Rotation: {segment.get_lcs_base().Placement.Rotation.toEuler()}")
+            print(f"    Segment object now at:")
+            print(f"      Position: {segment.segment_object.Placement.Base}")
+            print(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
+            print(f"    Segment bounds:")
+            bounds = segment.segment_object.Shape.BoundBox
+            print(f"      Min: [{bounds.XMin:.3f}, {bounds.YMin:.3f}, {bounds.ZMin:.3f}]")
+            print(f"      Max: [{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
 
-            # DEBUG: Check if the alignment worked
-            after_start = segment.get_lcs_base().Placement
-            print(f"After alignment - segment base: {after_start}")
-            print(f"Should match previous end: {prev_end_lcs.Placement}")
-
-            # Report where this segment ends
-            segment_end = segment.get_lcs_top().Placement
-            print(f"Current segment now ends at: {segment_end.Base}")
-
-        # Apply any segment rotation if specified
+        # Apply segment rotation if specified
         angle = segment.get_segment_rotation()
         if angle != 0:
-            print(f"Applying segment rotation: {angle} degrees")
-            # Get current base position
             base_pos = segment.get_lcs_base().Placement
-
-            # Create rotation around the base
             rotation = FreeCAD.Placement(
                 FreeCAD.Vector(0, 0, 0),
                 FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), angle)
             )
-
-            # Apply rotation
             transform = base_pos.multiply(rotation).multiply(base_pos.inverse())
             segment.move_content(transform)
 
-        # Mark this segment as relocated
-        segment.already_relocated = True
-        print(f"Segment '{segment_name}' relocation complete\n")
 
+        # Store transform for debugging
+        if hasattr(segment, 'store_applied_transform'):
+            segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else self.initial_position)
+
+        segment.already_relocated = True
+        print(f"\n✅ Completed relocation for segment '{segment_name}'")
+
+        # After segment.move_to_top(align_transform)
+        self.doc.recompute()
+        FreeCADGui.updateGui()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""
         if filename is None:
@@ -790,14 +726,21 @@ class Driver(object):
             print(f"Exception: {e} on reference to {variable_name}")
             raise e
 
+    # @staticmethod
+    # def make_transform_align(object_1, object_2):
+    #     """Create transform that will move an object by the same relative positions of two input objects"""
+    #     l1 = object_1.Placement
+    #     l2 = object_2.Placement
+    #     tr = l1.inverse().multiply(l2)
+    #     FreeCAD.align = tr
+    #     return tr
+
     @staticmethod
     def make_transform_align(object_1, object_2):
-        """Create transform that will move an object by the same relative positions of two input objects"""
-        l1 = object_1.Placement
-        l2 = object_2.Placement
-        tr = l1.inverse().multiply(l2)
-        FreeCAD.align = tr
-        return tr
+        """Create transform that will move object_1 to object_2's placement"""
+        # Since object_1 (current segment base) is at origin,
+        # the transform is simply object_2's placement
+        return FreeCAD.Placement(object_2.Placement)
 
     # Keep all the legacy methods for backwards compatibility
     def build_from_file(self):

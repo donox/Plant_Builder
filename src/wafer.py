@@ -116,6 +116,9 @@ class Wafer(object):
         self.wafer.Shape = cylinder
         self.wafer.ViewObject.Transparency = 0
 
+        self.lcs1 = lcs1
+        self.lcs2 = lcs2
+
         print(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
 
     @staticmethod
