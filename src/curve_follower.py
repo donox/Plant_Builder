@@ -3,6 +3,17 @@
 This module provides functionality to generate sequences of wafers that follow
 arbitrary 3D curves, with proper geometric calculations for woodworking applications.
 """
+try:
+    from core.logging_setup import get_logger
+except Exception:
+    try:
+        from logging_setup import get_logger
+    except Exception:
+        import logging
+        get_logger = lambda name: logging.getLogger(name)
+
+logger = get_logger(__name__)
+
 
 import math
 import numpy as np
@@ -203,11 +214,6 @@ class CurveFollower:
             projection_point = start_point + projection_length * chord_unit
             distance = np.linalg.norm(point - projection_point)
             max_distance = max(max_distance, distance)
-        #     if i < 3:  # Debug first few points
-        #         print(f"      Point {i}: {point}, distance: {distance:.4f}")
-        #
-        # print(f"    Max chord distance: {max_distance:.4f}")
-
         return max_distance
 
     def _check_segment_collinearity(self, start_point: np.ndarray, end_point: np.ndarray,
@@ -234,9 +240,8 @@ class CurveFollower:
         is_collinear = chord_distance < threshold
 
         # DEBUG OUTPUT
-        # print(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
-        #       f"chord_len={chord_length:.4f}, collinear={is_collinear}")
-
+        logger.debug(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
+              f"chord_len={chord_length:.4f}, collinear={is_collinear}")
         return is_collinear
 
     # In curve_follower.py, add this method to the CurveFollower class:
@@ -295,8 +300,8 @@ class CurveFollower:
             start_angle = 0.0
 
             # DEBUG
-            # print(f"    First wafer start: perpendicular cut")
-            # print(f"      Chord unit vector: [{chord_unit[0]:.3f}, {chord_unit[1]:.3f}, {chord_unit[2]:.3f}]")
+            # logger.debug(f"    First wafer start: perpendicular cut")
+            # logger.debug(f"      Chord unit vector: [{chord_unit[0]:.3f}, {chord_unit[1]:.3f}, {chord_unit[2]:.3f}]")
 
             # For the end cut, we need the angle to the NEXT wafer
             if end_index < len(self.curve_points) - 1:
@@ -317,7 +322,7 @@ class CurveFollower:
                     end_angle = bend_angle / 2.0
 
                     # DEBUG
-                    print(
+                    logger.debug(
                         f"    First wafer end: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(end_angle):.2f}°")
 
             wafer_type = "CE" if end_angle > 0.01 else "CC"
@@ -342,7 +347,7 @@ class CurveFollower:
                     start_angle = bend_angle / 2.0
 
                     # DEBUG
-                    print(
+                    logger.debug(
                         f"    Last wafer start: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(start_angle):.2f}°")
 
             end_angle = 0.0  # Last wafer ends with circular cut
@@ -365,7 +370,7 @@ class CurveFollower:
                     start_angle = bend_angle / 2.0
 
                     # DEBUG
-                    print(
+                    logger.debug(
                         f"    Wafer start: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(start_angle):.2f}°")
 
             # End cut angle (to next wafer)
@@ -382,7 +387,7 @@ class CurveFollower:
                     end_angle = bend_angle / 2.0
 
                     # DEBUG
-                    print(
+                    logger.debug(
                         f"    Wafer end: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(end_angle):.2f}°")
 
             wafer_type = "EE"
@@ -398,16 +403,12 @@ class CurveFollower:
                 rotation_angle = self.normalize_angle(rotation_angle)
 
                 # DEBUG
-                print(f"    EE wafer rotation: {np.rad2deg(rotation_angle):.2f}°")
+                logger.debug(f"    EE wafer rotation: {np.rad2deg(rotation_angle):.2f}°")
 
         # Clamp angles to reasonable values
         max_angle = np.pi / 3  # 60 degrees max
         start_angle = np.clip(start_angle, 0, max_angle)
         end_angle = np.clip(end_angle, 0, max_angle)
-
-        # DEBUG summary
-        # print(
-        #     f"    Final: start={np.rad2deg(start_angle):.2f}°, end={np.rad2deg(end_angle):.2f}°, rot={np.rad2deg(rotation_angle):.2f}°, type={wafer_type}")
 
         return start_angle, end_angle, rotation_angle, wafer_type
 
@@ -436,7 +437,7 @@ class CurveFollower:
             safety_counter +=1
             # SAFETY CHECK: Prevent infinite loops
             if safety_counter > 1000:  # ADD THIS
-                print(f"🛑 SAFETY STOP: Generated {len(wafers)} wafers, stopping to prevent infinite loop")
+                logger.error(f"🛑 SAFETY STOP: Generated {len(wafers)} wafers, stopping to prevent infinite loop")
                 break
             start_point = self.curve_points[current_index]
 
@@ -646,13 +647,13 @@ class CurveFollower:
 
         # Sanity check: outside_height should be reasonable compared to chord_length
         if outside_height > chord_length * 5:  # If more than 5x chord length, something's wrong
-            # print(f"WARNING: Capping excessive outside_height")
-            # print(f"  Original calculation: {outside_height:.4f}")
-            # print(f"  Chord length: {chord_length:.4f}")
-            # print(f"  Start angle: {math.degrees(start_angle):.2f}°")
-            # print(f"  End angle: {math.degrees(end_angle):.2f}°")
+            # logger.info(f"WARNING: Capping excessive outside_height")
+            # logger.debug(f"  Original calculation: {outside_height:.4f}")
+            # logger.debug(f"  Chord length: {chord_length:.4f}")
+            # logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")
+            # logger.debug(f"  End angle: {math.degrees(end_angle):.2f}°")
             outside_height = chord_length + self.cylinder_diameter  # Conservative fallback
-            # print(f"  Capped to: {outside_height:.4f}")
+            # logger.debug(f"  Capped to: {outside_height:.4f}")
 
         return outside_height
 
@@ -670,7 +671,7 @@ class CurveFollower:
             segment_name = self.segment.get_segment_name()
             group_name = f"{segment_name}_curve_vertices"  # Make it unique per segment
 
-        print(f"Creating curve vertices with group name: '{group_name}'")
+        logger.info(f"Creating curve vertices with group name: '{group_name}'")
 
         # Create vertices at origin (same as wafer creation)
         vertex_group_name = self.curves.add_visualization_vertices(None, group_name)
@@ -696,7 +697,7 @@ class CurveFollower:
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
                 corrected_wafers):
             if debug:
-                print(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
+                logger.info(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
 
             # Call add_wafer_from_curve_data with the wafer data
             self.add_wafer_from_curve_data(
@@ -731,13 +732,13 @@ class CurveFollower:
 
         if debug:
             import traceback
-            print(f"\n🔥 ENTERING add_wafer_from_curve_data() - Future wafer #{self.segment.wafer_count + 1}")
-            print(f"    Start: [{start_point[0]:.3f}, {start_point[1]:.3f}, {start_point[2]:.3f}]")
-            print(f"    End:   [{end_point[0]:.3f}, {end_point[1]:.3f}, {end_point[2]:.3f}]")
-            print(f"    Type: {wafer_type}")
-            print(f"    CALL STACK:")
+            logger.debug(f"\n🔥 ENTERING add_wafer_from_curve_data() - Future wafer #{self.segment.wafer_count + 1}")
+            logger.debug(f"    Start: [{start_point[0]:.3f}, {start_point[1]:.3f}, {start_point[2]:.3f}]")
+            logger.debug(f"    End:   [{end_point[0]:.3f}, {end_point[1]:.3f}, {end_point[2]:.3f}]")
+            logger.info(f"    Type: {wafer_type}")
+            logger.debug(f"    CALL STACK:")
             for line in traceback.format_stack()[-3:-1]:
-                print(f"      {line.strip()}")
+                logger.debug(f"      {line.strip()}")
 
         # Calculate the lift based on wafer type and angles
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
@@ -929,9 +930,9 @@ class CurveFollower:
         wafer_axis = (end_point - start_point).normalize()
         chord_length = (end_point - start_point).Length
 
-        print(f"\n=== Creating Wafer {len(self.wafer_list) + 1} with cutting planes ===")
-        print(f"    Type: {wafer_type}")
-        print(f"    Rotation: {cut_rotation:.2f}°")
+        logger.info(f"\n=== Creating Wafer {len(self.wafer_list) + 1} with cutting planes ===")
+        logger.info(f"    Type: {wafer_type}")
+        logger.debug(f"    Rotation: {cut_rotation:.2f}°")
 
         # Check if this is the first wafer
         is_first_wafer = (len(self.wafer_list) == 0)
@@ -975,9 +976,9 @@ class CurveFollower:
 
             self.lcs_base.Placement = FreeCAD.Placement(placement_matrix)
 
-            print(f"\n     First wafer - updating base LCS orientation")
-            print(f"       Base LCS Z-axis alignment with cylinder: {z_axis.dot(wafer_axis):.4f}")
-            print(f"       Base LCS position: {self.lcs_base.Placement.Base}")
+            logger.debug(f"\n     First wafer - updating base LCS orientation")
+            logger.debug(f"       Base LCS Z-axis alignment with cylinder: {z_axis.dot(wafer_axis):.4f}")
+            logger.debug(f"       Base LCS position: {self.lcs_base.Placement.Base}")
         else:
             # For subsequent wafers, use the established coordinate system
             x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))

@@ -1,3 +1,14 @@
+try:
+    from core.logging_setup import get_logger
+except Exception:
+    try:
+        from logging_setup import get_logger
+    except Exception:
+        import logging
+        get_logger = lambda name: logging.getLogger(name)
+
+logger = get_logger(__name__)
+
 import string
 import inspect
 import importlib.util
@@ -88,8 +99,8 @@ class Driver(object):
             ValueError: If required sections are missing
         """
         try:
-            print(f"YAML FILE PATH: {yaml_file_path}")
-            yaml_file_path = "/home/don/FreecadProjects/Macros/PyMacros/PlantBuilder/src/yaml_files/small.yml"   #  !!!!!!!!!!!!!!!
+            logger.info(f"YAML FILE PATH: {yaml_file_path}")
+            # yaml_file_path = "/home/don/FreecadProjects/Macros/PyMacros/PlantBuilder/src/yaml_files/small.yml"   #  !!!!!!!!!!!!!!!
             with open(yaml_file_path, 'r') as file:
                 self.project_config = yaml.safe_load(file)
 
@@ -105,8 +116,6 @@ class Driver(object):
 
             # Apply global settings
             self._apply_global_settings()
-
-            print(f"Successfully loaded project: {self.project_config['metadata']['project_name']}")
 
         except FileNotFoundError:
             raise FileNotFoundError(f"YAML configuration file not found: {yaml_file_path}")
@@ -145,18 +154,12 @@ class Driver(object):
         Args:
             workflow_name: Name of workflow to execute. If None, uses main workflow.
         """
-        if not self.project_config:
-            # Fall back to old CSV-based workflow if no YAML loaded
-            self._legacy_workflow()
-            return
-
         # Determine which workflow to execute
         if workflow_name and workflow_name in self.workflows:
             operations = self.workflows[workflow_name]
-            print(f"Executing alternative workflow: {workflow_name}")
+            logger.info(f"Executing alternative workflow: {workflow_name}")
         else:
             operations = self.project_config['workflow']
-            print("Executing main workflow")
 
         # Execute operations in sequence
         for operation in operations:
@@ -190,7 +193,7 @@ class Driver(object):
         description = operation.get('description', '')
 
         if description:
-            print(f"Executing: {description}")
+            logger.info(f"Executing: {description}")
 
         if op_type == 'remove_objects':
             self._execute_remove_objects(operation)
@@ -201,13 +204,13 @@ class Driver(object):
         elif op_type == 'add_arrows':
             self._execute_add_arrows(operation)
         else:
-            print(f"Unknown operation type: {op_type}")
+            logger.error(f"Unknown operation type: {op_type}")
 
     def _execute_remove_objects(self, operation: Dict[str, Any]) -> None:
         """Execute remove_objects operation."""
         patterns = operation.get('patterns', [])
         for pattern in patterns:
-            # print(f"Removing objects matching: {pattern}")
+            # logger.debug(f"Removing objects matching: {pattern}")
             self.remove_objects_re(pattern)
 
     def _execute_set_position(self, operation: Dict[str, Any]) -> None:
@@ -221,7 +224,7 @@ class Driver(object):
             FreeCAD.Rotation(rotation[0], rotation[1], rotation[2])
         )
 
-        print(f"Set initial position: {position}, rotation: {rotation}")
+        logger.debug(f"Set initial position: {position}, rotation: {rotation}")
 
     def _execute_build_segment(self, operation: Dict[str, Any]) -> None:
         """Execute build_segment operation."""
@@ -286,22 +289,21 @@ class Driver(object):
 
             # Add debugging
             curve_info = follower.get_curve_info()
-            # print(f"Curve info: {curve_info}")
-            # print(f"First 5 curve points:")print
+            # logger.debug(f"Curve info: {curve_info}")
+            # logger.debug(f"First 5 curve points:")print
             # for i, point in enumerate(follower.curve_points[:5]):
-            #     print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
-            # print(f"Last 5 curve points:")
+            #     logger.debug(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
+            # logger.debug(f"Last 5 curve points:")
             # for i, point in enumerate(follower.curve_points[-5:], len(follower.curve_points) - 5):
-            #     print(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
+            #     logger.debug(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
             #
-            # print(f"\n=== COORDINATE DEBUGGING ===")
-            # print(f"Curve start point: {follower.curve_points[0]}")
-            # print(f"Curve end point: {follower.curve_points[-1]}")
+            # logger.debug(f"\n=== COORDINATE DEBUGGING ===")
+            # logger.debug(f"Curve start point: {follower.curve_points[0]}")
+            # logger.debug(f"Curve end point: {follower.curve_points[-1]}")
 
             # Get the actual segment base position
             segment_base = segment.get_lcs_base()
-            # TODO:  Shouldn't this always be the global oriain???
-            print(f"Segment base placement: {segment_base.Placement}")
+            logger.debug(f"Segment base placement: {segment_base.Placement}")
 
             # Process wafers
             follower.process_wafers(add_curve_vertices=False, debug=True)
@@ -313,28 +315,28 @@ class Driver(object):
                 segment_obj = segment.get_segment_object()
 
                 if segment_obj:
-                    print(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
+                    logger.info(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
 
                     # Add curve vertices BEFORE relocation
                     if add_curve_vertices:
-                        print("Adding curve vertices...")
+                        logger.debug("Adding curve vertices...")
                         follower.add_curve_visualization()
 
                     # Relocate segment - ONLY CALL THIS ONCE!
                     self.relocate_segment()
-                    print(f"Completed relocation for segment '{name}'")
+                    logger.info(f"Completed relocation for segment '{name}'")
 
                 else:
-                    print(f"Warning: Segment '{name}' created wafers but fusing failed")
+                    logger.info(f"Warning: Segment '{name}' created wafers but fusing failed")
             else:
-                print(f"Warning: No wafers created for segment '{name}'")
+                logger.info(f"Warning: No wafers created for segment '{name}'")
 
             # Force recompute
             FreeCAD.ActiveDocument.recompute()
             FreeCADGui.updateGui()
 
         except Exception as e:
-            print(f"Error creating curve follower segment '{name}': {e}")
+            logger.error(f"Error creating curve follower segment '{name}': {e}")
             raise
 
     def _build_helix_segment(self, operation: Dict[str, Any]) -> None:
@@ -366,7 +368,7 @@ class Driver(object):
                            lift_angle, rotate_angle, name)
 
         self.relocate_segment()
-        print(f"Created helix segment '{name}' with {wafer_count} wafers")
+        logger.info(f"Created helix segment '{name}' with {wafer_count} wafers")
 
 
     def _execute_add_arrows(self, operation: Dict[str, Any]) -> None:
@@ -385,28 +387,13 @@ class Driver(object):
         if global_settings.get('print_cuts', False):
             cuts_file = output_files.get('cuts_file', 'cutting_list.txt')
             cuts_file = direct + cuts_file
-            print(f"CUTS: {cuts_file}")
+            logger.info(f"CUTS: {cuts_file}")
             self.build_cut_list(cuts_file)
 
         if global_settings.get('print_place', False):
             place_file = output_files.get('place_file', 'placement_list.txt')
             place_file = direct + place_file
             self.build_place_list(place_file)
-
-    def _legacy_workflow(self) -> None:
-        """Fall back to the original CSV-based workflow."""
-        print("No YAML configuration loaded, using legacy CSV workflow")
-        case = self._get_workflow()
-
-        # ... (keep existing legacy workflow code for backwards compatibility)
-        if case == "segments":
-            self.build_from_file()
-            self.process_arrow_command()
-            if Driver.make_tf("print_cuts", self.parent_parms):
-                self.build_cut_list()
-            if Driver.make_tf("print_place", self.parent_parms):
-                self.build_place_list()
-        # ... (rest of legacy cases)
 
     # Utility methods (mostly unchanged)
     def _gobj(self):
@@ -471,7 +458,7 @@ class Driver(object):
         if hasattr(segment, 'already_relocated') and segment.already_relocated:
             return
 
-        print(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
+        logger.info(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
 
         # Validate segment before relocation
         is_valid, error_msg = segment.validate_segment_geometry()
@@ -486,7 +473,7 @@ class Driver(object):
         if len(self.segment_list) == 1:
             # First segment
             if hasattr(self, 'initial_position') and self.initial_position:
-                print(f"  First segment - applying initial position: {self.initial_position}")
+                logger.debug(f"  First segment - applying initial position: {self.initial_position}")
                 segment.move_to_top(self.initial_position)
         else:
             # Align to previous segment
@@ -494,16 +481,16 @@ class Driver(object):
             prev_end_lcs = prev_segment.get_lcs_top()
             current_start_lcs = segment.get_lcs_base()
 
-            print(f"\n  🔍 BEFORE ALIGNMENT:")
-            print(f"    Previous segment '{prev_segment.get_segment_name()}' ends at:")
-            print(f"      Position: {prev_end_lcs.Placement.Base}")
-            print(f"      Rotation: {prev_end_lcs.Placement.Rotation.toEuler()}")
-            print(f"    Current segment '{segment_name}' starts at:")
-            print(f"      Position: {current_start_lcs.Placement.Base}")
-            print(f"      Rotation: {current_start_lcs.Placement.Rotation.toEuler()}")
-            print(f"    Segment object at:")
-            print(f"      Position: {segment.segment_object.Placement.Base}")
-            print(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
+            logger.debug(f"\n  🔍 BEFORE ALIGNMENT:")
+            logger.debug(f"    Previous segment '{prev_segment.get_segment_name()}' ends at:")
+            logger.debug(f"      Position: {prev_end_lcs.Placement.Base}")
+            logger.debug(f"      Rotation: {prev_end_lcs.Placement.Rotation.toEuler()}")
+            logger.debug(f"    Current segment '{segment_name}' starts at:")
+            logger.debug(f"      Position: {current_start_lcs.Placement.Base}")
+            logger.debug(f"      Rotation: {current_start_lcs.Placement.Rotation.toEuler()}")
+            logger.debug(f"    Segment object at:")
+            logger.debug(f"      Position: {segment.segment_object.Placement.Base}")
+            logger.debug(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
 
             # Calculate alignment transform
             target_placement = prev_end_lcs.Placement
@@ -511,25 +498,24 @@ class Driver(object):
             # target_placement.Rotation = rot    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             align_transform = target_placement.multiply(current_placement.inverse())
 
-            print(f"\n  📐 CALCULATED TRANSFORM:")
-            print(f"    Position: {align_transform.Base}")
-            print(f"    Rotation: {align_transform.Rotation.toEuler()}")
+            logger.debug(f"\n  📐 CALCULATED TRANSFORM:")
+            logger.debug(f"    Position: {align_transform.Base}")
+            logger.debug(f"    Rotation: {align_transform.Rotation.toEuler()}")
             # Apply the transform
-            print(f"\n  🔨 CALLING move_to_top with transform...")
+            logger.debug(f"\n  🔨 CALLING move_to_top with transform...")
             segment.move_to_top(align_transform)
-            # return # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!111
 
-            print(f"\n  🔍 AFTER ALIGNMENT:")
-            print(f"    Current segment '{segment_name}' base now at:")
-            print(f"      Position: {segment.get_lcs_base().Placement.Base}")
-            print(f"      Rotation: {segment.get_lcs_base().Placement.Rotation.toEuler()}")
-            print(f"    Segment object now at:")
-            print(f"      Position: {segment.segment_object.Placement.Base}")
-            print(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
-            print(f"    Segment bounds:")
+            logger.debug(f"\n  🔍 AFTER ALIGNMENT:")
+            logger.debug(f"    Current segment '{segment_name}' base now at:")
+            logger.debug(f"      Position: {segment.get_lcs_base().Placement.Base}")
+            logger.debug(f"      Rotation: {segment.get_lcs_base().Placement.Rotation.toEuler()}")
+            logger.debug(f"    Segment object now at:")
+            logger.debug(f"      Position: {segment.segment_object.Placement.Base}")
+            logger.debug(f"      Rotation: {segment.segment_object.Placement.Rotation.toEuler()}")
+            logger.debug(f"    Segment bounds:")
             bounds = segment.segment_object.Shape.BoundBox
-            print(f"      Min: [{bounds.XMin:.3f}, {bounds.YMin:.3f}, {bounds.ZMin:.3f}]")
-            print(f"      Max: [{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
+            logger.debug(f"      Min: [{bounds.XMin:.3f}, {bounds.YMin:.3f}, {bounds.ZMin:.3f}]")
+            logger.debug(f"      Max: [{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
 
         # Apply segment rotation if specified
         angle = segment.get_segment_rotation()
@@ -548,7 +534,7 @@ class Driver(object):
             segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else self.initial_position)
 
         segment.already_relocated = True
-        print(f"\n✅ Completed relocation for segment '{segment_name}'")
+        logger.info(f"\n✅ Completed relocation for segment '{segment_name}'")
 
         # After segment.move_to_top(align_transform)
         self.doc.recompute()
@@ -559,7 +545,7 @@ class Driver(object):
         if filename is None:
             filename = self.get_parm("cuts_file")
 
-        print(f"Building cut list: {filename}")
+        logger.info(f"Building cut list: {filename}")
         with open(filename, "w+") as cuts_file:
             cuts_file.write("Cutting order:\n")
             for nbr, segment in enumerate(self.segment_list):
@@ -570,7 +556,7 @@ class Driver(object):
         if filename is None:
             filename = self.get_parm("place_file")
 
-        print(f"Building place list: {filename}")
+        logger.info(f"Building place list: {filename}")
         min_max = [[0, 0], [0, 0], [0, 0]]
 
         def find_min_max(base):
@@ -585,7 +571,7 @@ class Driver(object):
             global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
 
             for nbr, segment in enumerate(self.segment_list):
-                print(f"Segment: {segment.get_segment_name()}")
+                logger.debug(f"Segment: {segment.get_segment_name()}")
                 global_placement = segment.print_construction_list(nbr, cuts_file, global_placement, find_min_max)
 
             min_max_str = f"\nGlobal Min Max:\n\tX: {min_max[0][0]} - {min_max[0][1]}, "
@@ -607,7 +593,7 @@ class Driver(object):
                 point_nbr = self.handle_arrows.get('point_number', 0)
 
             if not self.segment_list:
-                print("No segments available for arrow placement")
+                logger.info("No segments available for arrow placement")
                 return
 
             # Place arrow on the first segment
@@ -617,14 +603,14 @@ class Driver(object):
             try:
                 lcs_top = segment_list_top.get_lcs_base()
                 if not lcs_top or not hasattr(lcs_top, 'Placement'):
-                    print("Warning: LCS object no longer valid for arrow placement")
+                    logger.error("Warning: LCS object no longer valid for arrow placement")
                     return
             except:
-                print("Warning: Cannot access LCS object for arrow placement")
+                logger.error("Warning: Cannot access LCS object for arrow placement")
                 return
 
             if not self.compound_transform:
-                print("Warning: No compound transform available for arrow placement")
+                logger.info("Warning: No compound transform available for arrow placement")
                 return
 
             new_place = lcs_top.Placement.multiply(self.compound_transform)
@@ -637,10 +623,10 @@ class Driver(object):
             # Register arrow with the segment
             segment_list_top.register_arrow(arrow_obj)
 
-            print(f"Added arrow '{arrow_name}' at point {point_nbr}")
+            logger.debug(f"Added arrow '{arrow_name}' at point {point_nbr}")
 
         except Exception as e:
-            print(f"Error creating arrow: {e}")
+            logger.error(f"Error creating arrow: {e}")
             # Don't re-raise - arrow creation is not critical
 
     def remove_objects_re(self, remove_string: str) -> None:
@@ -657,7 +643,7 @@ class Driver(object):
                 try:
                     self.doc.removeObject(item.Label)
                 except Exception as e:
-                    print(f"Remove object exception: {e}")
+                    logger.debug(f"Remove object exception: {e}")
 
     def _set_up_trace(self):
         """Set up tracing functionality."""
@@ -674,14 +660,14 @@ class Driver(object):
         """Write trace information."""
         if self.do_trace:
             if self.trace_file.closed:
-                print("FILE WAS CLOSED")
+                logger.debug("FILE WAS CLOSED")
                 self.trace_file = open(self.trace_file_name, "a")
             trace_string = ''
             for arg in args:
                 trace_string += "  " + repr(arg) + "\n"
             self.trace_file.write(trace_string)
             self.trace_file.flush()
-            print(trace_string)
+            logger.debug(trace_string)
 
     def handle_spreadsheet(self, sheet):
         """Create functions to handle spreadsheet parameters."""
@@ -695,7 +681,7 @@ class Driver(object):
                     self.trace_file.write(f"Parameter: {parm_name} fetched with value: {parm_value}\n")
                 return parm_value
             except Exception as e:
-                print(f"Exception {e} reading from spreadsheet for value: {parm_name}")
+                logger.error(f"Exception {e} reading from spreadsheet for value: {parm_name}")
                 raise e
 
         def set_parm(parm_name, new_value):
@@ -706,7 +692,7 @@ class Driver(object):
                     self.trace_file.write(f"Parameter: {parm_name} set with value: {new_value}\n")
                 return parm_value
             except Exception as e:
-                print(f"Exception {e} writing to spreadsheet for value: {parm_name}")
+                logger.error(f"Exception {e} writing to spreadsheet for value: {parm_name}")
                 raise e
 
         return get_parm, set_parm
@@ -714,16 +700,16 @@ class Driver(object):
     @staticmethod
     def make_tf(variable_name, parent_parms):
         """Convert string boolean to actual boolean."""
-        print(f"make_tf: Variable: {variable_name}, parent: {parent_parms}")
+        logger.debug(f"make_tf: Variable: {variable_name}, parent: {parent_parms}")
         try:
             if parent_parms.get(variable_name) == "True":
-                print(f"{variable_name} = True")
+                logger.debug(f"{variable_name} = True")
                 return True
             else:
-                print(f"{variable_name} = False")
+                logger.debug(f"{variable_name} = False")
                 return False
         except Exception as e:
-            print(f"Exception: {e} on reference to {variable_name}")
+            logger.error(f"Exception: {e} on reference to {variable_name}")
             raise e
 
     # @staticmethod

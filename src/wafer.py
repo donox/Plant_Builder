@@ -1,3 +1,14 @@
+try:
+    from core.logging_setup import get_logger
+except Exception:
+    try:
+        from logging_setup import get_logger
+    except Exception:
+        import logging
+        get_logger = lambda name: logging.getLogger(name)
+
+logger = get_logger(__name__)
+
 import numpy as np
 import time
 import FreeCAD
@@ -73,7 +84,7 @@ class Wafer(object):
             else:
                 extend2 = epsilon
 
-        print(f"        Extensions based on type {self.wafer_type}: extend1={extend1:.3f}, extend2={extend2:.3f}")
+        logger.debug(f"        Extensions based on type {self.wafer_type}: extend1={extend1:.3f}, extend2={extend2:.3f}")
 
         # Cap extensions to reasonable values
         max_extend = chord_length * 0.5
@@ -85,16 +96,16 @@ class Wafer(object):
         cylinder_length = chord_length + extend1 + extend2
         cylinder_end = pos1 + wafer_axis * (chord_length + extend2)
 
-        print(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
-        print(f"      Total cylinder length: {cylinder_length:.3f}")
+        logger.debug(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
+        logger.debug(f"      Total cylinder length: {cylinder_length:.3f}")
         # DEBUG: Print the relationship between LCS and actual geometry
-        print(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
-        print(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
-        print(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
-        print(f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
-        print(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
-        print(f"           Offset from LCS1 to cylinder start: {extend1:.3f} (backwards)")
-        print(f"           Offset from LCS2 to cylinder end: {(cylinder_end - pos2).Length:.3f}")
+        logger.debug(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
+        logger.debug(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
+        logger.debug(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
+        logger.debug(f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
+        logger.debug(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
+        logger.debug(f"           Offset from LCS1 to cylinder start: {extend1:.3f} (backwards)")
+        logger.debug(f"           Offset from LCS2 to cylinder end: {(cylinder_end - pos2).Length:.3f}")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -106,10 +117,10 @@ class Wafer(object):
 
         # Verify the shape is valid
         if not cylinder.isValid():
-            print(f"      WARNING: Created cylinder is not valid!")
+            logger.error(f"      WARNING: Created cylinder is not valid!")
             cylinder.fix(0.1, 0.1, 0.1)
             if not cylinder.isValid():
-                print(f"      ERROR: Could not fix invalid cylinder")
+                logger.error(f"      ERROR: Could not fix invalid cylinder")
 
         # Create the wafer object
         self.wafer = self.app.activeDocument().addObject("Part::Feature", wafer_name)
@@ -119,7 +130,7 @@ class Wafer(object):
         self.lcs1 = lcs1
         self.lcs2 = lcs2
 
-        print(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
+        logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
 
     @staticmethod
     def _make_rectangle(long_side, short_side):
@@ -164,7 +175,7 @@ class Wafer(object):
         e_face = e2.Shape.Faces[0]
         e_normal = e_face.normalAt(0, 0)  # normal to edge lies in plane of the ellipse
         self.angle = 90 - np.rad2deg(e_normal.getAngle(self.app.Vector(0, 0, 1)))
-        # print(f"{e_edge} at angle: {self.angle}")
+        # logger.debug(f"{e_edge} at angle: {self.angle}")
         loft = Part.makeLoft([e1.Shape.Faces[0].OuterWire, e2.Shape.Faces[0].OuterWire],  True)
         self.wafer = self.app.activeDocument().addObject('Part::Loft', wafer_name)
         self.wafer.Sections = [e1, e2]
@@ -226,7 +237,7 @@ class Wafer(object):
             by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
 
         """
-        # print(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
+        # logger.debug(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
         parts = {"CC": ("CC2", "CC2"),
                  "CE": ("CC2", "CE2"),
                  "EC": ("EC2", "CC2"),
@@ -239,22 +250,22 @@ class Wafer(object):
             la = self.lift_angle / 2
         result_vec = []
         for i in range(2):
-            # print(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
+            # logger.debug(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
             if "EC2" == parts_used[i]:
                 del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # print(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
+                # logger.debug(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
             if "CE2" == parts_used[i]:
                 del_x = 0  # -d2 * np.sin(la)
                 del_z = h2 - d2 * np.tan(la)
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # print(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
+                # logger.debug(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
             if "CC2" == parts_used[i]:
                 del_x = 0
                 del_z = 0              # removes cylindrical part
                 result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # print(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
+                # logger.debug(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
             rot = FreeCAD.Rotation(0, 0, 0)
             if parts_used[i] in ["CE2", "EC2"]:
                 # Not clear if Rotation wants radians or degrees.  Testing says radians - complex_path says degrees
@@ -264,11 +275,6 @@ class Wafer(object):
             new_place = FreeCAD.Placement(result_vec[i], rot)
             lcs.Placement = lcs.Placement.multiply(new_place)
             # break
-        # lcso = FreeCAD.activeDocument().getObject(lcs.Label)        # Debug - checking actual lift angle
-        # vec = FreeCAD.Vector(0, 0, 1)
-        # vec2 = lcso.getGlobalPlacement().Rotation.multVec(vec)
-        # angle = vec2.getAngle(vec)
-        # print(f"LIFT_LCS: Input: {np.round(np.rad2deg(lift_angle),2)}, lift_angle - {np.round(np.rad2deg(angle),2)}")
 
     def validate_segment_join(segment1_last_wafer, segment2_first_wafer):
         # Check that segment1 ends with 'C' and segment2 starts with 'C'

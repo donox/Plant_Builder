@@ -3,6 +3,17 @@
 This module provides functionality to generate various mathematical curves,
 apply transformations, and prepare them for use in wafer generation systems.
 """
+try:
+    from core.logging_setup import get_logger
+except Exception:
+    try:
+        from logging_setup import get_logger
+    except Exception:
+        import logging
+        get_logger = lambda name: logging.getLogger(name)
+
+logger = get_logger(__name__)
+
 
 import math
 import numpy as np
@@ -119,7 +130,7 @@ class Curves:
             elif operation == 'mirror':
                 self.transformed_curve = self._mirror_curve(self.transformed_curve, transform)
             else:
-                print(f"Warning: Unknown transformation operation: {operation}")
+                logger.info(f"Warning: Unknown transformation operation: {operation}")
 
     def get_curve_points(self) -> np.ndarray:
         """Get the final transformed curve points.
@@ -185,7 +196,7 @@ class Curves:
         # Force recompute to ensure objects are created
         self.doc.recompute()
 
-        print(f"Added {len(vertices)} vertices to group '{group_name}'")
+        logger.info(f"Added {len(vertices)} vertices to group '{group_name}'")
         return group_name
 
     # Transformation methods
@@ -548,7 +559,7 @@ class Curves:
             vertices.append(vertex_obj)
 
         point_group.addObjects(vertices)
-        print(f"Added {len(vertices)} vertices aligned with LCS to group '{group_name}'")
+        logger.info(f"Added {len(vertices)} vertices aligned with LCS to group '{group_name}'")
 
         return group_name
 
