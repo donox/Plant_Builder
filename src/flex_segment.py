@@ -339,8 +339,11 @@ class FlexSegment(object):
         if len(self.wafer_list) == 0:
             raise ValueError("Zero Length Wafer List when building helix")
         elif len(self.wafer_list) == 1:
-            fuse = self.wafer_list[0].wafer
-            fuse.Label = name + "FusedResult"
+            # Single wafer: create a separate fused feature from the wafer's shape
+            source = self.wafer_list[0].wafer
+            fuse = self.doc.addObject("Part::Feature", name + "FusedResult")
+            fuse.Shape = source.Shape.copy()
+            # Keep the original wafer in wafer_group; segment_object will point to 'fuse'
         else:
             # Start with first wafer
             result = self.wafer_list[0].wafer.Shape.copy()
@@ -442,6 +445,9 @@ class FlexSegment(object):
             # Also move individual wafers if they exist
             for wafer in self.wafer_list:
                 wafer_obj = wafer.get_wafer()
+                # Avoid double-transform when single-wafer: skip if wafer_obj *is* segment_object
+                if wafer_obj is self.segment_object:
+                    wafer_obj = None
                 if wafer_obj:
                     wafer_obj.Placement = transform.multiply(wafer_obj.Placement)
 

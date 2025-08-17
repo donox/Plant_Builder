@@ -531,7 +531,7 @@ class Driver(object):
 
         # Store transform for debugging
         if hasattr(segment, 'store_applied_transform'):
-            segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else self.initial_position)
+            segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else None) # self.initial_position)
 
         segment.already_relocated = True
         logger.info(f"\n✅ Completed relocation for segment '{segment_name}'")
