@@ -264,14 +264,7 @@ class FlexSegment(object):
                     f"  LCS2 at: [{lcs2.Placement.Base.x:.3f}, {lcs2.Placement.Base.y:.3f}, {lcs2.Placement.Base.z:.3f}]")
 
         else:
-            # Legacy positioning fallback
-            lcs1.Placement = self.lcs_top.Placement
-            lcs2.Placement = lcs1.Placement
-            wafer.lift_lcs(lcs2, wafer_type)
-            matrix = lcs2.Placement.toMatrix()
-            matrix.rotateZ(-rotation)
-            lcs2.Placement = FreeCAD.Placement(matrix)
-            self.lcs_top.Placement = lcs2.Placement
+            raise ValueError(f"Missing start or end position")
 
         # Create the wafer geometry
         try:
@@ -290,6 +283,30 @@ class FlexSegment(object):
                                       start_cut_angle, end_cut_angle)
             self._last_wafer = wafer
             self.wafer_list.append(wafer)
+
+            # Ensure wafer is placed under the segment's wafers subgroup
+            try:
+                # Create wafers group if missing
+                if not hasattr(self, 'wafer_group') or self.wafer_group is None:
+                    self.wafer_group = self.doc.addObject('App::DocumentObjectGroup', self.prefix + 'wafers')
+                    if hasattr(self, 'main_group') and self.main_group is not None:
+                        try:
+                            self.main_group.addObject(self.wafer_group)
+                        except Exception:
+                            pass
+                # Move the created wafer object under wafers group
+                if hasattr(wafer, 'wafer') and wafer.wafer is not None:
+                    try:
+                        self.wafer_group.addObject(wafer.wafer)
+                    except Exception:
+                        try:
+                            current = list(getattr(self.wafer_group, 'Group', []))
+                            current.append(wafer.wafer)
+                            self.wafer_group.Group = current
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"ERROR creating wafer: {e}")
             import traceback
@@ -325,9 +342,6 @@ class FlexSegment(object):
             fuse = self.wafer_list[0].wafer
             fuse.Label = name + "FusedResult"
         else:
-            # Sequential fusion - more robust than MultiFuse
-            logger.debug(f"Starting sequential fusion of {len(self.wafer_list)} wafers...")
-
             # Start with first wafer
             result = self.wafer_list[0].wafer.Shape.copy()
 
@@ -461,27 +475,6 @@ class FlexSegment(object):
                 doc.removeObject(item.Name)
 
     def make_cut_list(self, segment_no, cuts_file):
-        parm_str = f"\n\nCut list for segment: {segment_no}\n"
-        # parm_str += f"Lift Angle: {np.round(np.rad2deg(self.lift_angle), 2)} degrees\n"
-        # parm_str += f"Rotation Angle: {np.rad2deg(self.rotation_angle)} degrees\n"
-        # parm_str += f"Outside Wafer Height: {np.round(self.outside_height, 2)} in\n"
-        # if self.inside_height:
-        #     parm_str += f"Inside Wafer Height: {np.round(self.inside_height, 2)} in\n"
-        # else:
-        #     parm_str += f"Inside Wafer Height: NONE\n"
-        # parm_str += f"Cylinder Diameter: {np.round(self.cylinder_diameter, 2)} in\n"
-        # if self.helix_radius:
-        #     parm_str += f"Helix Radius: \t{np.round(self.helix_radius, 2)} in\n"
-        # else:
-        #     parm_str += f"Helix Radius: NONE\n"
-        # cuts_file.write(parm_str)
-        # cuts_file.write(f"Wafer Count: {self.wafer_count}\n\n")
-        # try:
-        #     step_size = np.rad2deg(self.rotation_angle)
-        # except Exception as e:
-        #     nbr_rotations = None
-        #     step_size = 0
-
         current_position = 0  # Angular position of index (0-360) when rotating cylinder for cutting
         s1 = "Step: "
         s2 = " at position: "
