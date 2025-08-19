@@ -1,36 +1,23 @@
 try:
     from core.logging_setup import get_logger
 except Exception:
-    try:
-        from logging_setup import get_logger
-    except Exception:
-        import logging
-        get_logger = lambda name: logging.getLogger(name)
+    import logging
+    get_logger = lambda name: logging.getLogger(name)
 
 logger = get_logger(__name__)
 
-import string
-import inspect
-import importlib.util
 import Part
-import Draft
 import FreeCAD
 import FreeCADGui
 import numpy as np
-import csv
 import re
-import time
-import importlib.util
-import sys
-import math
 import yaml
 from typing import Dict, Any, List, Optional
 from wafer import Wafer
-from flex_segment import FlexSegment
 from curve_follower import CurveFollower
+from flex_segment import FlexSegment
 from curves import Curves
 from make_helix import MakeHelix
-import utilities
 import pydevd_pycharm
 
 
@@ -38,7 +25,7 @@ import pydevd_pycharm
 # pip install pyyaml
 
 class Driver(object):
-    """Plant Builder Driver supporting YAML-based project configuration."""
+    """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
 
     def __init__(self, App, Gui, assembly_name, master_spreadsheet):
         """Initialize the Driver with FreeCAD integration.
@@ -170,15 +157,6 @@ class Driver(object):
         self._generate_output_files()
 
         FreeCAD.ActiveDocument.recompute()
-        FreeCADGui.updateGui()
-
-        # Try to refresh the 3D view
-        try:
-            view = FreeCADGui.activeDocument().activeView()
-            if view:
-                view.fitAll()
-        except:
-            pass
 
         if self.do_trace and self.trace_file:
                 self.trace_file.close()
@@ -189,6 +167,7 @@ class Driver(object):
         Args:
             operation: Dictionary containing operation definition
         """
+        logger.info(f"operation:{operation}")
         op_type = operation.get('operation')
         description = operation.get('description', '')
 
@@ -241,8 +220,6 @@ class Driver(object):
 
         if segment_type == 'curve_follower':
             self._build_curve_follower_segment(operation)
-        elif segment_type == 'helix':
-            self._build_helix_segment(operation)
         else:
             raise ValueError(f"Unknown segment type: {segment_type}")
 
@@ -286,20 +263,6 @@ class Driver(object):
                 min_height=min_height,
                 max_chord=max_chord
             )
-
-            # Add debugging
-            curve_info = follower.get_curve_info()
-            # logger.debug(f"Curve info: {curve_info}")
-            # logger.debug(f"First 5 curve points:")print
-            # for i, point in enumerate(follower.curve_points[:5]):
-            #     logger.debug(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
-            # logger.debug(f"Last 5 curve points:")
-            # for i, point in enumerate(follower.curve_points[-5:], len(follower.curve_points) - 5):
-            #     logger.debug(f"  Point {i}: [{point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f}]")
-            #
-            # logger.debug(f"\n=== COORDINATE DEBUGGING ===")
-            # logger.debug(f"Curve start point: {follower.curve_points[0]}")
-            # logger.debug(f"Curve end point: {follower.curve_points[-1]}")
 
             # Get the actual segment base position
             segment_base = segment.get_lcs_base()
@@ -538,8 +501,8 @@ class Driver(object):
 
         # After segment.move_to_top(align_transform)
         self.doc.recompute()
-        FreeCADGui.updateGui()
-        FreeCADGui.SendMsgToActiveView("ViewFit")
+        # FreeCADGui.updateGui()
+        # FreeCADGui.SendMsgToActiveView("ViewFit")
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""
         if filename is None:
@@ -647,6 +610,7 @@ class Driver(object):
 
     def _set_up_trace(self):
         """Set up tracing functionality."""
+        return
         self.trace_file_name = self.parent_parms.get("trace_file")
         self.do_trace = Driver.make_tf("do_trace", self.parent_parms)
         if self.do_trace:
@@ -658,6 +622,7 @@ class Driver(object):
 
     def trace(self, *args):
         """Write trace information."""
+        return
         if self.do_trace:
             if self.trace_file.closed:
                 logger.debug("FILE WAS CLOSED")
@@ -712,27 +677,12 @@ class Driver(object):
             logger.error(f"Exception: {e} on reference to {variable_name}")
             raise e
 
-    # @staticmethod
-    # def make_transform_align(object_1, object_2):
-    #     """Create transform that will move an object by the same relative positions of two input objects"""
-    #     l1 = object_1.Placement
-    #     l2 = object_2.Placement
-    #     tr = l1.inverse().multiply(l2)
-    #     FreeCAD.align = tr
-    #     return tr
-
     @staticmethod
     def make_transform_align(object_1, object_2):
         """Create transform that will move object_1 to object_2's placement"""
         # Since object_1 (current segment base) is at origin,
         # the transform is simply object_2's placement
         return FreeCAD.Placement(object_2.Placement)
-
-    # Keep all the legacy methods for backwards compatibility
-    def build_from_file(self):
-        """Legacy CSV file reader (kept for backwards compatibility)."""
-        # ... (keep existing implementation for backwards compatibility)
-        pass
 
 
 # Utility functions (unchanged)

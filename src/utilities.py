@@ -1,5 +1,4 @@
 import Part
-import Draft
 import FreeCAD
 import numpy as np
 import csv

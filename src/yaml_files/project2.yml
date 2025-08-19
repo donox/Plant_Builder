@@ -67,7 +67,7 @@ workflow:
       type: "circle"
       parameters:
         radius: 8.0        # Match the traditional helix
-        points: 20
+        points: 50          # 20 points fails to generate at least 3 points per wafer/chord (causes collinearity)
       transformations:
         - operation: "rotate"
           axis: "z"

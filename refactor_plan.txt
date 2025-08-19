@@ -31,7 +31,34 @@ STAGE 1 — FINISH LOGGING PASS IN src/ (PR 1–2)
 Goal: Remove remaining print() from src/ (tests can keep prints).
 
 [ ] Convert remaining print() -> logger.<level>; map “verbose”->debug, “warning”->warning.
-[ ] Ensure module-level logger = get_logger(__name__) exists everywhere.
+[ ] Ensure module-level logger = get_logger(__name__) exists everywhere.- operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "Curve Four"
+    description: "Turn toward center 135 degrees"
+
+    curve_spec:
+      type: "circle"
+      parameters:
+        radius: 8.0
+        points: 35
+      transformations:
+        - operation: "rotate"
+          axis: "z"
+          angle: 0
+      segment:
+        start_fraction: 0.0
+        end_fraction: 0.48
+
+    wafer_settings:
+      cylinder_diameter: 2.25
+      min_height: 0.5          # Much smaller
+      max_chord: 0.2            # Much tighter
+
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: true
 
 Verify:
 [ ] Smoke output unchanged in behavior; logs show same high-level milestones.
@@ -195,3 +222,10 @@ Use this section to jot down findings, flaky tests, or follow-ups as you progres
 - Baseline run notes: ...
 - Known flaky areas: ...
 - Next PR target: ...
+
+KNOWN ISSUES:
+[ ] Meta setting Show LCS: False is being ignmored
+[ ] Vertices are not in their group in model tree
+[ ] debug flag not consistent across project
+[ ] curve_follower:calculate_optimal_curve_points  is not used.  There is no supporting method for other than helix.
+[ ] LCS group in model tree contains LCSs that can be deleted (purple marker) indicates that it is unattached.

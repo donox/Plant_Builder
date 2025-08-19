@@ -8,7 +8,7 @@ from typing import Optional, Union
 _CONFIGURED = False
 
 def setup_root_logger(
-    level: int = logging.INFO,
+    level: int = logging.DEBUG,
     log_dir: Optional[Union[str, Path]] = None,
     console_level: Optional[int] = None,
 ) -> Path:

@@ -20,3 +20,42 @@ def to_local(placement_world: FreeCAD.Placement, base_lcs: Any) -> FreeCAD.Place
 def to_world(placement_local: FreeCAD.Placement, base_lcs: Any) -> FreeCAD.Placement:
     base = base_lcs.Placement if hasattr(base_lcs, "Placement") else base_lcs
     return base.multiply(placement_local)
+
+# core/core_utils.py
+def ensure_group(doc, name, parent=None):
+    """
+    Return a group (create if missing). If `parent` is given, ensure the group
+    is a child of `parent`. Uses Label for human-friendly matching.
+    """
+    # Find an existing group by Label
+    grp = None
+    for obj in getattr(doc, "Objects", []):
+        if obj.TypeId.startswith("App::DocumentObjectGroup") and getattr(obj, "Label", "") == name:
+            grp = obj
+            break
+
+    # Create if missing
+    if grp is None:
+        grp = doc.addObject("App::DocumentObjectGroup", name)
+        grp.Label = name
+
+    # Parent linkage (if provided)
+    if parent is not None:
+        members = getattr(parent, "Group", []) or []
+        if grp not in members:
+            parent.addObject(grp)
+
+    return grp
+
+
+def add_to_group(group, obj):
+    """
+    Put `obj` into `group` if not already present. Works for Group/LinkGroup.
+    """
+    if group is None or obj is None:
+        return obj
+    members = getattr(group, "Group", []) or []
+    if obj not in members:
+        group.addObject(obj)
+    return obj
+

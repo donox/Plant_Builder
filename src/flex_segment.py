@@ -1,14 +1,4 @@
-try:
-    from core.logging_setup import get_logger
-except Exception:
-    try:
-        from logging_setup import get_logger
-    except Exception:
-        import logging
-        get_logger = lambda name: logging.getLogger(name)
-
-logger = get_logger(__name__)
-
+from core.logging_setup import get_logger
 import sys
 
 import numpy as np
@@ -17,7 +7,8 @@ from wafer import Wafer
 import FreeCAD
 import FreeCADGui
 from utilities import position_to_str
-
+from core.core_utils import add_to_group, ensure_group
+logger = get_logger(__name__)
 
 class FlexSegment(object):
     def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment, trace=None):

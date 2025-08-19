@@ -126,6 +126,7 @@ class Wafer(object):
         self.wafer = self.app.activeDocument().addObject("Part::Feature", wafer_name)
         self.wafer.Shape = cylinder
         self.wafer.ViewObject.Transparency = 0
+        self.wafer.Visibility = False
 
         self.lcs1 = lcs1
         self.lcs2 = lcs2
@@ -139,48 +140,6 @@ class Wafer(object):
                                  FreeCAD.Vector(0, 0, 0)])
         face = Part.Face(part)
         return face
-
-    def make_rectangle_wafer_from_lcs(self, lcs1, lcs2, short_side, long_side, wafer_name):
-        """Make a wafer by cutting a cylinder with the xy-planes of two lcs's."""
-        # TODO: if xy-planes are parallel, need to handle special cases (2 - co-linear z-axis and not)
-        self.lcs_top = lcs2
-        self.lcs_base = lcs1
-        self.cylinder_radius = long_side / 2
-        self.wafer_name = wafer_name
-
-        # create a cylinder between lcs1 and lcs2 with the cylinder axis
-        # along the path between the origin points of the lcs's
-        wafer_1 = self.wafer_type[0]
-        wafer_2 = self.wafer_type[1]
-        if wafer_1 == 'E':
-            e1 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e1")
-            e1.Shape = self._make_rectangle(long_side, short_side)
-        elif wafer_1 == 'C':
-            e1 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e1")
-            e1.Shape = self._make_rectangle(long_side, short_side)
-        else:
-            raise ValueError(f"Unrecognized Wafer Type: {wafer_1}")
-        e1.Placement = lcs1.Placement
-        # e1.Visibility = False
-        if wafer_2 == 'E':
-            e2 = self.app.activeDocument().addObject("Part::Feature",  self.parm_set + "e2")
-            e2.Shape = self._make_rectangle(long_side, short_side)
-        elif wafer_2 == 'C':
-            e2 = self.app.activeDocument().addObject("Part::Feature", self.parm_set + "e2")
-            e2.Shape = self._make_rectangle(long_side, short_side)
-        else:
-            raise ValueError(f"Unrecognized Wafer Type: {wafer_2}")
-        e2.Placement = lcs2.Placement
-        # e2.Visibility = False
-        e_face = e2.Shape.Faces[0]
-        e_normal = e_face.normalAt(0, 0)  # normal to edge lies in plane of the ellipse
-        self.angle = 90 - np.rad2deg(e_normal.getAngle(self.app.Vector(0, 0, 1)))
-        # logger.debug(f"{e_edge} at angle: {self.angle}")
-        loft = Part.makeLoft([e1.Shape.Faces[0].OuterWire, e2.Shape.Faces[0].OuterWire],  True)
-        self.wafer = self.app.activeDocument().addObject('Part::Loft', wafer_name)
-        self.wafer.Sections = [e1, e2]
-        self.wafer.Solid = True
-        self.wafer.Visibility = True
 
     def get_lift_angle(self):
         return self.lift_angle

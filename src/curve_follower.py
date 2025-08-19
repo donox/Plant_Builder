@@ -196,6 +196,8 @@ class CurveFollower:
         Returns:
             Maximum perpendicular distance from curve to chord
         """
+        # IF there are not at least three points the curve and chord are the same so they
+        #     appear to be collinear
         if len(curve_segment) <= 2:
             return 0.0
 
