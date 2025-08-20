@@ -196,9 +196,7 @@ class CurveFollower:
         Returns:
             Maximum perpendicular distance from curve to chord
         """
-        # IF there are not at least three points the curve and chord are the same so they
-        #     appear to be collinear
-        if len(curve_segment) <= 2:
+        if len(curve_segment) <= 2:     # Need at least 3 points or curve and chord appear to be collinear
             return 0.0
 
         chord_vector = end_point - start_point
@@ -262,155 +260,144 @@ class CurveFollower:
         return self.curves.calculate_optimal_points(max_chord_error)
 
     def _calculate_ellipse_parameters(
-        self, start_point: np.ndarray, end_point: np.ndarray,
-        start_index: int, end_index: int,
-        is_first_wafer: bool = False, is_last_wafer: bool = False
+            self,
+            start_point: np.ndarray,
+            end_point: np.ndarray,
+            start_index: int,
+            end_index: int,
+            is_first_wafer: bool = False,
+            is_last_wafer: bool = False,
     ) -> Tuple[float, float, float, str]:
         """
-        Calculate ellipse angles and wafer type for the wafer ends.
+        Calculate start/end cut angles (lifts) and rotation for a wafer.
 
-        CORRECTED VERSION: Uses bisecting plane approach where adjacent wafers
-        share a single cutting plane.
+        Fixes:
+        1) Use *adjacent* chords (±1) to compute bend ⇒ constant lifts on circular arcs.
+        2) Detect planarity via plane fit; for planar curves, force rotation = 0°.
+           (Works even when the plane is tilted; z need not be constant.)
         """
 
-        # Vector between endpoints (current wafer's chord/axis)
-        chord_vector = end_point - start_point
-        chord_length = np.linalg.norm(chord_vector)
+        # Current chord (axis of this wafer)
+        chord_vec = end_point - start_point
+        chord_len = float(np.linalg.norm(chord_vec))
+        if chord_len < 1e-10:
+            return 0.0, 0.0, 0.0, "CC"
+        chord_hat = chord_vec / chord_len
 
-        if chord_length < 1e-10:
+        # Early exit: if local segment is collinear, both cuts are circular
+        if self._check_segment_collinearity(start_point, end_point, start_index, end_index):
             return 0.0, 0.0, 0.0, "CC"
 
-        chord_unit = chord_vector / chord_length
+        # --- Neighbor chords (use ±1, not ±10) -------------------------------
+        N = len(self.curve_points)
+        # previous chord (for start cut when not first)
+        prev_hat = None
+        if start_index > 0:
+            prev_vec = start_point - self.curve_points[start_index - 1]
+            L = float(np.linalg.norm(prev_vec))
+            if L > 1e-8:
+                prev_hat = prev_vec / L
 
-        # Check for collinearity
-        is_collinear = self._check_segment_collinearity(start_point, end_point, start_index, end_index)
+        # next chord (for end cut when not last)
+        next_hat = None
+        if end_index < N - 1:
+            next_vec = self.curve_points[end_index + 1] - end_point
+            L = float(np.linalg.norm(next_vec))
+            if L > 1e-8:
+                next_hat = next_vec / L
 
-        if is_collinear:
-            return 0.0, 0.0, 0.0, "CC"
+        # --- Planarity detection for this wafer's local neighborhood ----------
+        # Use a small window around [start_index, end_index] for stability
+        i0 = max(0, start_index - 2)
+        i1 = min(N - 1, end_index + 2)
+        neighborhood = self.curve_points[i0: i1 + 1]
+        is_planar, n_hat, _, _ = self._fit_plane(neighborhood)
 
-        # Initialize angles
+        # --- Compute bend angles (use signed angle when planar) ---------------
+        def bend_between(u: np.ndarray, v: np.ndarray) -> float:
+            if u is None or v is None:
+                return 0.0
+            if is_planar:
+                return abs(self._signed_angle_in_plane(u, v, n_hat))
+            # generic unsigned bend for non-planar
+            dotv = float(np.clip(np.dot(u / (np.linalg.norm(u) + 1e-12),
+                                        v / (np.linalg.norm(v) + 1e-12)), -1.0, 1.0))
+            return float(np.arccos(dotv))
+
         start_angle = 0.0
         end_angle = 0.0
-        rotation_angle = 0.0
+        rotation_angle = 0.0  # default; may remain 0 for planar curves
+        wafer_type = "EE"  # default (overridden below)
 
-        # For first wafer, start is always circular
-        # For first wafer, start is always circular
-        # For first wafer, start is always circular
         if is_first_wafer:
-            # First wafer always has a perpendicular cut (circular)
-            # This is 0° in the wafer's local coordinate system
+            # Start is circular; end cut bisects bend between this chord and next
+            wafer_type = "CE"
             start_angle = 0.0
-
-            # DEBUG
-            # logger.debug(f"    First wafer start: perpendicular cut")
-            # logger.debug(f"      Chord unit vector: [{chord_unit[0]:.3f}, {chord_unit[1]:.3f}, {chord_unit[2]:.3f}]")
-
-            # For the end cut, we need the angle to the NEXT wafer
-            if end_index < len(self.curve_points) - 1:
-                # Get next wafer's chord
-                next_point = self.curve_points[min(end_index + 10, len(self.curve_points) - 1)]
-                next_chord = next_point - end_point
-                next_chord_length = np.linalg.norm(next_chord)
-
-                if next_chord_length > 1e-6:
-                    next_chord_unit = next_chord / next_chord_length
-
-                    # Calculate angle between current and next chord
-                    dot_product = np.dot(chord_unit, next_chord_unit)
-                    dot_product = np.clip(dot_product, -1.0, 1.0)
-                    bend_angle = np.arccos(dot_product)
-
-                    # The cut angle is half the bend angle (bisecting plane)
-                    end_angle = bend_angle / 2.0
-
-                    # DEBUG
-                    logger.debug(
-                        f"    First wafer end: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(end_angle):.2f}°")
-
-            wafer_type = "CE" if end_angle > 0.01 else "CC"
+            end_angle = bend_between(chord_hat, next_hat) * 0.5 if next_hat is not None else 0.0
 
         elif is_last_wafer:
-            # For the start cut, we need the angle from the PREVIOUS wafer
-            if start_index > 0:
-                # Get previous wafer's chord
-                prev_point = self.curve_points[max(start_index - 10, 0)]
-                prev_chord = start_point - prev_point
-                prev_chord_length = np.linalg.norm(prev_chord)
-
-                if prev_chord_length > 1e-6:
-                    prev_chord_unit = prev_chord / prev_chord_length
-
-                    # Calculate angle between previous and current chord
-                    dot_product = np.dot(prev_chord_unit, chord_unit)
-                    dot_product = np.clip(dot_product, -1.0, 1.0)
-                    bend_angle = np.arccos(dot_product)
-
-                    # The cut angle is half the bend angle (bisecting plane)
-                    start_angle = bend_angle / 2.0
-
-                    # DEBUG
-                    logger.debug(
-                        f"    Last wafer start: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(start_angle):.2f}°")
-
-            end_angle = 0.0  # Last wafer ends with circular cut
+            # End is circular; start cut bisects bend between prev and this chord
             wafer_type = "EC"
+            start_angle = bend_between(prev_hat, chord_hat) * 0.5 if prev_hat is not None else 0.0
+            end_angle = 0.0
 
         else:
-            # Middle wafer - both cuts are elliptical
-
-            # Start cut angle (from previous wafer)
-            if start_index > 0:
-                prev_point = self.curve_points[max(start_index - 10, 0)]
-                prev_chord = start_point - prev_point
-                prev_chord_length = np.linalg.norm(prev_chord)
-
-                if prev_chord_length > 1e-6:
-                    prev_chord_unit = prev_chord / prev_chord_length
-                    dot_product = np.dot(prev_chord_unit, chord_unit)
-                    dot_product = np.clip(dot_product, -1.0, 1.0)
-                    bend_angle = np.arccos(dot_product)
-                    start_angle = bend_angle / 2.0
-
-                    # DEBUG
-                    logger.debug(
-                        f"    Wafer start: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(start_angle):.2f}°")
-
-            # End cut angle (to next wafer)
-            if end_index < len(self.curve_points) - 1:
-                next_point = self.curve_points[min(end_index + 10, len(self.curve_points) - 1)]
-                next_chord = next_point - end_point
-                next_chord_length = np.linalg.norm(next_chord)
-
-                if next_chord_length > 1e-6:
-                    next_chord_unit = next_chord / next_chord_length
-                    dot_product = np.dot(chord_unit, next_chord_unit)
-                    dot_product = np.clip(dot_product, -1.0, 1.0)
-                    bend_angle = np.arccos(dot_product)
-                    end_angle = bend_angle / 2.0
-
-                    # DEBUG
-                    logger.debug(
-                        f"    Wafer end: bend_angle = {np.rad2deg(bend_angle):.2f}°, cut_angle = {np.rad2deg(end_angle):.2f}°")
-
+            # Middle wafer: both ends elliptical; each end uses adjacent bend/2
             wafer_type = "EE"
+            start_angle = bend_between(prev_hat, chord_hat) * 0.5 if prev_hat is not None else 0.0
+            end_angle = bend_between(chord_hat, next_hat) * 0.5 if next_hat is not None else 0.0
 
-            # Calculate rotation angle ONLY for EE wafers
-            # This is the twist needed between the ellipse orientations
-            if wafer_type == "EE":
-                # Simple approach: use angular progression around curve
-                start_angle_2d = np.arctan2(start_point[1], start_point[0])
-                end_angle_2d = np.arctan2(end_point[1], end_point[0])
+        # --- Rotation logic ---------------------------------------------------
+        # For planar curves there is zero torsion ⇒ no ellipse twist ⇒ rotation = 0
+        if not is_planar and wafer_type == "EE":
+            # Keep existing behavior for non-planar curves, but compute from local frame
+            # rather than world polar angle of positions. Approximate by comparing the
+            # local "m" axis (binormal × tangent) at each end, using parallel transport.
+            # Minimal implementation: reuse neighbor tangents to estimate twist.
+            # If either neighbor is missing, leave rotation 0.
+            if (prev_hat is not None) and (next_hat is not None):
+                # Build approximate local frames at start/end using chord and a
+                # transported normal to avoid arbitrary world-axis coupling.
+                # Choose a stable reference normal:
+                ref = np.array([0.0, 0.0, 1.0])
+                if abs(np.dot(ref, chord_hat)) > 0.9:
+                    ref = np.array([1.0, 0.0, 0.0])
 
-                rotation_angle = end_angle_2d - start_angle_2d
-                rotation_angle = self.normalize_angle(rotation_angle)
+                m_start = np.cross(ref, chord_hat)
+                if np.linalg.norm(m_start) < 1e-8:
+                    # fallback to another ref if degenerate
+                    ref2 = np.array([0.0, 1.0, 0.0])
+                    m_start = np.cross(ref2, chord_hat)
+                m_start /= (np.linalg.norm(m_start) + 1e-12)
 
-                # DEBUG
-                logger.debug(f"    EE wafer rotation: {np.rad2deg(rotation_angle):.2f}°")
+                # transport m_start to end by projecting into plane ⟂ to chord_hat and re-orthonormalizing with next_hat
+                # (crude but removes world-angle dependence)
+                proj = m_start - np.dot(m_start, chord_hat) * chord_hat
+                if np.linalg.norm(proj) > 1e-8:
+                    m_end_ref = proj / np.linalg.norm(proj)
+                else:
+                    m_end_ref = m_start
 
-        # Clamp angles to reasonable values
-        max_angle = np.pi / 3  # 60 degrees max
-        start_angle = np.clip(start_angle, 0, max_angle)
-        end_angle = np.clip(end_angle, 0, max_angle)
+                # true "m" at end is perpendicular to next_hat within its normal plane
+                m_end_true = np.cross(next_hat, chord_hat)
+                if np.linalg.norm(m_end_true) < 1e-8:
+                    m_end_true = m_end_ref
+                m_end_true /= (np.linalg.norm(m_end_true) + 1e-12)
+
+                # rotation about chord between m_end_ref → m_end_true
+                axis = chord_hat
+                rot_sin = np.dot(axis, np.cross(m_end_ref, m_end_true))
+                rot_cos = np.clip(np.dot(m_end_ref, m_end_true), -1.0, 1.0)
+                rotation_angle = float(np.arctan2(rot_sin, rot_cos))
+
+        # Clamp angles to ≤ 60° to keep cuts reasonable
+        max_angle = np.pi / 3
+        start_angle = float(np.clip(start_angle, 0.0, max_angle))
+        end_angle = float(np.clip(end_angle, 0.0, max_angle))
+
+        # Nudge tiny numerical noise to exactly zero for cleaner cut lists
+        if abs(rotation_angle) < 1e-6:
+            rotation_angle = 0.0
 
         return start_angle, end_angle, rotation_angle, wafer_type
 
@@ -985,6 +972,50 @@ class CurveFollower:
             # For subsequent wafers, use the established coordinate system
             x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
             y_axis = self.lc
+
+
+    def _fit_plane(self, pts: np.ndarray, eps: float = 1e-6):
+        """
+        Least-squares plane fit. Returns (is_planar, n_hat, p0, rms).
+        - is_planar: True if all points lie near a single plane
+        - n_hat: unit normal
+        - p0: a point on the plane (centroid)
+        - rms: root-mean-square distance to plane
+        """
+        if pts.shape[0] < 3:
+            return True, np.array([0.0, 0.0, 1.0]), pts[0] if len(pts) else np.zeros(3), 0.0
+
+        c = pts.mean(axis=0)
+        M = pts - c
+        # PCA: smallest singular vector is the plane normal
+        _, _, vh = np.linalg.svd(M, full_matrices=False)
+        n = vh[-1, :]
+        n_norm = np.linalg.norm(n)
+        n_hat = n / (n_norm if n_norm > 0 else 1.0)
+
+        # distances of points to plane
+        d = M @ n_hat
+        rms = float(np.sqrt(np.mean(d * d)))
+
+        # Scale tolerance to curve extent so it works for tiny/large curves
+        extent = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2]), 1.0)
+        is_planar = rms <= (eps * extent)
+        return is_planar, n_hat, c, rms
+
+
+    def _signed_angle_in_plane(self, t1: np.ndarray, t2: np.ndarray, n_hat: np.ndarray) -> float:
+        """
+        Signed angle between directions t1 and t2 measured in the plane with normal n_hat.
+        Positive sign by right-hand rule about n_hat.
+        """
+        t1u = t1 / (np.linalg.norm(t1) + 1e-12)
+        t2u = t2 / (np.linalg.norm(t2) + 1e-12)
+        cross = np.cross(t1u, t2u)
+        sin_term = np.dot(n_hat, cross)
+        cos_term = np.clip(np.dot(t1u, t2u), -1.0, 1.0)
+        return float(np.arctan2(sin_term, cos_term))
+
+
 def format_mixed(result):
     if isinstance(result, float):
         return f"{result:.4f}"
