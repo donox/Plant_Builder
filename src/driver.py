@@ -529,18 +529,25 @@ class Driver(object):
                 if base[i] > min_max[i][1]:
                     min_max[i][1] = np.round(base[i], 3)
 
-        with open(filename, "w+") as cuts_file:
-            cuts_file.write("Wafer Placement:\n\n\n")
+        with open(filename, "w+") as place_file:
+            place_file.write("Wafer Placement:\n\n\n")
             global_placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(0, 0, 0))
 
             for nbr, segment in enumerate(self.segment_list):
                 logger.debug(f"Segment: {segment.get_segment_name()}")
-                global_placement = segment.print_construction_list(nbr, cuts_file, global_placement, find_min_max)
+                global_placement = segment.print_construction_list(nbr, place_file, global_placement, find_min_max)
 
             min_max_str = f"\nGlobal Min Max:\n\tX: {min_max[0][0]} - {min_max[0][1]}, "
             min_max_str += f"Y: {min_max[1][0]} - {min_max[1][1]}, Z: {min_max[2][0]} - {min_max[2][1]}"
-            cuts_file.write(f"{min_max_str}")
+            place_file.write(f"{min_max_str}")
 
+        # After writing the placement list, clean up construction LCSs
+        for segment in self.segment_list:
+            try:
+                # Force deletion of per-wafer LCSs; base/top are preserved.
+                segment.cleanup_wafer_lcs(keep_debug=False)
+            except Exception as e:
+                logger.warning(f"Cleanup failed for segment {segment.get_segment_name()}: {e}")
     def process_arrow_command(self):
         """Process deferred arrow command."""
         if not self.handle_arrows:

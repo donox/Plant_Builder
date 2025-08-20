@@ -39,10 +39,108 @@ class FlexSegment(object):
         self.main_group.addObject(self.lcs_group)
         self.main_group.addObject(self.wafer_group)
 
+        try:
+            self.wafer_group.addObjects([self.lcs_base, self.lcs_top])
+        except Exception:
+            try:
+                self.wafer_group.addObject(self.lcs_base)
+                self.wafer_group.addObject(self.lcs_top)
+            except Exception:
+                # very old FreeCAD: fall back to raw Group property
+                current = list(getattr(self.wafer_group, "Group", []))
+                for obj in (self.lcs_base, self.lcs_top):
+                    if obj not in current:
+                        current.append(obj)
+                self.wafer_group.Group = current
+
         self.transform_callbacks = []
         self._setup_transform_properties()
         self.already_relocated = False  # Track relocation status
         self.stopper = False
+
+    def cleanup_wafer_lcs(self, keep_debug: bool = None):
+        """
+        Remove temporary per-wafer LCSs (…_1lcs / …_2lcs) and ensure the segment's
+        *_lcs_base / *_lcs_top live only in the wafers group.
+
+        If keep_debug is True we keep the temp LCSs (useful for inspection).
+        By default it honors self.show_lcs; pass keep_debug=False to force cleanup.
+        """
+        if keep_debug is None:
+            keep_debug = bool(getattr(self, "show_lcs", False))
+
+        base_obj = self.lcs_base
+        top_obj = self.lcs_top
+
+        # 1) Ensure base/top are in the wafers group
+        try:
+            self.wafer_group.addObjects([base_obj, top_obj])
+        except Exception:
+            current = list(getattr(self.wafer_group, "Group", []))
+            for obj in (base_obj, top_obj):
+                if obj not in current:
+                    current.append(obj)
+            self.wafer_group.Group = current
+
+        # …and make sure they are NOT in the lcs_group anymore
+        try:
+            # FreeCAD >= 0.21
+            if hasattr(self.lcs_group, "removeObject"):
+                for obj in (base_obj, top_obj):
+                    try:
+                        self.lcs_group.removeObject(obj)
+                    except Exception:
+                        pass
+            # very old FreeCAD fallback
+            else:
+                g = list(getattr(self.lcs_group, "Group", []))
+                g = [o for o in g if o not in (base_obj, top_obj)]
+                self.lcs_group.Group = g
+        except Exception:
+            pass
+
+        if keep_debug:
+            # keep all the per-wafer LCSs
+            try:
+                self.doc.recompute()
+            except Exception:
+                pass
+            return
+
+        # 2) Delete only the temporary wafer LCS objects (…_1lcs / …_2lcs)
+        temp_items = list(getattr(self.lcs_group, "Group", []))
+        for obj in temp_items:
+            label = getattr(obj, "Label", "") or ""
+            name = getattr(obj, "Name", "") or ""
+
+            # strictly match only the temp LCS names
+            is_temp_lcs = label.endswith(("1lcs", "2lcs")) or name.endswith(("1lcs", "2lcs"))
+            if not is_temp_lcs:
+                continue  # never delete base/top or anything else here
+
+            # remove from group then from document
+            try:
+                if hasattr(self.lcs_group, "removeObject"):
+                    self.lcs_group.removeObject(obj)
+            except Exception:
+                pass
+            try:
+                self.doc.removeObject(obj.Name)
+            except Exception:
+                pass
+
+        # Optionally drop now-empty lcs_group from the segment group
+        try:
+            group_empty = not getattr(self.lcs_group, "Group", [])
+            if group_empty and hasattr(self.main_group, "removeObject"):
+                self.main_group.removeObject(self.lcs_group)
+        except Exception:
+            pass
+
+        try:
+            self.doc.recompute()
+        except Exception:
+            pass
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
                   start_pos=None, end_pos=None, curve_tangent=None):
