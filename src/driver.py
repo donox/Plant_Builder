@@ -60,12 +60,7 @@ class Driver(object):
         self.z_min = None
         self.z_max = None
 
-        # Trace and debugging
-        self.trace_file_name = None
-        self.trace_file = None
-        self.do_trace = None
         self.relocate_segments_tf = None
-        self._set_up_trace()
         self.stopper = False
 
         # Utility functions
@@ -88,7 +83,6 @@ class Driver(object):
         """
         try:
             logger.info(f"YAML FILE PATH: {yaml_file_path}")
-            # yaml_file_path = "/home/don/FreecadProjects/Macros/PyMacros/PlantBuilder/src/yaml_files/small.yml"   #  !!!!!!!!!!!!!!!
             with open(yaml_file_path, 'r') as file:
                 self.project_config = yaml.safe_load(file)
 
@@ -113,10 +107,6 @@ class Driver(object):
     def _apply_global_settings(self) -> None:
         """Apply global settings from the YAML configuration."""
         global_settings = self.project_config.get('global_settings', {})
-
-        # Override trace settings if specified in YAML
-        if 'do_trace' in global_settings:
-            self.do_trace = global_settings['do_trace']
 
         # Set relocate segments flag
         self.relocate_segments_tf = global_settings.get('relocate_segments', True)
@@ -159,9 +149,6 @@ class Driver(object):
         self._generate_output_files()
 
         FreeCAD.ActiveDocument.recompute()
-
-        if self.do_trace and self.trace_file:
-                self.trace_file.close()
 
     def _execute_operation(self, operation: Dict[str, Any]) -> None:
         """Execute a single workflow operation.
@@ -269,7 +256,7 @@ class Driver(object):
             logger.debug(f"Segment base placement: {segment_base.Placement}")
 
             # Process wafers
-            follower.process_wafers(add_curve_vertices=False, debug=True)
+            follower.process_wafers(add_curve_vertices=False)
 
             # Fuse wafers if any were created
             if segment.get_wafer_count() > 0:
@@ -586,62 +573,6 @@ class Driver(object):
     def get_composite_bounds(self):
         """Return wafer extents in each dimension"""
         return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
-
-
-
-    def _set_up_trace(self):
-        """Set up tracing functionality."""
-        return
-        self.trace_file_name = self.parent_parms.get("trace_file")
-        self.do_trace = Driver.make_tf("do_trace", self.parent_parms)
-        if self.do_trace:
-            self.trace_file = open(self.trace_file_name, "w")
-            self.trace_file.write("Start Trace\n")
-            self.trace_file.flush()
-        else:
-            self.trace_file = None
-
-    def trace(self, *args):
-        """Write trace information."""
-        return
-        if self.do_trace:
-            if self.trace_file.closed:
-                logger.debug("FILE WAS CLOSED")
-                self.trace_file = open(self.trace_file_name, "a")
-            trace_string = ''
-            for arg in args:
-                trace_string += "  " + repr(arg) + "\n"
-            self.trace_file.write(trace_string)
-            self.trace_file.flush()
-            logger.debug(trace_string)
-
-    def handle_spreadsheet(self, sheet):
-        """Create functions to handle spreadsheet parameters."""
-
-        def get_parm(parm_name):
-            try:
-                parm_value = sheet.get(parm_name)
-                if parm_value == "None":
-                    parm_value = None
-                if self.do_trace:
-                    self.trace_file.write(f"Parameter: {parm_name} fetched with value: {parm_value}\n")
-                return parm_value
-            except Exception as e:
-                logger.error(f"Exception {e} reading from spreadsheet for value: {parm_name}")
-                raise e
-
-        def set_parm(parm_name, new_value):
-            try:
-                parm_value = sheet.set(parm_name, new_value)
-                sheet.recompute()
-                if self.do_trace:
-                    self.trace_file.write(f"Parameter: {parm_name} set with value: {new_value}\n")
-                return parm_value
-            except Exception as e:
-                logger.error(f"Exception {e} writing to spreadsheet for value: {parm_name}")
-                raise e
-
-        return get_parm, set_parm
 
     @staticmethod
     def make_tf(variable_name, parent_parms):

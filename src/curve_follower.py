@@ -22,7 +22,6 @@ import FreeCAD
 import FreeCADGui
 from curves import Curves  # Import the new Curves class
 
-debug = False
 class CurveFollower:
     """Creates wafer slices along a curved cylinder path.
 
@@ -45,7 +44,6 @@ class CurveFollower:
 
     def __init__(self, doc: Any, segment: Any, cylinder_diameter: float,
                  curve_spec: Dict[str, Any], min_height: float, max_chord: float):
-        self.debug = True
         """Initialize the CurveFollower.
 
         Args:
@@ -642,7 +640,6 @@ class CurveFollower:
             # logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")
             # logger.debug(f"  End angle: {math.degrees(end_angle):.2f}°")
             outside_height = chord_length + self.cylinder_diameter  # Conservative fallback
-            # logger.debug(f"  Capped to: {outside_height:.4f}")
 
         return outside_height
 
@@ -670,7 +667,7 @@ class CurveFollower:
 
         return vertex_group_name
 
-    def process_wafers(self, add_curve_vertices: bool = False, debug: bool = True) -> None:
+    def process_wafers(self, add_curve_vertices: bool = False) -> None:
         """Main processing method that creates and adds wafers to the segment."""
 
         # Step 1: Create wafer list
@@ -685,8 +682,6 @@ class CurveFollower:
         # Step 4: Process each wafer
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
                 corrected_wafers):
-            if debug:
-                logger.info(f"\nProcessing wafer {i + 1}/{len(corrected_wafers)}:")
 
             # Call add_wafer_from_curve_data with the wafer data
             self.add_wafer_from_curve_data(
@@ -695,8 +690,7 @@ class CurveFollower:
                 start_angle,
                 end_angle,
                 rotation_angle,
-                wafer_type,
-                debug=debug
+                wafer_type
             )
 
         # Step 5: Add curve visualization if requested
@@ -704,7 +698,7 @@ class CurveFollower:
             self.add_curve_visualization()
 
     def add_wafer_from_curve_data(self, start_point, end_point, start_angle,
-                                  end_angle, rotation_angle, wafer_type, debug=False):
+                                  end_angle, rotation_angle, wafer_type):
         """Add a wafer using curve-derived data.
 
         This method converts curve data into the format expected by flex_segment.add_wafer()
@@ -716,18 +710,7 @@ class CurveFollower:
             end_angle: float, end cut angle in radians
             rotation_angle: float, rotation angle in radians
             wafer_type: str, type of wafer (CE, EE, EC, CC)
-            debug: bool, whether to print debug info
         """
-
-        if debug:
-            import traceback
-            logger.debug(f"\n🔥 ENTERING add_wafer_from_curve_data() - Future wafer #{self.segment.wafer_count + 1}")
-            logger.debug(f"    Start: [{start_point[0]:.3f}, {start_point[1]:.3f}, {start_point[2]:.3f}]")
-            logger.debug(f"    End:   [{end_point[0]:.3f}, {end_point[1]:.3f}, {end_point[2]:.3f}]")
-            logger.info(f"    Type: {wafer_type}")
-            logger.debug(f"    CALL STACK:")
-            for line in traceback.format_stack()[-3:-1]:
-                logger.debug(f"      {line.strip()}")
 
         # Calculate the lift based on wafer type and angles
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)

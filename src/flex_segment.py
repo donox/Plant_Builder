@@ -11,12 +11,11 @@ from core.core_utils import add_to_group, ensure_group
 logger = get_logger(__name__)
 
 class FlexSegment(object):
-    def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment, trace=None):
+    def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment):
         self.doc = FreeCAD.ActiveDocument
         self.gui = FreeCADGui
         self.prefix = prefix + "_"
         self.rotate_segment = rotate_segment
-        self.trace = trace
         self.wafer_count = 0
         self.wafer_list = []            # This is empty for segments that were reconstructed from the model tree
         self.show_lcs = show_lcs
@@ -516,15 +515,6 @@ class FlexSegment(object):
         # fuse.Placement = FreeCAD.Placement
         self.segment_object = fuse
 
-        # DEBUG: Check bounds of fused object
-        if fuse.Shape.BoundBox.isValid():
-            bb = fuse.Shape.BoundBox
-            logger.debug(f"\n🔍 FUSED GEOMETRY BOUNDS for {self.get_segment_name()}:")
-            logger.debug(f"   Min: [{bb.XMin:.3f}, {bb.YMin:.3f}, {bb.ZMin:.3f}]")
-            logger.debug(f"   Max: [{bb.XMax:.3f}, {bb.YMax:.3f}, {bb.ZMax:.3f}]")
-            logger.debug(f"   Base LCS: {self.lcs_base.Placement.Base}")
-            logger.debug(f"   Top LCS: {self.lcs_top.Placement.Base}")
-
         # Add the fused result to the main group
         if self.segment_object:
             self.main_group.addObject(self.segment_object)
@@ -735,12 +725,6 @@ class FlexSegment(object):
                 logger.error(f"Failed to move vertex group to visualization group: {e}")
         else:
             logger.info(f"Warning: Could not find vertex group '{group_name}' to move to visualization group")
-
-    def register_arrow(self, arrow_obj):
-        """Register an arrow with this segment's visualization group."""
-        if arrow_obj:
-            self.visualization_group.addObject(arrow_obj)
-            logger.debug(f"Added arrow '{arrow_obj.Label}' to segment visualization group")
 
     def register_transform_callback(self, callback_func):
         """Register a function to be called when segment is transformed."""

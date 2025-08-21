@@ -35,7 +35,7 @@ def setup_root_logger(
     log_path = log_dir / "plantbuilder.log"
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)  # capture all; handlers filter below
+    root.setLevel(logging.WARNING)  # capture all; handlers filter below
 
     # Avoid duplicate handlers on reload
     root.handlers.clear()
