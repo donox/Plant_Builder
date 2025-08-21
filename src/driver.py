@@ -59,6 +59,14 @@ class Driver(object):
         self.handle_arrows = None
         self.path_place_list = None
 
+        # result bounds
+        self.x_min = None
+        self.x_max = None
+        self.y_min = None
+        self.y_max = None
+        self.z_min = None
+        self.z_max = None
+
         # Trace and debugging
         self.trace_file_name = None
         self.trace_file = None
@@ -153,6 +161,8 @@ class Driver(object):
             self._execute_operation(operation)
 
         # Post-processing
+        self.set_composite_bounds()
+        print(f"Composite bounds: {self.get_composite_bounds()}")
         self.process_arrow_command()
         self._generate_output_files()
 
@@ -491,7 +501,6 @@ class Driver(object):
             transform = base_pos.multiply(rotation).multiply(base_pos.inverse())
             segment.move_content(transform)
 
-
         # Store transform for debugging
         if hasattr(segment, 'store_applied_transform'):
             segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else None) # self.initial_position)
@@ -499,10 +508,9 @@ class Driver(object):
         segment.already_relocated = True
         logger.info(f"\n✅ Completed relocation for segment '{segment_name}'")
 
-        # After segment.move_to_top(align_transform)
         self.doc.recompute()
-        # FreeCADGui.updateGui()
-        # FreeCADGui.SendMsgToActiveView("ViewFit")
+        segment.set_bounds()
+
     def build_cut_list(self, filename: Optional[str] = None):
         """Build cutting list file."""
         if filename is None:
@@ -510,6 +518,11 @@ class Driver(object):
 
         logger.info(f"Building cut list: {filename}")
         with open(filename, "w+") as cuts_file:
+            cuts_file.write(f"Cut List for: {self.project_config.get('metadata', {})['project_name']}\n\n")
+            cuts_file.write(f'Project Bounds\n')
+            cuts_file.write(f'\tX-min: {self.x_min:.2f}\tX_max: {self.x_max:.2f}\n')
+            cuts_file.write(f'\tY-min: {self.y_min:.2f}\tY_max: {self.y_max:.2f}\n')
+            cuts_file.write(f'\tZ-min: {self.z_min:.2f}\tZ_max: {self.z_max:.2f}\n\n')
             cuts_file.write("Cutting order:\n")
             for nbr, segment in enumerate(self.segment_list):
                 segment.make_cut_list(nbr, cuts_file)
@@ -614,6 +627,32 @@ class Driver(object):
                     self.doc.removeObject(item.Label)
                 except Exception as e:
                     logger.debug(f"Remove object exception: {e}")
+
+    def set_composite_bounds(self):
+        """Set bounds of result object based on all segments"""
+        if not self.segment_list:
+            return
+        results = [0, 0, 0, 0, 0, 0]
+        for segment in self.segment_list:
+            seg_bounds = segment.get_bounds()
+            for nbr,  bnd in enumerate(seg_bounds):
+                if not bnd:
+                    break
+                res = results[nbr]
+                if bnd > 0:
+                    if res < bnd:
+                        res = bnd
+                elif bnd < 0:
+                    if res > bnd:
+                        res = bnd
+                results[nbr] = res
+        self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max = results
+
+    def get_composite_bounds(self):
+        """Return wafer extents in each dimension"""
+        return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
+
+
 
     def _set_up_trace(self):
         """Set up tracing functionality."""

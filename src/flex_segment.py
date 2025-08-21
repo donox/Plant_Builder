@@ -38,6 +38,16 @@ class FlexSegment(object):
         self.main_group.addObject(self.visualization_group)
         self.main_group.addObject(self.lcs_group)
         self.main_group.addObject(self.wafer_group)
+        self.segment_object = None  # holder for fused segment object
+
+        # Add bounds (set in driver:relocate_segment after final placement
+        self.x_min = None
+        self.x_max = None
+        self.y_min = None
+        self.y_max = None
+        self.z_min = None
+        self.z_max = None
+
 
         try:
             self.wafer_group.addObjects([self.lcs_base, self.lcs_top])
@@ -141,6 +151,22 @@ class FlexSegment(object):
             self.doc.recompute()
         except Exception:
             pass
+
+    def get_bounds(self):
+        """Return wafer extents in each dimension"""
+        return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
+
+    def set_bounds(self):
+        """Set bounds of fused segment result."""
+        if not self.segment_object:
+            return
+        bbox = self.segment_object.Shape.BoundBox
+        self.x_min = bbox.XMin
+        self.x_max = bbox.XMax
+        self.y_min = bbox.YMin
+        self.y_max = bbox.YMax
+        self.z_min = bbox.ZMin
+        self.z_max = bbox.ZMax
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
                   start_pos=None, end_pos=None, curve_tangent=None):
@@ -472,6 +498,7 @@ class FlexSegment(object):
 
             # Create final fused object
             fuse = self.doc.addObject("Part::Feature", name + "FusedResult")
+            self.segment_object = fuse
             fuse.Shape = result
 
         # Update base LCS to match first wafer FIRST
