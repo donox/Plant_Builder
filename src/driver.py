@@ -42,12 +42,6 @@ class Driver(object):
         self.parent_assembly = App.listDocuments()[assembly_name]
         if not self.parent_assembly:
             raise ValueError(f"Assembly {assembly_name} not found.")
-        self.parent_parms = self.parent_assembly.getObjectsByLabel(master_spreadsheet)
-        if self.parent_parms:
-            self.parent_parms = self.parent_parms[0]
-            self.get_parm, self.set_parm = self.handle_spreadsheet(self.parent_parms)
-        else:
-            raise ValueError(f"Spreadsheet {master_spreadsheet} not found")
 
         # Project configuration (loaded from YAML)
         self.project_config = None
@@ -56,7 +50,6 @@ class Driver(object):
 
         # Build state
         self.segment_list = []
-        self.handle_arrows = None
         self.path_place_list = None
 
         # result bounds
@@ -163,7 +156,6 @@ class Driver(object):
         # Post-processing
         self.set_composite_bounds()
         print(f"Composite bounds: {self.get_composite_bounds()}")
-        self.process_arrow_command()
         self._generate_output_files()
 
         FreeCAD.ActiveDocument.recompute()
@@ -190,8 +182,6 @@ class Driver(object):
             self._execute_set_position(operation)
         elif op_type == 'build_segment':
             self._execute_build_segment(operation)
-        elif op_type == 'add_arrows':
-            self._execute_add_arrows(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
 
@@ -342,11 +332,6 @@ class Driver(object):
 
         self.relocate_segment()
         logger.info(f"Created helix segment '{name}' with {wafer_count} wafers")
-
-
-    def _execute_add_arrows(self, operation: Dict[str, Any]) -> None:
-        """Execute add_arrows operation (deferred until after segment relocation)."""
-        self.handle_arrows = operation
 
     def _generate_output_files(self) -> None:
         """Generate output files based on global settings."""
@@ -561,56 +546,6 @@ class Driver(object):
                 segment.cleanup_wafer_lcs(keep_debug=False)
             except Exception as e:
                 logger.warning(f"Cleanup failed for segment {segment.get_segment_name()}: {e}")
-    def process_arrow_command(self):
-        """Process deferred arrow command."""
-        if not self.handle_arrows:
-            return
-
-        try:
-            # Handle both old format (list) and new format (dict)
-            if isinstance(self.handle_arrows, list):
-                size = float(self.handle_arrows[1])
-                point_nbr = int(self.handle_arrows[2])
-            else:
-                size = self.handle_arrows.get('size', 5.0)
-                point_nbr = self.handle_arrows.get('point_number', 0)
-
-            if not self.segment_list:
-                logger.info("No segments available for arrow placement")
-                return
-
-            # Place arrow on the first segment
-            segment_list_top = self.segment_list[0]
-
-            # Check if the LCS object still exists
-            try:
-                lcs_top = segment_list_top.get_lcs_base()
-                if not lcs_top or not hasattr(lcs_top, 'Placement'):
-                    logger.error("Warning: LCS object no longer valid for arrow placement")
-                    return
-            except:
-                logger.error("Warning: Cannot access LCS object for arrow placement")
-                return
-
-            if not self.compound_transform:
-                logger.info("Warning: No compound transform available for arrow placement")
-                return
-
-            new_place = lcs_top.Placement.multiply(self.compound_transform)
-
-            # Create arrow visualization with segment-specific name
-            segment_name = segment_list_top.get_segment_name()
-            arrow_name = f"{segment_name}_Arrow_{point_nbr}"
-            arrow_obj = arrow(arrow_name, new_place, size)
-
-            # Register arrow with the segment
-            segment_list_top.register_arrow(arrow_obj)
-
-            logger.debug(f"Added arrow '{arrow_name}' at point {point_nbr}")
-
-        except Exception as e:
-            logger.error(f"Error creating arrow: {e}")
-            # Don't re-raise - arrow creation is not critical
 
     def remove_objects_re(self, remove_string: str) -> None:
         """Remove objects containing 'name' as a part of a label.
@@ -730,24 +665,3 @@ class Driver(object):
         # the transform is simply object_2's placement
         return FreeCAD.Placement(object_2.Placement)
 
-
-# Utility functions (unchanged)
-def arrow(name, placement, size):
-    """Simple arrow to show location and direction."""
-    n = []
-    v = FreeCAD.Vector(0, 0, 0)
-    n.append(v)
-    vpoint = FreeCAD.Vector(0, 0, size * 6)
-    n.append(vpoint)
-    v = FreeCAD.Vector(size, 0, size * 5)
-    n.append(v)
-    n.append(vpoint)
-    v = FreeCAD.Vector(-size, 0, size * 5)
-    n.append(v)
-    p = FreeCAD.activeDocument().addObject("Part::Polygon", name)
-    p.Nodes = n
-    rot = placement.Rotation
-    loc = placement.Base
-    p.Placement.Rotation = rot
-    p.Placement.Base = loc
-    return p

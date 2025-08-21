@@ -176,11 +176,6 @@ workflow:
 #      build_segment: true
 #      rotate_segment: 0.0
 #      add_curve_vertices: true
-
-#  - operation: "add_arrows"
-#    description: "Add directional arrows for visualization"
-#    size: 5.0
-#    point_number: 10
 #
 ## Alternative workflow configurations (can be selected)
 #workflows:
