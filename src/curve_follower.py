@@ -634,7 +634,7 @@ class CurveFollower:
 
         # Sanity check: outside_height should be reasonable compared to chord_length
         if outside_height > chord_length * 5:  # If more than 5x chord length, something's wrong
-            # logger.info(f"WARNING: Capping excessive outside_height")
+            # logger.debug(f"WARNING: Capping excessive outside_height")
             # logger.debug(f"  Original calculation: {outside_height:.4f}")
             # logger.debug(f"  Chord length: {chord_length:.4f}")
             # logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")

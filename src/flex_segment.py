@@ -2,8 +2,9 @@ from core.logging_setup import get_logger
 import sys
 
 import numpy as np
+import math
 import csv
-from wafer import Wafer
+from wafer import Wafer, log_lcs_info, log_lcs_debug, log_lcs_info_level
 import FreeCAD
 import FreeCADGui
 from utilities import position_to_str
@@ -108,7 +109,7 @@ class FlexSegment(object):
         except Exception:
             pass
 
-        if keep_debug:
+        if keep_debug or  True:        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             # keep all the per-wafer LCSs
             try:
                 self.doc.recompute()
@@ -189,6 +190,8 @@ class FlexSegment(object):
 
         # Only increment wafer_count ONCE
         self.wafer_count += 1
+        # if self.wafer_count > 5:   # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        #     foo = 3/0
 
         logger.debug(f"\n=== Creating Wafer {self.wafer_count} ===")
         logger.debug(f"  Type: {wafer_type}")
@@ -305,7 +308,7 @@ class FlexSegment(object):
                     logger.debug(
                         f"       Rotation will create: Yaw={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Roll={euler[2]:.1f}°")
                     if abs(euler[0]) > 1.0 or abs(euler[1]) > 1.0 or abs(euler[2]) > 1.0:
-                        logger.info(f"       ⚠️ WARNING: Non-identity rotation detected!")
+                        logger.warning(f"       ⚠️ WARNING: Non-identity rotation detected!")
 
                 else:  # Elliptical end (angled cut)
                     # The bisecting plane normal can be calculated from:
@@ -464,6 +467,12 @@ class FlexSegment(object):
 
             # Fuse each subsequent wafer
             for i in range(1, len(self.wafer_list)):
+                if i > 500:           # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    foo = 3/0
+                else:
+                    waf = self.wafer_list[i]
+                    log_lcs_debug(waf.lcs1, f"Wafer_{i}_Start")
+                    log_lcs_debug(waf.lcs2, f"Wafer_{i}_End")
                 try:
                     wafer_shape = self.wafer_list[i].wafer.Shape
 
@@ -520,7 +529,7 @@ class FlexSegment(object):
             self.main_group.addObject(self.segment_object)
 
         self.doc.recompute()
-        logger.info(f"Fusion complete - result is {'valid' if fuse.Shape.isValid() else 'INVALID'}")
+        logger.debug(f"Fusion complete - result is {'valid' if fuse.Shape.isValid() else 'INVALID'}")
 
     def get_segment_rotation(self):
         return self.rotate_segment
@@ -586,39 +595,98 @@ class FlexSegment(object):
             if item.Label != 'Parms_Master':
                 doc.removeObject(item.Name)
 
-    def make_cut_list(self, segment_no, cuts_file):
-        current_position = 0  # Angular position of index (0-360) when rotating cylinder for cutting
-        s1 = "Step: "
-        s2 = " at position: "
-        for i, wafer in enumerate(self.wafer_list):
-            ra = wafer.get_rotation_angle()
-            if ra is not None:
-                ra = np.round(np.rad2deg(ra), 2)
-            else:
-                ra = 0
-            la = wafer.get_lift_angle()
-            if la:
-                la = np.round(np.rad2deg(la), 2)
-            else:
-                la = "NA"
-            oh = wafer.get_outside_height()
-            if oh:
-                oh = np.round(oh, 2)
-            else:
-                oh = "NA"
-            str1 = str(i)
-            if len(str1) == 1:
-                str1 = s1 + ' ' + str1      # account for number of steps (max <= 99)
-            else:
-                str1 = s1 + str1
-            str2 = str(current_position)
-            if len(str2) == 1:
-                str2 = s2 + ' ' + str2
-            else:
-                str2 = s2 + str2
-            str3 = f"\tLift: {la}\tRotate: {ra}\tHeight: {oh}"
-            cuts_file.write(f"{str1} {str2} {str3};    Done: _____\n")
-            current_position = int((current_position - ra + 180) % 360)
+    def make_cut_list(self,  cuts_list,
+                      min_lift=0.5, max_lift=20.0,
+                      min_rotate=0.5, max_rotate=20.0):
+        """
+        Build a human-readable cut list for this segment and append to cuts_list.
+        - Works with several possible wafer containers on the segment.
+        - Rotation is Wafer.get_rotation_angle(expected_deg=None); CE/EC forced to 0°.
+        - Accumulates a running saw position in degrees.
+        """
+        import math
+        import numpy as np
+        from core.logging_setup import get_logger
+        logger = get_logger(__name__)
+
+        # --- Find wafers on this segment, regardless of attribute name ---
+        wafers = None
+        for attr in ("wafer_list", "wafers", "wafer_objects", "_wafers"):
+            if hasattr(self, attr):
+                obj = getattr(self, attr)
+                try:
+                    if obj is not None and hasattr(obj, "__iter__"):
+                        wafers = [w for w in obj if hasattr(w, "get_rotation_angle")]
+                        if wafers:
+                            break
+                except TypeError:
+                    pass  # e.g., int wafer_count – ignore
+
+        if not wafers:
+            # try a method-based accessor if you have one
+            if hasattr(self, "get_wafers"):
+                try:
+                    obj = self.get_wafers()
+                    wafers = [w for w in obj if hasattr(w, "get_rotation_angle")]
+                except Exception:
+                    wafers = []
+
+        seg_name = None
+        for getter in ("get_segment_name", "get_name"):
+            if hasattr(self, getter) and callable(getattr(self, getter)):
+                try:
+                    seg_name = getattr(self, getter)()
+                    break
+                except Exception:
+                    pass
+        if not seg_name:
+            seg_name = getattr(self, "name", None) or getattr(self, "prefix", "segment")
+            if seg_name.endswith("_"):
+                seg_name = seg_name[:-1]
+        if callable(seg_name):
+            seg_name = seg_name()
+
+        if not wafers:
+            logger.warning(f"make_cut_list: no wafers on segment '{seg_name}_'; nothing to write.")
+            return
+
+        # --- Write header (once per segment) ---
+        cuts_list.write("Wafer\tType\tLift(deg)\tRotate(deg)\tSawPos(deg)\n")
+
+        rows_written = 0
+        saw_pos = 0.0  # running saw position (deg)
+
+        for i, w in enumerate(wafers):
+            next_w = wafers[i + 1] if i + 1 < len(wafers) else None
+            wt = (w.get_wafer_type() or "EE").upper()
+
+            # Lift angle in degrees
+            lift_rad = w.get_lift_angle(next_w)
+            lift_deg = float(np.rad2deg(lift_rad)) if lift_rad is not None else 0.0
+
+            # Rotation angle in degrees
+            rot_rad = w.get_rotation_angle(expected_deg=None)
+            rot_deg = float(np.rad2deg(rot_rad)) if rot_rad is not None else 0.0
+
+            # CE/EC define rotation as 0°
+            if wt.endswith("C") or (next_w and ((next_w.get_wafer_type() or "").upper().startswith("C"))):
+                rot_deg = 0.0
+
+            saw_pos = (saw_pos - rot_deg) % 360.0
+            cuts_list.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t{rot_deg:.2f}\t{saw_pos:.2f}\n")
+            rows_written += 1
+
+            # Soft guardrails; only warn when there *is* a next wafer (i.e. an actual transition)
+            if next_w is not None:
+                if abs(lift_deg) < min_lift or abs(lift_deg) > max_lift:
+                    logger.warning(f"Lift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
+                if abs(rot_deg) < min_rotate or abs(rot_deg) > max_rotate:
+                    logger.warning(f"Rotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
+
+        cuts_list.flush()
+        # If the stream is a real file, .name exists; otherwise show <stream>.
+        dest = getattr(cuts_list, "name", "<stream>")
+        logger.info(f"✂️  Wrote {rows_written} cut rows for segment '{seg_name}_' to {dest}")
 
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
         """Print list giving local and global position and orientation of each wafer."""
@@ -720,11 +788,11 @@ class FlexSegment(object):
 
                 # Add to visualization group
                 self.visualization_group.addObject(vertex_group)
-                logger.info(f"Successfully moved vertex group '{group_name}' to visualization group")
+                logger.debug(f"Successfully moved vertex group '{group_name}' to visualization group")
             except Exception as e:
                 logger.error(f"Failed to move vertex group to visualization group: {e}")
         else:
-            logger.info(f"Warning: Could not find vertex group '{group_name}' to move to visualization group")
+            logger.warning(f"Warning: Could not find vertex group '{group_name}' to move to visualization group")
 
     def register_transform_callback(self, callback_func):
         """Register a function to be called when segment is transformed."""
@@ -946,7 +1014,7 @@ class FlexSegment(object):
     def fix_segment_lcs_alignment(self):
         """Fix LCS positions to match actual wafer geometry."""
         if not self.wafer_list:
-            logger.info(f"Cannot fix alignment - no wafers")
+            logger.warning(f"Cannot fix alignment - no wafers")
             return False
 
         try:
@@ -1014,5 +1082,8 @@ class FlexSegment(object):
         matrix_str = ",".join([str(matrix.A[i]) for i in range(16)])
         lcs_obj.AppliedTransformMatrix = matrix_str
         lcs_obj.HasStoredTransform = True
+
+
+
 
 

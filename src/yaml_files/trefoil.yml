@@ -1,0 +1,122 @@
+# Plant Builder Project Configuration
+# This file defines the workflow and construction parameters for building segments
+
+metadata:
+  project_name: "Helical Vertical Leg"
+  version: "1.0"
+  created: "2025-07-27"
+  description: "Build leg with vertical helix"
+
+# Global settings that apply to all operations
+global_settings:
+  remove_existing: true
+  relocate_segments: true
+  print_cuts: true
+  print_place: true
+  show_lcs: false
+  temp_file: "temp_construction.dat"
+
+# Output file settings
+output_files:
+  working_directory: "/home/don/Documents/Temp/FreeCAD/"
+  cuts_file: "cutting_list.txt"
+  place_file: "placement_list.txt"
+  trace_file: "build_trace.log"
+
+# Workflow definition - operations executed in order
+workflow:
+  - operation: "remove_objects"
+    description: "Clean up any existing objects"
+    patterns:
+      - "helix.*"
+      - "Curve.*"
+      - "temp.*"
+      - "close"
+      - "comp"
+      - "base*"
+
+#  - operation: "set_position"
+#    description: "Set starting position and orientation"
+#    position: [0, 0, 0]          # x, y, z coordinates
+#    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "base"
+    description: "Vertical base columnr"
+    curve_spec:
+      type: "linear"
+      parameters:
+        length: 5.0
+        points: 10
+    wafer_settings:
+      cylinder_diameter: 2.25
+      min_height: 1.0
+      max_chord: 0.3
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "Curve Left"
+    description: "Turn away from center 45 degrees"
+    curve_spec:
+      type: "trefoil"
+      parameters:
+        #          - major_radius (float): Torus major radius R (distance from origin to tube center).  [default: 6.0]
+        #          - tube_radius  (float): Torus minor radius r (tube radius).                           [default: 2.0]
+        #          - p            (int)  : Longitudinal wraps around the torus.                          [default: 2]
+        #          - q            (int)  : Meridional wraps in the tube cross-section.                   [default: 3]
+        #          - points       (int)  : Number of samples along one closed loop.                      [default: 200]
+        #          - center       (seq3) : Optional XYZ offset for the whole curve.                      [default: (0,0,0)]
+        #          - phase_deg    (float): Rotation about +Z before sampling (shifts start point).       [default: 0.0]
+        #          - scale_z      (float): Optional
+        major_radius: 10.0
+        tube_radius: 4.0
+        points: 200
+      transformations:  []
+#        - operation: "scale"
+#          factor: 1.0
+#        - operation: "rotate"
+#          axis: "z"
+#          angle: 0
+      segment:
+        start_fraction: 0.0
+        end_fraction: 1.0
+    wafer_settings:
+      cylinder_diameter: 2.25
+      min_height: 0.5          # Much smaller
+      max_chord: 0.2            # Much tighter
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#      add_curve_vertices: true
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "close_seg"
+    description: "Horizontal end  columnr"
+    curve_spec:
+      type: "linear"
+      parameters:
+        length: 7.0
+        points: 10
+    wafer_settings:
+      cylinder_diameter: 2.25
+      min_height: 1.0
+      max_chord: 0.3
+      max_angular_span: 45
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#      add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
+
+
+
+
+

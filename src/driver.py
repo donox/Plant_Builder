@@ -6,6 +6,8 @@ except Exception:
 
 logger = get_logger(__name__)
 
+import sys
+import os
 import Part
 import FreeCAD
 import FreeCADGui
@@ -18,7 +20,8 @@ from curve_follower import CurveFollower
 from flex_segment import FlexSegment
 from curves import Curves
 from make_helix import MakeHelix
-import pydevd_pycharm
+from test_get_rotation_angle_freecad_wrapper import run_freecad_wrapper
+# import pydevd_pycharm
 
 
 # pip install pydevd-pycharm~=241.15989.155
@@ -68,7 +71,7 @@ class Driver(object):
         FreeCAD.gobj = self.get_object_by_label
 
         # Support for remote debugging to FreeCAD
-        pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
+        # pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
     def load_yaml_config(self, yaml_file_path: str) -> None:
         """Load project configuration from YAML file.
@@ -169,8 +172,14 @@ class Driver(object):
             self._execute_set_position(operation)
         elif op_type == 'build_segment':
             self._execute_build_segment(operation)
+        elif op_type == 'run_tests':
+            self._execute_run_tests(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
+
+    def _execute_run_tests(self, operation ):
+        run_freecad_wrapper()
+        foo = 3/0
 
     def _execute_remove_objects(self, operation: Dict[str, Any]) -> None:
         """Execute remove_objects operation."""
@@ -274,12 +283,12 @@ class Driver(object):
 
                     # Relocate segment - ONLY CALL THIS ONCE!
                     self.relocate_segment()
-                    logger.info(f"Completed relocation for segment '{name}'")
+                    logger.debug(f"Completed relocation for segment '{name}'")
 
                 else:
-                    logger.info(f"Warning: Segment '{name}' created wafers but fusing failed")
+                    logger.warning(f"Warning: Segment '{name}' created wafers but fusing failed")
             else:
-                logger.info(f"Warning: No wafers created for segment '{name}'")
+                logger.warning(f"Warning: No wafers created for segment '{name}'")
 
             # Force recompute
             FreeCAD.ActiveDocument.recompute()
@@ -288,37 +297,6 @@ class Driver(object):
         except Exception as e:
             logger.error(f"Error creating curve follower segment '{name}': {e}")
             raise
-
-    def _build_helix_segment(self, operation: Dict[str, Any]) -> None:
-        """Build a traditional helix segment."""
-        name = operation['name']
-        helix_settings = operation.get('helix_settings', {})
-        segment_settings = operation.get('segment_settings', {})
-
-        # Extract settings
-        lift_angle = helix_settings.get('lift_angle', 0.0)
-        rotate_angle = helix_settings.get('rotate_angle', 0.0)
-        wafer_count = helix_settings.get('wafer_count', 10)
-        outside_height = helix_settings.get('outside_height', 2.0)
-        cylinder_diameter = helix_settings.get('cylinder_diameter', 2.0)
-
-        show_lcs = segment_settings.get('show_lcs', True)
-        build_segment = segment_settings.get('build_segment', True)
-        rotate_segment = segment_settings.get('rotate_segment', 0.0)
-
-        temp_file = self.project_config.get('global_settings', {}).get('temp_file', 'temp.dat')
-
-        # Create segment
-        segment = FlexSegment(name, show_lcs, temp_file, build_segment, rotate_segment)
-        self.segment_list.append(segment)
-
-        # Create helix
-        helix = MakeHelix(segment)
-        helix.create_helix(wafer_count, cylinder_diameter, outside_height,
-                           lift_angle, rotate_angle, name)
-
-        self.relocate_segment()
-        logger.info(f"Created helix segment '{name}' with {wafer_count} wafers")
 
     def _generate_output_files(self) -> None:
         """Generate output files based on global settings."""
@@ -403,7 +381,7 @@ class Driver(object):
         if hasattr(segment, 'already_relocated') and segment.already_relocated:
             return
 
-        logger.info(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
+        logger.debug(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
 
         # Validate segment before relocation
         is_valid, error_msg = segment.validate_segment_geometry()
@@ -478,7 +456,7 @@ class Driver(object):
             segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else None) # self.initial_position)
 
         segment.already_relocated = True
-        logger.info(f"\n✅ Completed relocation for segment '{segment_name}'")
+        logger.debug(f"\n✅ Completed relocation for segment '{segment_name}'")
 
         self.doc.recompute()
         segment.set_bounds()
@@ -497,7 +475,7 @@ class Driver(object):
             cuts_file.write(f'\tZ-min: {self.z_min:.2f}\tZ_max: {self.z_max:.2f}\n\n')
             cuts_file.write("Cutting order:\n")
             for nbr, segment in enumerate(self.segment_list):
-                segment.make_cut_list(nbr, cuts_file)
+                segment.make_cut_list(cuts_file)
 
     def build_place_list(self, filename: Optional[str] = None):
         """Build placement list file."""

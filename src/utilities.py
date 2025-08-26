@@ -1,10 +1,11 @@
-import Part
-import FreeCAD
 import numpy as np
 import csv
 import re
-import sys
 import math
+from core.logging_setup import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def print_placement(plc):
@@ -45,3 +46,29 @@ def position_to_str(x):
     inches = int(x)
     fraction = int((x - inches) * 16)
     return f'{inches:2d}" {fraction:2d}/16'
+
+
+def expected_rotation_deg_per_cut_from_params(R, pitch, turns, N):
+    """
+    Predict the rotation (degrees) of the ellipse major-axis between adjacent wafers
+    for a uniform helix, using the torsion model:
+
+        Δφ_expected ≈ τ * Δs   (in radians)
+
+    where helix torsion τ = b/(R^2 + b^2),  b = pitch/(2π),
+    and arc per wafer Δs = 2π*turns*sqrt(R^2 + b^2)/N.
+
+    In degrees, this simplifies to:
+        Δφ_expected_deg = (360 * turns / N) * ( b / sqrt(R^2 + b^2) ),
+    with b = pitch/(2π).
+    """
+    if N <= 0:
+        raise ValueError("N must be positive")
+    b = pitch / (2.0 * math.pi)
+    denom = math.hypot(R, b)  # sqrt(R^2 + b^2)
+    if denom == 0.0:
+        return 0.0
+    scale = b / denom
+    return (360.0 * turns / float(N)) * scale
+
+

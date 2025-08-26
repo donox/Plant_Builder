@@ -3,23 +3,15 @@
 This module provides functionality to generate various mathematical curves,
 apply transformations, and prepare them for use in wafer generation systems.
 """
-try:
-    from core.logging_setup import get_logger
-except Exception:
-    try:
-        from logging_setup import get_logger
-    except Exception:
-        import logging
-        get_logger = lambda name: logging.getLogger(name)
 
-logger = get_logger(__name__)
-
-
+from core.logging_setup import get_logger
 import math
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import FreeCAD
 import Part
+
+logger = get_logger(__name__)
 
 
 class Curves:
@@ -82,7 +74,8 @@ class Curves:
             'overhand_knot': self._generate_overhand_knot,
             'circle': self._generate_circle,
             'spiral': self._generate_spiral,
-            'figure_eight': self._generate_figure_eight
+            'figure_eight': self._generate_figure_eight,
+            'trefoil': self._generate_trefoil
         }
 
         # Generate the curve
@@ -377,6 +370,57 @@ class Curves:
 
         return curve_points
 
+    def _generate_trefoil(self, **parameters):
+        """
+        Generate a trefoil (2,3) torus-knot curve.
+
+        Parameters (dict):
+          - major_radius (float): Torus major radius R (distance from origin to tube center).  [default: 6.0]
+          - tube_radius  (float): Torus minor radius r (tube radius).                           [default: 2.0]
+          - p            (int)  : Longitudinal wraps around the torus.                          [default: 2]
+          - q            (int)  : Meridional wraps in the tube cross-section.                   [default: 3]
+          - points       (int)  : Number of samples along one closed loop.                      [default: 200]
+          - center       (seq3) : Optional XYZ offset for the whole curve.                      [default: (0,0,0)]
+          - phase_deg    (float): Rotation about +Z before sampling (shifts start point).       [default: 0.0]
+          - scale_z      (float): Optional vertical scale of z if you want a “squashed” knot.   [default: 1.0]
+
+        Returns:
+          np.ndarray of shape (points, 3)
+        """
+        R = float(parameters.get("major_radius", 6.0))
+        r = float(parameters.get("tube_radius", 2.0))
+        p = int(parameters.get("p", 2))  # trefoil defaults (p=2, q=3)
+        q = int(parameters.get("q", 3))
+        n = int(parameters.get("points", 200))
+        cx, cy, cz = parameters.get("center", (0.0, 0.0, 0.0))
+        phase_deg = float(parameters.get("phase_deg", 0.0))
+        scale_z = float(parameters.get("scale_z", 1.0))
+
+        # Basic sanity (avoid fully degenerate cases)
+        n = max(3, n)
+        R = float(R)
+        r = float(r)
+
+        # Parameter t over exactly one closed loop; endpoint=False avoids duplicate
+        t0 = np.deg2rad(phase_deg)
+        t = np.linspace(0.0, 2.0 * np.pi, num=n, endpoint=False) + t0
+
+        # Torus-knot param: (p, q)
+        # x = (R + r cos(q t)) cos(p t)
+        # y = (R + r cos(q t)) sin(p t)
+        # z =  r sin(q t)
+        cq = np.cos(q * t)
+        sq = np.sin(q * t)
+        cp = np.cos(p * t)
+        sp = np.sin(p * t)
+
+        x = (R + r * cq) * cp + cx
+        y = (R + r * cq) * sp + cy
+        z = (r * sq) * scale_z + cz
+
+        pts = np.stack((x, y, z), axis=1).astype(float)
+        return pts
+
     def _generate_sinusoidal(self, length: float = 50.0, amplitude: float = 5.0,
                              frequency: float = 2.0, points: int = 100,
                              axis: str = 'x') -> List[List[float]]:
@@ -551,7 +595,6 @@ class Curves:
             local_vector = FreeCAD.Vector(*point)
             global_position = lcs_placement.multVec(local_vector)
 
-            import Part
             vertex_shape = Part.Vertex(global_position)
             vertex_obj = self.doc.addObject("Part::Feature", f"{group_name}_point_{i}")
             vertex_obj.Shape = vertex_shape
