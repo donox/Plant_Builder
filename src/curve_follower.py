@@ -4,7 +4,8 @@ This module provides functionality to generate sequences of wafers that follow
 arbitrary 3D curves, with proper geometric calculations for woodworking applications.
 """
 try:
-    from core.logging_setup import get_logger
+    from core.logging_setup import get_logger, log_coord, apply_display_levels
+    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
 except Exception:
     try:
         from logging_setup import get_logger
@@ -19,8 +20,8 @@ import math
 import numpy as np
 from typing import List, Tuple, Any, Dict
 import FreeCAD
-import FreeCADGui
 from curves import Curves  # Import the new Curves class
+import traceback
 
 class CurveFollower:
     """Creates wafer slices along a curved cylinder path.
@@ -61,7 +62,7 @@ class CurveFollower:
         self.segment = segment
         self.cylinder_diameter = cylinder_diameter
         self.radius = cylinder_diameter / 2.0
-        self.min_height = min_height
+        self.min_height = min_height  # better name = min_wafer_length or min_chord_length
         self.max_chord = max_chord
 
         # Generate the curve using the Curves class
@@ -194,35 +195,44 @@ class CurveFollower:
         Returns:
             Maximum perpendicular distance from curve to chord
         """
-        if len(curve_segment) <= 2:     # Need at least 3 points or curve and chord appear to be collinear
+
+        if len(curve_segment) <= 2:
+            # log_coord(__name__, "FEW points")
             return 0.0
 
         chord_vector = end_point - start_point
         chord_length = np.linalg.norm(chord_vector)
 
         if chord_length < 1e-10:
+            # log_coord(__name__, "TOO SHORT")
             return 0.0
 
         chord_unit = chord_vector / chord_length
 
         max_distance = 0.0
-        for i, point in enumerate(curve_segment[1:-1]):
+        # Fix: Only check interior points (exclude start and end)
+        for point in curve_segment[1:-1]:  # Skip first and last points
             point_vector = point - start_point
             projection_length = np.dot(point_vector, chord_unit)
             projection_point = start_point + projection_length * chord_unit
             distance = np.linalg.norm(point - projection_point)
+            # log_coord(__name__, f"Distance: {distance}")
             max_distance = max(max_distance, distance)
+
+        # log_coord(__name__, f"Final max_distance: {max_distance}")
         return max_distance
 
     def _check_segment_collinearity(self, start_point: np.ndarray, end_point: np.ndarray,
-                                    start_index: int, end_index: int) -> bool:
+                                    start_index: int, end_index: int,
+                                    chord_distance: float = None) -> bool:
         """Check if a wafer segment is approximately collinear.
 
         Args:
             start_point: Start point of wafer
             end_point: End point of wafer
             start_index: Index of start point in curve
-            end_index: Index of end point in curve  # Add this parameter
+            end_index: Index of end point in curve
+            chord_distance: Precomputed chord distance (optional)
 
         Returns:
             True if segment is nearly collinear
@@ -230,16 +240,23 @@ class CurveFollower:
         if end_index <= start_index:
             return True
 
-        curve_segment = self.curve_points[start_index:end_index + 1]
-        chord_distance = self._calculate_chord_distance(start_point, end_point, curve_segment)
+        # Use provided chord distance if available, otherwise calculate
+        if chord_distance is None:
+            curve_segment = self.curve_points[start_index:end_index + 1]
+            # log_coord(__name__, f"Extracting segment [{start_index}:{end_index + 1}] = {len(curve_segment)} points")
+            chord_distance = self._calculate_chord_distance(start_point, end_point, curve_segment)
+        else:
+            # log_coord(__name__, f"Using precomputed chord_distance: {chord_distance}")
+            pass
+
         chord_length = np.linalg.norm(end_point - start_point)
         threshold = self.max_chord * 0.1
 
         is_collinear = chord_distance < threshold
 
         # DEBUG OUTPUT
-        logger.debug(f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
-              f"chord_len={chord_length:.4f}, collinear={is_collinear}")
+        # log_coord(__name__, f"  Collinearity check: chord_dist={chord_distance:.4f}, threshold={threshold:.4f}, "
+                            # f"chord_len={chord_length:.4f}, collinear={is_collinear}")
         return is_collinear
 
     # In curve_follower.py, add this method to the CurveFollower class:
@@ -274,16 +291,23 @@ class CurveFollower:
         2) Detect planarity via plane fit; for planar curves, force rotation = 0°.
            (Works even when the plane is tilted; z need not be constant.)
         """
+        deb_str = f"start_index: {start_index}, end_index: {end_index}, end: {is_first_wafer or is_last_wafer}\n\t"
+        def mk_log( str1, str2):
+            log_coord(__name__, ' '.join((str1, str2)))
 
         # Current chord (axis of this wafer)
         chord_vec = end_point - start_point
         chord_len = float(np.linalg.norm(chord_vec))
         if chord_len < 1e-10:
+            mk_log('_ell_parms: zero len:', deb_str)
             return 0.0, 0.0, 0.0, "CC"
         chord_hat = chord_vec / chord_len
 
         # Early exit: if local segment is collinear, both cuts are circular
-        if self._check_segment_collinearity(start_point, end_point, start_index, end_index):
+        curve_segment = self.curve_points[start_index:end_index + 1]
+        local_chord_distance = self._calculate_chord_distance(start_point, end_point, curve_segment)
+        if self._check_segment_collinearity(start_point, end_point, start_index, end_index, local_chord_distance):
+            mk_log('collinear:', deb_str)
             return 0.0, 0.0, 0.0, "CC"
 
         # --- Neighbor chords (use ±1, not ±10) -------------------------------
@@ -308,8 +332,20 @@ class CurveFollower:
         # Use a small window around [start_index, end_index] for stability
         i0 = max(0, start_index - 2)
         i1 = min(N - 1, end_index + 2)
-        neighborhood = self.curve_points[i0: i1 + 1]
-        is_planar, n_hat, _, _ = self._fit_plane(neighborhood)
+        # Use only this wafer's points (reduces leakage from neighboring curvature)
+        neighborhood = self.curve_points[start_index:end_index + 1]
+        is_planar, n_hat, _, rms = self._fit_plane(neighborhood)
+
+        # Extra guard: planar curves have ~zero torsion (triple product ~ 0)
+        tau = 0.0
+        if prev_hat is not None and next_hat is not None:
+            tau = abs(float(np.dot(prev_hat, np.cross(chord_hat, next_hat))))
+            # pick a tiny, scale-free threshold for directions (not positions)
+            if tau < 1e-6:
+                is_planar = True
+
+        log_coord(__name__, f"Plane fit: is_planar={is_planar}, rms={rms:.6f}, n_hat={n_hat}")
+        log_coord(__name__, f"Neighborhood points: {len(neighborhood)}")
 
         # --- Compute bend angles (use signed angle when planar) ---------------
         def bend_between(u: np.ndarray, v: np.ndarray) -> float:
@@ -322,10 +358,13 @@ class CurveFollower:
                                         v / (np.linalg.norm(v) + 1e-12)), -1.0, 1.0))
             return float(np.arccos(dotv))
 
+        mk_log("Not CC:", deb_str)
         start_angle = 0.0
         end_angle = 0.0
         rotation_angle = 0.0  # default; may remain 0 for planar curves
         wafer_type = "EE"  # default (overridden below)
+        log_coord(__name__,
+                  f"Final rotation_angle: {rotation_angle} ({'skipped - planar' if is_planar else 'calculated'})")
 
         if is_first_wafer:
             # Start is circular; end cut bisects bend between this chord and next
@@ -394,17 +433,10 @@ class CurveFollower:
         end_angle = float(np.clip(end_angle, 0.0, max_angle))
 
         # Nudge tiny numerical noise to exactly zero for cleaner cut lists
-        if abs(rotation_angle) < 1e-6:
+        if abs(rotation_angle) < 1e-6 or is_planar:
             rotation_angle = 0.0
 
         return start_angle, end_angle, rotation_angle, wafer_type
-
-    def _correct_rotation_angles(self, wafers: List[Tuple]) -> List[Tuple]:
-        """Correct rotation angles so adjacent wafers have complementary cuts.
-
-        RESTORED TO ORIGINAL - just pass through the calculated rotations.
-        """
-        return wafers  # Don't modify rotations
 
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
@@ -416,37 +448,49 @@ class CurveFollower:
             List of tuples: (start_point, end_point, start_angle, end_angle,
                            rotation_angle, wafer_type)
         """
-        wafers = []
+        wafers_parameters = []
         current_index = 0
         safety_counter = 0
 
         while current_index < len(self.curve_points) - 1:
-            safety_counter +=1
+            safety_counter += 1
             # SAFETY CHECK: Prevent infinite loops
-            if safety_counter > 1000:  # ADD THIS
-                logger.error(f"🛑 SAFETY STOP: Generated {len(wafers)} wafers, stopping to prevent infinite loop")
+            if safety_counter > 1000:
+                logger.error(f"🛑 SAFETY STOP: Generated {len(wafers_parameters)} wafers, stopping to prevent infinite loop")
                 break
+
             start_point = self.curve_points[current_index]
 
-            # Find the farthest valid end point
+            # Find the farthest valid end point - (the longest segment of the curve meeting constraints
             best_end_index = current_index + 1
+            best_chord_distance = 0.0  # Initialize to 0.0 instead of inf
 
             for end_index in range(current_index + 1, len(self.curve_points)):
                 end_point = self.curve_points[end_index]
 
                 # Check minimum height constraint
-                height = np.linalg.norm(end_point - start_point)
-                if height < self.min_height:
+                min_wafer_length = np.linalg.norm(end_point - start_point)  # 3D absolute distance
+                if min_wafer_length < self.min_height:
                     continue
 
                 # Check maximum chord constraint
                 curve_segment = self.curve_points[current_index:end_index + 1]
+                # Debug: Log what we received
+                # log_coord(__name__, f"_C_C_D called {current_index} to {end_index} ")
                 chord_distance = self._calculate_chord_distance(start_point, end_point, curve_segment)
 
-                if chord_distance <= self.max_chord:
+                if chord_distance <= self.max_chord:      # max_chord from user parameters
                     best_end_index = end_index
+                    best_chord_distance = chord_distance  # Store the actual calculated distance
+                    # log_coord(__name__, f"Found valid segment to index {end_index}, chord_dist={chord_distance}")
                 else:
+                    logger.error(
+                        f"Calculated chord distance: {chord_distance} exceeds max allowable. Check user parameters")
+                    log_coord(__name__,
+                              f"Chord distance {chord_distance} exceeds max_chord {self.max_chord}, stopping search")
                     break
+
+
 
             end_point = self.curve_points[best_end_index]
 
@@ -454,16 +498,36 @@ class CurveFollower:
             is_first_wafer = (current_index == 0)
             is_last_wafer = (best_end_index == len(self.curve_points) - 1)
 
-            # Calculate ellipse parameters
-            start_angle, end_angle, rotation_angle, wafer_type = self._calculate_ellipse_parameters(
-                start_point, end_point, current_index, best_end_index,
-                is_first_wafer, is_last_wafer
-            )
+            import inspect, sys, traceback as _tb
 
-            wafers.append((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type))
+            log_coord(__name__, f"PRE-CALL: start_idx={current_index} end_idx={best_end_index} "
+                                f"first={current_index == 0} last={best_end_index == len(self.curve_points) - 1}")
+
+            # Show which class and file this object/method come from (catches stale/duplicate code)
+            try:
+                cls = self.__class__
+                meth = self._calculate_ellipse_parameters.__func__  # unbound function object
+            except Exception as _e:
+                print("INTROSPECTION FAILED:", _e, file=sys.__stderr__)
+
+            # Call with hard try/except so exceptions can’t disappear
+            try:
+                start_angle, end_angle, rotation_angle, wafer_type = self._calculate_ellipse_parameters(
+                    start_point, end_point, current_index, best_end_index,
+                    current_index == 0, best_end_index == len(self.curve_points) - 1
+                )
+                log_coord(__name__, "_calculate_ellipse_parameters returned", start_angle, end_angle, rotation_angle,
+                      wafer_type)
+            except Exception:
+                # Always print the traceback to real stderr so you see it even if logging is filtered
+                print("EXC in _calculate_ellipse_parameters:", file=sys.__stderr__)
+                _tb.print_exc()
+                raise
+
+            wafers_parameters.append((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type))
             current_index = best_end_index
 
-        return wafers
+        return wafers_parameters
 
     def _determine_consistent_wafer_types(self, wafers: List[Tuple]) -> List[Tuple]:
         """Ensure wafer types form a consistent cutting sequence.
@@ -670,6 +734,22 @@ class CurveFollower:
     def process_wafers(self, add_curve_vertices: bool = False) -> None:
         """Main processing method that creates and adds wafers to the segment."""
 
+        # Validate the user parameters
+        validation = self.validate_parameters()
+        if not validation['valid']:
+            logger.error("Invalid parameters:")
+            for issue in validation['issues']:
+                logger.error(f"  - {issue}")
+            logger.info("Recommendations:")
+            for rec in validation['recommendations']:
+                logger.info(f"  - {rec}")
+            raise ValueError("Cannot create wafers with current parameters")
+
+        if validation['warnings']:
+            logger.warning("Parameter warnings:")
+            for warning in validation['warnings']:
+                logger.warning(f"  - {warning}")
+
         # Step 1: Create wafer list
         wafers = self.create_wafer_list()
 
@@ -677,7 +757,7 @@ class CurveFollower:
         consistent_wafers = self._determine_consistent_wafer_types(wafers)
 
         # Step 3: Correct rotation angles
-        corrected_wafers = self._correct_rotation_angles(consistent_wafers)
+        corrected_wafers = consistent_wafers    # removed null correction
 
         # Step 4: Process each wafer
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
@@ -983,6 +1063,8 @@ class CurveFollower:
         # Scale tolerance to curve extent so it works for tiny/large curves
         extent = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2]), 1.0)
         is_planar = rms <= (eps * extent)
+        log_coord(__name__, f"_fit_plane: extent={extent:.6f}, rms={rms:.6f}, threshold={eps * extent:.6f}")
+
         return is_planar, n_hat, c, rms
 
 
@@ -997,6 +1079,91 @@ class CurveFollower:
         sin_term = np.dot(n_hat, cross)
         cos_term = np.clip(np.dot(t1u, t2u), -1.0, 1.0)
         return float(np.arctan2(sin_term, cos_term))
+
+    def validate_parameters(self) -> Dict[str, Any]:
+        """Validate that user parameters can produce viable wafers.
+
+        Returns:
+            Dictionary with validation results and suggestions
+        """
+        issues = []
+        warnings = []
+
+        # Check 1: Are consecutive points too close together?
+        point_distances = []
+        for i in range(len(self.curve_points) - 1):
+            dist = np.linalg.norm(self.curve_points[i + 1] - self.curve_points[i])
+            point_distances.append(dist)
+
+        min_point_distance = min(point_distances)
+        avg_point_distance = np.mean(point_distances)
+
+        if self.min_height > avg_point_distance * 3:
+            issues.append(f"min_height ({self.min_height:.3f}) is too large. "
+                          f"Average point spacing is {avg_point_distance:.3f}. "
+                          f"Recommended max: {avg_point_distance * 2:.3f}")
+
+        # Check 2: Is max_chord too restrictive?
+        sample_chord_distances = []
+        for i in range(0, len(self.curve_points) - 3, 2):  # Sample every other segment
+            start = self.curve_points[i]
+            end = self.curve_points[i + 2]
+            segment = self.curve_points[i:i + 3]
+            chord_dist = self._calculate_chord_distance(start, end, segment)
+            sample_chord_distances.append(chord_dist)
+
+        if sample_chord_distances and min(sample_chord_distances) > self.max_chord:
+            issues.append(f"max_chord ({self.max_chord:.3f}) is too restrictive. "
+                          f"Even short curve segments exceed this. "
+                          f"Minimum found: {min(sample_chord_distances):.3f}")
+
+        # Check 3: Can we find ANY valid segments?
+        valid_segments_found = 0
+        for start_idx in range(0, len(self.curve_points) - 1, 5):  # Sample every 5th point
+            for end_idx in range(start_idx + 1, min(start_idx + 6, len(self.curve_points))):
+                start_pt = self.curve_points[start_idx]
+                end_pt = self.curve_points[end_idx]
+                height = np.linalg.norm(end_pt - start_pt)
+
+                if height >= self.min_height:
+                    segment = self.curve_points[start_idx:end_idx + 1]
+                    chord_dist = self._calculate_chord_distance(start_pt, end_pt, segment)
+                    if chord_dist <= self.max_chord:
+                        valid_segments_found += 1
+
+        if valid_segments_found == 0:
+            issues.append("No valid wafer segments found with current parameters. "
+                          "Try reducing min_height or increasing max_chord.")
+        elif valid_segments_found < 3:
+            warnings.append(f"Very few valid segments found ({valid_segments_found}). "
+                            "This may produce poor wafer layouts.")
+
+        # Check 4: Curve sampling density
+        if len(self.curve_points) < 10:
+            warnings.append(f"Curve has only {len(self.curve_points)} points. "
+                            "Consider increasing point density for better results.")
+
+        # Generate recommendations
+        recommendations = []
+        if issues:
+            recommendations.append(f"Suggested min_height: {avg_point_distance * 1.5:.3f}")
+            if sample_chord_distances:
+                recommended_max_chord = max(sample_chord_distances) * 1.2
+                recommendations.append(f"Suggested max_chord: {recommended_max_chord:.3f}")
+
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues,
+            'warnings': warnings,
+            'recommendations': recommendations,
+            'stats': {
+                'curve_points': len(self.curve_points),
+                'curve_length': self.curve_length,
+                'min_point_distance': min_point_distance,
+                'avg_point_distance': avg_point_distance,
+                'valid_segments_found': valid_segments_found
+            }
+        }
 
 
 def format_mixed(result):

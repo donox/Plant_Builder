@@ -1,15 +1,12 @@
-
-from core.logging_setup import get_logger
-
-
+from core.logging_setup import get_logger, log_coord, apply_display_levels
+apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
 logger = get_logger(__name__)
-
 import numpy as np
 import math
 import time
 import FreeCAD
 import Part
-
+from FreeCAD import Vector as Vec
 
 class Wafer(object):
 
@@ -166,9 +163,6 @@ class Wafer(object):
             return math.acos(dotv)
         except Exception:
             return 0.0
-
-    # wafer.py
-    import math
 
     EPS = 1e-9
 

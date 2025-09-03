@@ -1,5 +1,6 @@
 try:
-    from core.logging_setup import get_logger
+    from core.logging_setup import get_logger, log_coord, apply_display_levels
+    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
 except Exception:
     import logging
     get_logger = lambda name: logging.getLogger(name)
@@ -21,6 +22,7 @@ from flex_segment import FlexSegment
 from curves import Curves
 from make_helix import MakeHelix
 from test_get_rotation_angle_freecad_wrapper import run_freecad_wrapper
+print("PyCharm 0", flush=True)
 # import pydevd_pycharm
 
 
@@ -30,7 +32,7 @@ from test_get_rotation_angle_freecad_wrapper import run_freecad_wrapper
 class Driver(object):
     """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
 
-    def __init__(self, App, Gui, assembly_name, master_spreadsheet):
+    def __init__(self, App, Gui, assembly_name):
         """Initialize the Driver with FreeCAD integration.
 
         Args:
@@ -42,6 +44,7 @@ class Driver(object):
         self.App = App
         self.Gui = Gui
         self.doc = App.activeDocument()
+        print(f"DOCS: {App.listDocuments()}", flush=True)
         self.parent_assembly = App.listDocuments()[assembly_name]
         if not self.parent_assembly:
             raise ValueError(f"Assembly {assembly_name} not found.")
@@ -70,8 +73,12 @@ class Driver(object):
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label
 
+        # import pydevd_pycharm
+        # pydevd_pycharm.settrace("127.0.0.1", port=46845, suspend=True)
+
         # Support for remote debugging to FreeCAD
         # pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
+        # raise ValueError("Forced ABORT")
 
     def load_yaml_config(self, yaml_file_path: str) -> None:
         """Load project configuration from YAML file.

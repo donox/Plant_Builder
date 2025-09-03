@@ -1,15 +1,16 @@
-from core.logging_setup import get_logger
+from core.logging_setup import get_logger, log_coord, apply_display_levels
+apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+logger = get_logger(__name__)
 import sys
-
 import numpy as np
 import math
 import csv
+from core.core_utils import add_to_group, ensure_group
 from wafer import Wafer, log_lcs_info, log_lcs_debug, log_lcs_info_level
 import FreeCAD
 import FreeCADGui
 from utilities import position_to_str
-from core.core_utils import add_to_group, ensure_group
-logger = get_logger(__name__)
+
 
 class FlexSegment(object):
     def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment):
@@ -596,18 +597,14 @@ class FlexSegment(object):
                 doc.removeObject(item.Name)
 
     def make_cut_list(self,  cuts_list,
-                      min_lift=0.5, max_lift=20.0,
-                      min_rotate=0.5, max_rotate=20.0):
+                      min_lift=0.5, max_lift=45.0,
+                      min_rotate=0.5, max_rotate=45.0):
         """
         Build a human-readable cut list for this segment and append to cuts_list.
         - Works with several possible wafer containers on the segment.
         - Rotation is Wafer.get_rotation_angle(expected_deg=None); CE/EC forced to 0°.
         - Accumulates a running saw position in degrees.
         """
-        import math
-        import numpy as np
-        from core.logging_setup import get_logger
-        logger = get_logger(__name__)
 
         # --- Find wafers on this segment, regardless of attribute name ---
         wafers = None
@@ -663,17 +660,16 @@ class FlexSegment(object):
             # Lift angle in degrees
             lift_rad = w.get_lift_angle(next_w)
             lift_deg = float(np.rad2deg(lift_rad)) if lift_rad is not None else 0.0
-
             # Rotation angle in degrees
-            rot_rad = w.get_rotation_angle(expected_deg=None)
-            rot_deg = float(np.rad2deg(rot_rad)) if rot_rad is not None else 0.0
+            rot_deg = w.get_rotation_angle(expected_deg=None)
+            log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg}; lift_deg: {lift_deg}; ")
 
             # CE/EC define rotation as 0°
             if wt.endswith("C") or (next_w and ((next_w.get_wafer_type() or "").upper().startswith("C"))):
                 rot_deg = 0.0
 
             saw_pos = (saw_pos - rot_deg) % 360.0
-            cuts_list.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t{rot_deg:.2f}\t{saw_pos:.2f}\n")
+            cuts_list.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{saw_pos:.2f}\n")
             rows_written += 1
 
             # Soft guardrails; only warn when there *is* a next wafer (i.e. an actual transition)

@@ -5,14 +5,12 @@ apply transformations, and prepare them for use in wafer generation systems.
 """
 
 from core.logging_setup import get_logger
+logger = get_logger(__name__)
 import math
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import FreeCAD
 import Part
-
-logger = get_logger(__name__)
-
 
 class Curves:
     """Generates and manipulates 3D curves for manufacturing applications.
