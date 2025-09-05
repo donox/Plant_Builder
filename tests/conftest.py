@@ -4,6 +4,7 @@ import sys
 import os
 import numpy as np
 from typing import Dict, List, Any
+import types, pathlib
 
 # Add source directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -91,3 +92,65 @@ class GeometryValidator:
 def geometry_validator():
     """Provide geometry validation utilities"""
     return GeometryValidator()
+
+
+# --- BEGIN (add to existing tests/conftest.py) -------------------------
+
+# Ensure project root (sibling of tests/ and src/) is importable
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Minimal FreeCAD stubs so importing your real modules never crashes
+def _ensure_freecad_stubs():
+    if "FreeCAD" not in sys.modules:
+        FreeCAD = types.ModuleType("FreeCAD")
+        class _Vec(tuple):
+            def __new__(cls, x=0.0, y=0.0, z=0.0):
+                return tuple.__new__(cls, (float(x), float(y), float(z)))
+        FreeCAD.Vector = _Vec
+        sys.modules["FreeCAD"] = FreeCAD
+
+    if "FreeCADGui" not in sys.modules:
+        FreeCADGui = types.ModuleType("FreeCADGui")
+        sys.modules["FreeCADGui"] = FreeCADGui
+
+_ensure_freecad_stubs()
+
+
+def _ensure_stub(name, attrs=None):
+    if name in sys.modules:
+        return sys.modules[name]
+    m = types.ModuleType(name)
+    if attrs:
+        for k, v in attrs.items():
+            setattr(m, k, v)
+    sys.modules[name] = m
+    return m
+
+# FreeCAD + FreeCADGui stubs (very light)
+FreeCAD = _ensure_stub("FreeCAD", {})
+_ensure_stub("FreeCADGui", {})
+
+# Common FreeCAD submodules some projects import implicitly
+_ensure_stub("FreeCAD.Base", {})
+_ensure_stub("FreeCAD.Vector", {})  # just in case someone imports like "from FreeCAD import Vector"
+
+# Part (needed by src/curves.py). Provide dummies for common names so attribute access won't explode.
+Part = _ensure_stub("Part", {
+    "Shape": object,
+    "Edge": object,
+    "Wire": object,
+    "Face": object,
+})
+# Popular callable names sometimes imported/used; harmless no-ops:
+for fname in ("makeLine", "makeCircle", "makePolygon", "makeSphere", "makeCylinder"):
+    setattr(Part, fname, lambda *a, **k: None)
+
+# Optional: other modules sometimes pulled transitively; stub only if your imports require them
+_ensure_stub("Draft", {})
+_ensure_stub("DraftVecUtils", {})
+_ensure_stub("Mesh", {})
+_ensure_stub("MeshPart", {})
+# --- END: minimal stubs ---
+

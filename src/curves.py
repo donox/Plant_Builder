@@ -346,6 +346,7 @@ class Curves:
         Returns:
             List of [x, y, z] coordinate lists
         """
+        logger.info(f"SPEC: Radius: {radius}, Pitch: {pitch}, Turns: {turns}, Points: {points}")
         curve_points = []
         total_angle = turns * 2 * math.pi
         total_height = turns * pitch
@@ -573,6 +574,7 @@ class Curves:
 
     def add_visualization_vertices_with_lcs(self, lcs_obj, group_name: str = None) -> str:
         """Add vertices using LCS coordinate system as reference."""
+        return          # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         if group_name is None:
             curve_type = self.curve_spec.get('type', 'curve')
             group_name = f"{curve_type}_vertices_lcs"

@@ -8,6 +8,7 @@ import FreeCAD
 import Part
 from FreeCAD import Vector as Vec
 
+
 class Wafer(object):
 
     def __init__(self, app, gui, parm_set, wafer_type="EE"):
@@ -16,8 +17,10 @@ class Wafer(object):
         self.parm_set = parm_set        # Naming preamble for elements in a set (segment)
         self.wafer_type = wafer_type    # EE, CE, EC, CC
         self.outside_height = None
-        self.lift_angle = None
+        self.lift_angle = None      # All angles in degrees
         self.rotation_angle = None
+        self.lift_start_angle = None
+        self.lift_end_angle = None
         self.cylinder_radius = None
         self.lcs_top = None
         self.lcs_base = None
@@ -26,6 +29,8 @@ class Wafer(object):
         self.angle = None   # Angle to x-y plane of top surface
 
     def set_parameters(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
+        assert lift == 0 or lift > 1.0, "lift likely in radians"
+        assert rotation == 0 or rotation > 1.0, "Rotation likely in radians"
         self.lift_angle = lift
         self.rotation_angle = rotation
         self.cylinder_radius = cylinder_diameter / 2
@@ -40,6 +45,8 @@ class Wafer(object):
             start_cut_angle: Angle in radians (0 for circular cut)
             end_cut_angle: Angle in radians (0 for circular cut)
         """
+        assert start_cut_angle == 0 or start_cut_angle > 1.0, "start_cut_angle likely in radians"
+        assert end_cut_angle == 0 or end_cut_angle > 1.0, "end_cut_angle likely in radians"
         self.lcs_top = lcs2
         self.lcs_base = lcs1
         self.cylinder_radius = cylinder_diameter / 2
@@ -64,7 +71,7 @@ class Wafer(object):
             extend1 = epsilon
         else:  # Elliptical start
             if start_cut_angle is not None and abs(start_cut_angle) > 0.001:
-                extend1 = self.cylinder_radius * np.tan(abs(start_cut_angle)) + epsilon
+                extend1 = self.cylinder_radius * np.tan(np.deg2rad(abs(start_cut_angle))) + epsilon
             else:
                 extend1 = epsilon
 
@@ -72,7 +79,7 @@ class Wafer(object):
             extend2 = epsilon
         else:  # Elliptical end
             if end_cut_angle is not None and abs(end_cut_angle) > 0.001:
-                extend2 = self.cylinder_radius * np.tan(abs(end_cut_angle)) + epsilon
+                extend2 = self.cylinder_radius * np.tan(np.deg2rad(abs(end_cut_angle))) + epsilon
             else:
                 extend2 = epsilon
 
@@ -82,6 +89,7 @@ class Wafer(object):
         max_extend = chord_length * 0.5
         extend1 = min(extend1, max_extend)
         extend2 = min(extend2, max_extend)
+        logger.info(f"Extensions: {extend1:.3f}, {extend2:.3f} (in make_wafer_from_lcs)")
 
         # Create cylinder with extensions
         cylinder_start = pos1 - wafer_axis * extend1
@@ -125,9 +133,6 @@ class Wafer(object):
 
         logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
 
-        #  per-wafer rotation sanity check (logged)
-        self._validate_rotation_after_build(tol_deg=2.0)
-
     def get_lift_angle(self, next_wafer):
         """
         Per-step lift/tilt (radians) to go from LCS1(n) to LCS1(n+1).
@@ -166,144 +171,8 @@ class Wafer(object):
 
     EPS = 1e-9
 
-    def get_rotation_angle(self, next_wafer=None, expected_deg=None, **_ignore) -> float:
-        """
-        Absolute twist angle **in degrees** about the chord (line from A→B),
-        comparing THIS.END→NEXT.START if next_wafer is given, otherwise THIS.START→THIS.END.
-
-        Compatible with callers that pass `expected_deg`, and resilient to missing/degenerate frames.
-        Emits detailed DEBUG of the intermediate projections (y1p/y2p/z1p/z2p).
-        """
-        import math
-        try:
-            # --- helpers that don't depend on project-wide utilities ---
-            def unit_and_len(v):
-                # returns (unit_vector, length) without mutating v
-                L = float(v.Length) if hasattr(v, "Length") else math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
-                if L <= 1e-12:
-                    return FreeCAD.Vector(0, 0, 0), 0.0
-                return FreeCAD.Vector(v.x / L, v.y / L, v.z / L), L
-
-            def proj_perp(v, u_unit):
-                # v - (v·u)u
-                dot = float(v.dot(u_unit))
-                return FreeCAD.Vector(v.x - u_unit.x * dot,
-                                      v.y - u_unit.y * dot,
-                                      v.z - u_unit.z * dot)
-
-            def axes_YZ(lcs, Vec):
-                """
-                Return the world-space images of local Y and Z for an LCS-like thing.
-                Works with:
-                  - Part::Feature / Datum objects (use .Placement.Rotation)
-                  - anything exposing .getGlobalPlacement()
-                  - a raw App.Placement passed directly
-                """
-                P = getattr(lcs, "Placement", None)
-                if P is None:
-                    get_glob = getattr(lcs, "getGlobalPlacement", None)
-                    if callable(get_glob):
-                        P = get_glob()
-                    else:
-                        # maybe lcs *is* a Placement already
-                        P = lcs
-                R = getattr(P, "Rotation", None)
-                if R is None:
-                    raise AttributeError(f"{type(lcs).__name__} has no Placement.Rotation")
-                Y = R.multVec(Vec(0, 1, 0))
-                Z = R.multVec(Vec(0, 0, 1))
-                return Y, Z
-
-            # --- circular-face joints are defined to be 0° ---
-            this_t = getattr(self, "wafer_type", "") or ""
-            next_t = getattr(next_wafer, "wafer_type", "") if next_wafer else ""
-            if ("C" in this_t) or ("C" in (next_t or "")):
-                logger.debug("get_rotation_angle: circular joint (this=%s, next=%s) → 0.0°", this_t, next_t or "")
-                return 0.0
-
-            # --- choose the frames to compare ---
-            if next_wafer is None:
-                A = getattr(self, "lcs1", None) or getattr(self, "lcs_base", None)
-                B = getattr(self, "lcs2", None) or getattr(self, "lcs_top", None)
-            else:
-                A = getattr(self, "lcs2", None) or getattr(self, "lcs_top", None)  # THIS end
-                B = getattr(next_wafer, "lcs1", None) or getattr(next_wafer, "lcs_base", None)  # NEXT start
-
-            if not (A and B):
-                logger.debug("get_rotation_angle: missing LCS (A=%s, B=%s) → 0.0°", bool(A), bool(B))
-                return 0.0
-
-            Pa, Pb = A.Placement.Base, B.Placement.Base
-            chord = Pb.sub(Pa)
-            c_u, c_len = unit_and_len(chord)
-            if c_len <= 1e-12:
-                logger.debug("get_rotation_angle: chord length ≈ 0 → 0.0°")
-                return 0.0
-
-            # world-space Y/Z axes for both frames
-            Y1, Z1 = axes_YZ(A, Vec)
-            Y2, Z2 = axes_YZ(B, Vec)
-
-            # project Y/Z into plane ⟂ chord
-            y1p = proj_perp(Y1, c_u);
-            y1u, ny1 = unit_and_len(y1p)
-            y2p = proj_perp(Y2, c_u);
-            y2u, ny2 = unit_and_len(y2p)
-            z1p = proj_perp(Z1, c_u);
-            z1u, nz1 = unit_and_len(z1p)
-            z2p = proj_perp(Z2, c_u);
-            z2u, nz2 = unit_and_len(z2p)
-
-            # candidate angles using Y and Z, pick the more stable (larger of the two minima)
-            def angle_deg(u1, u2):
-                d = max(-1.0, min(1.0, float(u1.dot(u2))))
-                s = float(c_u.dot(u1.cross(u2)))
-                return abs(math.degrees(math.atan2(s, d)))
-
-            candY = angle_deg(y1u, y2u) if min(ny1, ny2) > 1e-12 else None
-            candZ = angle_deg(z1u, z2u) if min(nz1, nz2) > 1e-12 else None
-
-            if candY is None and candZ is None:
-                logger.debug("get_rotation_angle: degenerate projections (Y & Z nearly 0) → 0.0°")
-                return 0.0
-
-            # choose by projection strength, tie-break by smaller angle
-            strengthY = min(ny1, ny2)
-            strengthZ = min(nz1, nz2)
-            if (candY is not None and strengthY >= strengthZ) or (candZ is None):
-                rot_deg = candY
-                axis_used = "Y"
-            else:
-                rot_deg = candZ
-                axis_used = "Z"
-
-            # detailed diagnostics
-            logger.debug(
-                "get_rotation_angle: axis=%s, angle=%+.3f°, chord_len=%.4f, "
-                "Yp=(%.3e, %.3e), Zp=(%.3e, %.3e), candY=%.3f°, candZ=%.3f°",
-                axis_used, rot_deg, c_len,
-                ny1, ny2, nz1, nz2,
-                (candY if candY is not None else float("nan")),
-                (candZ if candZ is not None else float("nan")),
-            )
-
-            # optional expectation check for existing callers
-            if expected_deg is not None:
-                try:
-                    delta = abs(rot_deg - float(expected_deg))
-                    if delta > 5.0:
-                        logger.error(
-                            "get_rotation_angle: Δ=%.2f° > 5° (actual=%.2f°, expected=%.2f°)",
-                            delta, rot_deg, float(expected_deg),
-                        )
-                except Exception:
-                    pass
-
-            return float(rot_deg)
-
-        except Exception:
-            logger.exception("get_rotation_angle: unexpected error")
-            return 0.0
+    def get_rotation_angle(self):
+        return self.rotation_angle
 
     def get_outside_height(self):
         return self.outside_height
@@ -399,27 +268,6 @@ class Wafer(object):
             raise ValueError("Segment must end with circular cut for joining")
         if segment2_first_wafer.wafer_type[0] != 'C':
             raise ValueError("Segment must start with circular cut for joining")
-
-    def _validate_rotation_after_build(self, tol_deg: float = 2.0) -> None:
-        """
-        Validate immediately after construction.
-
-        - Skips CE/EC (rotation defined 0°).
-        - Uses Wafer.get_rotation_angle(expected_deg=None, tol_deg=tol_deg) which:
-            * Computes the shop rotation from LCS1/LCS2 (Y-projections in the cut plane).
-            * Does a curve-agnostic plausibility check (binormal-style) and logs if it drifts.
-        """
-        try:
-            wt = getattr(self, "wafer_type", "EE")
-            if "C" in wt:
-                logger.debug(f"🧪 Rotation check: '{wt}' circular face → defined 0.0°; skipping validation.")
-                return
-
-            # Compute + internally validate against expected; no external utilities needed.
-            _ = self.get_rotation_angle(expected_deg=None, tol_deg=tol_deg)
-
-        except Exception as e:
-            logger.error(f"❌ Rotation validation threw: {e}")
 
 
 def convert_angle(angle):

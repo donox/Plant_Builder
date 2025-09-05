@@ -2,10 +2,10 @@
 # This file defines the workflow and construction parameters for building segments
 
 metadata:
-  project_name: "Helical Test Structure"
+  project_name: "Test Structures"
   version: "1.0"
-  created: "2025-01-25"
-  description: "Test project demonstrating helical curve following with wafers"
+  created: "2025-08-25"
+  description: "Test project for debugging"
 
 # Global settings that apply to all operations
 global_settings:
@@ -28,73 +28,72 @@ workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
     patterns:
-      - "test_helix.*"
-      - "Curve.*"
+      - "test_.*"
       - "temp.*"
 
-  - operation: "set_position"
-    description: "Set starting position and orientation"
-    position: [0, 0, 0]          # x, y, z coordinates
-    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
-
-  - operation: "build_segment"
-    segment_type: "curve_follower"
-    name: "test_circle"
-    description: "Build circular structure using curve follower"
-
-    # Curve specification using new Curves class
-    curve_spec:
-      type: "circle"
-      parameters:
-        radius: 8.0
-        points: 100
-      transformations:
-        - operation: "scale"
-          factor: 1.0
-        - operation: "rotate"
-          axis: "z"
-          angle: 0
-      segment:
-        start_fraction: 0.0
-        end_fraction: 0.25
-
-    # Wafer construction parameters
-    wafer_settings:
-      cylinder_diameter: 2.0
-      min_height: 0.8
-      max_chord: .3         # Need to relate to # points
-
-    # Segment control settings
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-      add_curve_vertices: true
+#  - operation: "set_position"
+#    description: "Set starting position and orientation"
+#    position: [0, 0, 0]          # x, y, z coordinates
+#    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
 
 #  - operation: "build_segment"
 #    segment_type: "curve_follower"
-#    name: "test_helix_2"
-#    description: "Build helical structure using curve follower"
+#    name: "test_circle"
+#    description: "Build circular structure using curve follower"
 #
+#    # Curve specification using new Curves class
 #    curve_spec:
-#      type: "helical"
+#      type: "circle"
 #      parameters:
-#        radius: 8.0        # Match the traditional helix
-#        pitch: 6.0         # Larger pitch for better spacing
-#        turns: 1.5         # Fewer turns
-#        points: 60
-#      transformations: [ ]   # Remove transformations for now
+#        radius: 8.0
+#        points: 100
+#      transformations:
+#        - operation: "scale"
+#          factor: 1.0
+#        - operation: "rotate"
+#          axis: "z"
+#          angle: 0
+#      segment:
+#        start_fraction: 0.0
+#        end_fraction: 0.75
 #
+#    # Wafer construction parameters
 #    wafer_settings:
-#      cylinder_diameter: 1.5    # Match traditional helix
-#      min_height: 0.5           # Much smaller
-#      max_chord: 0.8           # Much tighter
+#      cylinder_diameter: 2.0
+#      min_height: 0.8
+#      max_chord: .3         # Need to relate to # points
 #
+#    # Segment control settings
 #    segment_settings:
 #      show_lcs: false
 #      build_segment: true
 #      rotate_segment: 0.0
 #      add_curve_vertices: true
+
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "test_helix_2"
+    description: "Build helical structure using curve follower"
+
+    curve_spec:
+      type: "helical"
+      parameters:
+        radius: 8.0        # Match the traditional helix
+        pitch: 6.0         # Larger pitch for better spacing
+        turns: 1.5         # Fewer turns
+        points: 60
+      transformations: [ ]   # Remove transformations for now
+
+    wafer_settings:
+      cylinder_diameter: 1.5    # Match traditional helix
+      min_height: 0.5           # Much smaller
+      max_chord: 0.8           # Much tighter
+
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: true
 
 
 #  - operation: "build_segment"
