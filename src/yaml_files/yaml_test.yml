@@ -79,15 +79,15 @@ workflow:
       type: "helical"
       parameters:
         radius: 8.0        # Match the traditional helix
-        pitch: 6.0         # Larger pitch for better spacing
-        turns: 1.5         # Fewer turns
-        points: 60
+        pitch: 8.0         # Larger pitch for better spacing
+        turns: .9        # Fewer turns
+        points: 120
       transformations: [ ]   # Remove transformations for now
 
     wafer_settings:
-      cylinder_diameter: 1.5    # Match traditional helix
+      cylinder_diameter: 1.9    # Match traditional helix
       min_height: 0.5           # Much smaller
-      max_chord: 0.8           # Much tighter
+      max_chord: 0.2         # Much tighter
 
     segment_settings:
       show_lcs: false

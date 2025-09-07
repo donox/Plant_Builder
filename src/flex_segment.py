@@ -1,6 +1,6 @@
 from core.logging_setup import get_logger, log_coord, apply_display_levels
 # apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
-apply_display_levels(["ERROR", "WARNING", "INFO"])
+# apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import sys
 import numpy as np
@@ -186,7 +186,7 @@ class FlexSegment(object):
             """
         #  This add_wafer called after add_wafer_from_curve_data in curves.
         # Initialize wafer_count if not exists
-        assert rotation == 0 or rotation > 1.0, f"Rotation {rotation:.3f} likely in radians"
+        assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
         assert lift == 0 or lift > 1.0, f"Lift {lift:.3f} likely in radians"
         if not hasattr(self, 'wafer_count'):
             self.wafer_count = 0

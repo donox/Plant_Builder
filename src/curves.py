@@ -4,7 +4,9 @@ This module provides functionality to generate various mathematical curves,
 apply transformations, and prepare them for use in wafer generation systems.
 """
 
-from core.logging_setup import get_logger
+from core.logging_setup import get_logger, apply_display_levels
+# apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+# apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import math
 import numpy as np
@@ -73,7 +75,7 @@ class Curves:
             'circle': self._generate_circle,
             'spiral': self._generate_spiral,
             'figure_eight': self._generate_figure_eight,
-            'trefoil': self._generate_trefoil
+            'trefoil': self._generate_trefoil,
         }
 
         # Generate the curve
@@ -369,7 +371,7 @@ class Curves:
 
         return curve_points
 
-    def _generate_trefoil(self, **parameters):
+    def _generate_trefoil_old(self, **parameters):
         """
         Generate a trefoil (2,3) torus-knot curve.
 
@@ -419,6 +421,84 @@ class Curves:
 
         pts = np.stack((x, y, z), axis=1).astype(float)
         return pts
+
+    def _trefoil_param(self, t, R, r, p, q, scale_z, cx, cy, cz):
+        cq, sq = np.cos(q * t), np.sin(q * t)
+        cp, sp = np.cos(p * t), np.sin(p * t)
+        x = (R + r * cq) * cp + cx
+        y = (R + r * cq) * sp + cy
+        z = (r * sq) * scale_z + cz
+        return np.stack((x, y, z), axis=1).astype(float)
+
+    def _moving_avg(self, P, win=0):
+        if win and win > 1:
+            k = int(win)
+            k += (k + 1) % 2  # force odd
+            w = np.ones(k, float) / k
+            # pad circularly to preserve closure
+            Ppad = np.vstack((P[-k // 2:], P, P[:k // 2]))
+            S = np.vstack([np.convolve(Ppad[:, i], w, mode="valid") for i in range(3)]).T
+            return S
+        return P
+
+    def _generate_trefoil_1(self, **parameters):
+        """
+        Trefoil (p,q) torus-knot with equal-arc-length sampling.
+        Returns np.ndarray of shape (points, 3).
+
+        parameters:
+          major_radius (R)  : default 6.0
+          tube_radius  (r)  : default 2.0
+          p, q              : default 2, 3 (trefoil)
+          points            : number of *final* samples (default 200)
+          refine_factor     : dense oversampling factor before resampling (default 10)
+          center            : (cx, cy, cz) offset (default (0,0,0))
+          phase_deg         : rotate start around +Z (default 0.0)
+          scale_z           : squash/scale z (default 1.0)
+          smooth_window     : odd int >=3 for optional circular moving average on output (default 0 -> off)
+        """
+        R = float(parameters.get("major_radius", 6.0))
+        r = float(parameters.get("tube_radius", 2.0))
+        p = int(parameters.get("p", 2))
+        q = int(parameters.get("q", 3))
+        n = int(parameters.get("points", 200))
+        refine = int(parameters.get("refine_factor", 10))
+        cx, cy, cz = parameters.get("center", (0.0, 0.0, 0.0))
+        phase = np.deg2rad(float(parameters.get("phase_deg", 0.0)))
+        scale_z = float(parameters.get("scale_z", 1.0))
+        smooth_win = int(parameters.get("smooth_window", 0))
+
+        # 1) dense sampling over one loop (endpoint=False to avoid duplicate)
+        n_dense = max(8, n * max(2, refine))
+        t_dense = np.linspace(0.0, 2.0 * np.pi, n_dense, endpoint=False) + phase
+        Pd = self._trefoil_param(t_dense, R, r, p, q, scale_z, cx, cy, cz)
+
+        # 2) cumulative arc-length (closed curve)
+        d = np.linalg.norm(np.diff(Pd, axis=0, append=Pd[:1]), axis=1)
+        s = np.cumsum(d)
+        s = np.insert(s, 0, 0.0)[:-1]  # align with Pd
+        s /= s[-1] if s[-1] > 0 else 1.0  # normalize to [0,1)
+
+        # 3) equal-arc-length targets and component-wise interpolation
+        s_target = np.linspace(0.0, 1.0, n, endpoint=False)
+        Px = np.interp(s_target, s, Pd[:, 0])
+        Py = np.interp(s_target, s, Pd[:, 1])
+        Pz = np.interp(s_target, s, Pd[:, 2])
+        P = np.stack((Px, Py, Pz), axis=1)
+
+        # 4) optional light smoothing (keeps closure)
+        P = self._moving_avg(P, win=smooth_win)
+        return P
+
+    def _generate_trefoil(self, **parameters):
+        p = generate_woodcut_trefoil(
+            slices=150,  # Good balance of detail vs. cutting time
+            major_radius=8.0,  # Larger for easier handling
+            tube_radius=2.5,
+            smooth_factor=0.92,  # Slightly smoother for easier cutting
+            jitter=0.02,  # Small natural variation
+            optimize_spacing=True)
+        return p
 
     def _generate_sinusoidal(self, length: float = 50.0, amplitude: float = 5.0,
                              frequency: float = 2.0, points: int = 100,
@@ -782,4 +862,141 @@ class Curves:
             List of curve type names
         """
         return ['linear', 'helical', 'sinusoidal', 'overhand_knot',
-                'circle', 'spiral', 'figure_eight', 'custom']
+                'circle', 'spiral', 'figure_eight', 'trefoil', 'custom']
+
+
+
+def generate_woodcut_trefoil(slices=180, **parameters):
+    """
+    Generate a trefoil curve optimized for wood cutting with cylindrical slices.
+
+    Parameters:
+        slices (int): Number of cutting slices (affects curve resolution)
+        **parameters: Same parameters as original trefoil function
+
+    Returns:
+        np.ndarray of shape (slices, 3): Points optimized for woodcutting
+    """
+    R = float(parameters.get("major_radius", 6.0))
+    r = float(parameters.get("tube_radius", 2.0))
+    p = int(parameters.get("p", 2))
+    q = int(parameters.get("q", 3))
+    cx, cy, cz = parameters.get("center", (0.0, 0.0, 0.0))
+    phase_deg = float(parameters.get("phase_deg", 0.0))
+    scale_z = float(parameters.get("scale_z", 1.0))
+
+    # Ensure we don't exceed 200 points
+    n = min(slices, 200)
+
+    # Generate parameter values with strategic spacing
+    # Add slight randomization to avoid perfect regularity that can cause grain issues
+    t0 = np.deg2rad(phase_deg)
+    t_base = np.linspace(0.0, 2.0 * np.pi, num=n, endpoint=False)
+
+    # Add small perturbations for more natural cutting (optional)
+    jitter = parameters.get("jitter", 0.0)  # 0.01-0.03 recommended for natural variation
+    if jitter > 0:
+        t_perturbation = jitter * (np.random.random(n) - 0.5) * (2 * np.pi / n)
+        t = t_base + t_perturbation + t0
+    else:
+        t = t_base + t0
+
+    # Trefoil parametric equations with slight smoothing
+    # Use slightly higher precision for manufacturing
+    cq = np.cos(q * t)
+    sq = np.sin(q * t)
+    cp = np.cos(p * t)
+    sp = np.sin(p * t)
+
+    # Apply optional smoothing factor for easier cutting
+    smooth_factor = parameters.get("smooth_factor", 0.5)  # 0.9-0.95 for gentler curves
+
+    x = (R + r * cq * smooth_factor) * cp + cx
+    y = (R + r * cq * smooth_factor) * sp + cy
+    z = (r * sq * smooth_factor) * scale_z + cz
+
+    pts = np.stack((x, y, z), axis=1).astype(float)
+
+    # Optional: ensure points are well-distributed for cutting
+    if parameters.get("optimize_spacing", True):
+        pts = _optimize_cutting_spacing(pts)
+    new_pts = np.append(pts, [pts[0]], axis=0)
+    return new_pts
+
+
+def _optimize_cutting_spacing(points):
+    """
+    Redistribute points to ensure more uniform spacing for cutting operations.
+    """
+    # Calculate cumulative arc length
+    diffs = np.diff(points, axis=0)
+    distances = np.sqrt(np.sum(diffs ** 2, axis=1))
+    cumulative_length = np.concatenate([[0], np.cumsum(distances)])
+
+    # Create evenly spaced arc length samples
+    total_length = cumulative_length[-1]
+    target_lengths = np.linspace(0, total_length, len(points))
+
+    # Interpolate to get evenly spaced points
+    x_interp = np.interp(target_lengths, cumulative_length, points[:, 0])
+    y_interp = np.interp(target_lengths, cumulative_length, points[:, 1])
+    z_interp = np.interp(target_lengths, cumulative_length, points[:, 2])
+
+    return np.column_stack([x_interp, y_interp, z_interp])
+
+
+def analyze_cutting_requirements(points):
+    """
+    Analyze the curve to provide cutting guidance.
+    """
+    # Calculate chord information for each slice
+    center = np.mean(points, axis=0)
+    radii = np.sqrt(np.sum((points - center) ** 2, axis=1))
+
+    # Z-height variation (important for stacking slices)
+    z_min, z_max = np.min(points[:, 2]), np.max(points[:, 2])
+    z_range = z_max - z_min
+
+    # Maximum radius for cylinder stock
+    max_radius = np.max(radii)
+
+    # Angle between consecutive cuts
+    n_points = len(points)
+    angle_per_slice = 360.0 / n_points
+
+    print(f"Cutting Analysis:")
+    print(f"  Number of slices: {n_points}")
+    print(f"  Cylinder diameter needed: {2 * max_radius:.2f}")
+    print(f"  Height range: {z_range:.2f} (from {z_min:.2f} to {z_max:.2f})")
+    print(f"  Angle per slice: {angle_per_slice:.2f}°")
+    print(f"  Average radius: {np.mean(radii):.2f}")
+
+    return {
+        'n_slices': n_points,
+        'cylinder_diameter': 2 * max_radius,
+        'height_range': z_range,
+        'angle_per_slice': angle_per_slice,
+        'radii': radii
+    }
+
+
+# Example usage for woodcutting
+if __name__ == "__main__":
+    # Generate curve optimized for wood cutting
+    trefoil_points = generate_woodcut_trefoil(
+        slices=150,  # Good balance of detail vs. cutting time
+        major_radius=8.0,  # Larger for easier handling
+        tube_radius=2.5,
+        smooth_factor=0.92,  # Slightly smoother for easier cutting
+        jitter=0.02,  # Small natural variation
+        optimize_spacing=True
+    )
+
+    # Analyze cutting requirements
+    cutting_info = analyze_cutting_requirements(trefoil_points)
+
+    # Optional: Save points for CAD/CAM software
+    # np.savetxt('trefoil_cutting_points.csv', trefoil_points,
+    #           delimiter=',', header='X,Y,Z', comments='')
+
+    print(f"\nGenerated {len(trefoil_points)} points for cutting")

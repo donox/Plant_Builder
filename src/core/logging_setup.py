@@ -11,7 +11,9 @@ _CONFIGURED = False
 COORD_LEVEL = 25  # Between INFO (20) and WARNING (30)
 logging.addLevelName(COORD_LEVEL, "COORD")
 
-DISPLAY_LEVELS = ["COORD", "ERROR", "WARNING", "INFO"]
+DISPLAY_LEVELS = ["COORD", "ERROR", "WARNING", "INFO","DEBUG"]
+
+CLEAR_LOG = True
 
 
 def coord(self, message, *args, **kwargs):
@@ -93,6 +95,8 @@ def setup_root_logger(
     log_dir = Path(log_dir or Path.home() / ".plantbuilder")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "plantbuilder.log"
+    if CLEAR_LOG:
+        clear_log_file(log_path)
 
     root = logging.getLogger()
 
@@ -195,6 +199,19 @@ def apply_display_levels(levels):
         h.addFilter(LevelFilter(DISPLAY_LEVELS))
     # make sure root passes everything to handlers (filter will do the gating)
     root.setLevel(1)
+
+
+def clear_log_file(log_path):
+    """
+    Replace a log file with an empty file.
+
+    Args:
+        log_path: Path to the log file (can be string or Path object)
+    """
+    path = Path(log_path)
+
+    # Create an empty file (overwrites existing content)
+    path.write_text("")
 
 # --- NEW: optional env override at import time ---
 _env = os.getenv("PB_DISPLAY_LEVELS")  # e.g. "ERROR,WARNING,COORD"

@@ -1,5 +1,6 @@
 from core.logging_setup import get_logger, log_coord, apply_display_levels
-apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+# apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+# apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import numpy as np
 import math
@@ -30,7 +31,8 @@ class Wafer(object):
 
     def set_parameters(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
         assert lift == 0 or lift > 1.0, "lift likely in radians"
-        assert rotation == 0 or rotation > 1.0, "Rotation likely in radians"
+        assert lift < 35, "Likely invalid lift"
+        assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
         self.lift_angle = lift
         self.rotation_angle = rotation
         self.cylinder_radius = cylinder_diameter / 2
@@ -89,7 +91,7 @@ class Wafer(object):
         max_extend = chord_length * 0.5
         extend1 = min(extend1, max_extend)
         extend2 = min(extend2, max_extend)
-        logger.info(f"Extensions: {extend1:.3f}, {extend2:.3f} (in make_wafer_from_lcs)")
+        # logger.info(f"Extensions: {extend1:.3f}, {extend2:.3f} (in make_wafer_from_lcs)")
 
         # Create cylinder with extensions
         cylinder_start = pos1 - wafer_axis * extend1
@@ -165,7 +167,9 @@ class Wafer(object):
             z1.normalize();
             z2.normalize()
             dotv = max(-1.0, min(1.0, z1.dot(z2)))
-            return math.acos(dotv)
+            res =  math.acos(dotv)
+            assert np.rad2deg(res) < 35, f"GET LIFT ANGLE CALCULATION FAILED: {np.rad2deg(res):.3f}"
+            return res
         except Exception:
             return 0.0
 

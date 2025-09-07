@@ -333,8 +333,8 @@ class CurveFollower:
         # Planarity check on just this wafer’s points
         neighborhood = self.curve_points[start_index:end_index + 1]
         is_planar, n_hat, rms, tol = self._segment_is_planar(neighborhood)
-        log_coord(__name__, f"[{start_index}:{end_index}] planarity: is_planar={is_planar} "
-                            f"rms={rms:.3e} tol={tol:.3e}")
+        # log_coord(__name__, f"[{start_index}:{end_index}] planarity: is_planar={is_planar} "
+        #                     f"rms={rms:.3e} tol={tol:.3e}")
 
         # Bend helper (radians)
         def bend_between(u: np.ndarray, v: np.ndarray) -> float:
@@ -479,8 +479,8 @@ class CurveFollower:
                     # log_coord(__name__, f"Found valid segment to index {end_index}, chord_dist={chord_distance}")
                 else:
                     # This is not an error - indicates first point beyond allowable chord
-                    log_coord(__name__,
-                              f"Chord distance {chord_distance} exceeds max_chord {self.max_chord}, stopping search")
+                    # log_coord(__name__,
+                    #           f"Chord distance {chord_distance} exceeds max_chord {self.max_chord}, stopping search")
                     break
 
             end_point = self.curve_points[best_end_index]
@@ -552,7 +552,7 @@ class CurveFollower:
 
             assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
             assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-            assert rotation_angle == 0 or rotation_angle > 1.0, "Rotation likely in radians"
+            assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
             wafers_parameters.append((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type))
             current_index = best_end_index
 
@@ -694,7 +694,7 @@ class CurveFollower:
         """
         assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
         assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        assert rotation_angle == 0 or rotation_angle > 1.0, "Rotation likely in radians"
+        assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         # Base distance between points (this is the minimum height)
         chord_length = np.linalg.norm(end_point - start_point)
 
@@ -796,7 +796,7 @@ class CurveFollower:
                 corrected_wafers):
             assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
             assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-            assert rotation_angle == 0 or rotation_angle > 1.0, "Rotation likely in radians"
+            assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
 
             # Call add_wafer_from_curve_data with the wafer data
             self.add_wafer_from_curve_data(
@@ -830,7 +830,7 @@ class CurveFollower:
         # Calculate the lift based on wafer type and angles
         assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
         assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        assert rotation_angle == 0 or rotation_angle > 1.0, "Rotation likely in radians"
+        assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
 
         # Calculate outside height

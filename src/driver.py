@@ -1,6 +1,7 @@
 try:
     from core.logging_setup import get_logger, log_coord, apply_display_levels
-    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+    # apply_display_levels(["ERROR", "WARNING", "INFO"])
 except Exception:
     import logging
     get_logger = lambda name: logging.getLogger(name)
