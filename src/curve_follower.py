@@ -489,67 +489,6 @@ class CurveFollower:
             is_first_wafer = (current_index == 0)
             is_last_wafer = (best_end_index == len(self.curve_points) - 1)
 
-            # Call with hard try/except so exceptions can’t disappear
-            try:
-                # --- BEGIN capture wrapper for _calculate_ellipse_parameters ---    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-                # Choose a stable file under your repo (tests/data/)
-                _TRACE_PATH = pathlib.Path(__file__).resolve().parents[1] / "tests" / "data" / "ellipse_cases.jsonl"
-
-                def _dump_case(payload: dict):
-                    try:
-                        _TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        import json, os, pathlib, time, numpy as _np
-                        with open(_TRACE_PATH, "a", encoding="utf-8") as _f:
-                            _f.write(json.dumps(payload) + "\n")
-                    except Exception:
-                        # don't break the build if logging fails
-                        pass
-
-                # Build the input payload (include full curve_points so the test can replay exactly)
-                _case_in = {
-                    "ts": time.time(),
-                    "start_point": list(map(float, np.asarray(start_point, dtype=float).tolist())),
-                    "end_point": list(map(float, np.asarray(end_point, dtype=float).tolist())),
-                    "start_index": int(current_index),
-                    "end_index": int(best_end_index),
-                    "is_first_wafer": bool(is_first_wafer),
-                    "is_last_wafer": bool(is_last_wafer),
-                    "curve_points": np.asarray(self.curve_points, dtype=float).tolist(),
-                }
-
-                try:
-                    start_angle, end_angle, rotation_angle, wafer_type = self._calculate_ellipse_parameters(
-                        start_point, end_point, current_index, best_end_index, is_first_wafer, is_last_wafer
-                    )
-                    _case_out = {
-                        "ok": True,
-                        "start_angle": float(start_angle),
-                        "end_angle": float(end_angle),
-                        "rotation_angle": float(rotation_angle),
-                        "wafer_type": str(wafer_type),
-                    }
-                except Exception as _e:
-                    # capture failure so the test can surface it explicitly
-                    _case_out = {
-                        "ok": False,
-                        "error": f"{type(_e).__name__}: {str(_e)}",
-                    }
-                    # re-raise so normal behavior stays the same
-                    _dump_case({**_case_in, **_case_out})
-                    raise
-                finally:
-                    # Write only once per call (success or failure)
-                    if "ok" in locals() or "_case_out" in locals():
-                        _dump_case({**_case_in, **_case_out})
-                # --- END capture wrapper ---                  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11
-
-            except Exception :
-                # Always print the traceback to real stderr so you see it even if logging is filtered
-                print("EXC in _calculate_ellipse_parameters:", file=sys.__stderr__)
-                traceback.print_exc(file=sys.stderr)
-                raise
-
             assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
             assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
             assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
@@ -557,69 +496,6 @@ class CurveFollower:
             current_index = best_end_index
 
         return wafers_parameters
-
-    # def _determine_consistent_wafer_types(self, wafers: List[Tuple]) -> List[Tuple]:
-    #     """Ensure wafer types form a consistent cutting sequence.
-    #
-    #     Args:
-    #         wafers: List of wafer tuples from create_wafer_list()
-    #
-    #     Returns:
-    #         List of corrected wafer tuples with consistent types
-    #     """
-    #     if len(wafers) <= 1:
-    #         return wafers
-    #
-    #     corrected_wafers = []
-    #
-    #     for i, (start_point, end_point, start_angle, end_angle, rotation_angle, initial_type) in enumerate(wafers):
-    #
-    #         # Find the indices for this wafer segment
-    #         start_index = self._find_point_index(start_point)
-    #         end_index = self._find_point_index(end_point)
-    #
-    #         # Determine actual wafer type based on adjacent wafers and collinearity
-    #         is_collinear = self._check_segment_collinearity(start_point, end_point,
-    #                                                         start_index, end_index)
-    #
-    #         if i == 0:
-    #             # First wafer
-    #             start_type = 'C'  # Always circular
-    #         else:
-    #             # Start type must match previous wafer's end type
-    #             prev_end_type = corrected_wafers[i - 1][5][1]  # Get end type from previous wafer
-    #             start_type = prev_end_type
-    #
-    #         if is_collinear:
-    #             # For collinear segments, end type same as start type
-    #             end_type = start_type
-    #             corrected_start_angle = 0.0 if start_type == 'C' else start_angle
-    #             corrected_end_angle = 0.0  # Parallel cut
-    #             corrected_rotation = 0.0  # No twist
-    #         else:
-    #             # Normal case: calculate end type based on geometry
-    #             if i == len(wafers) - 1:
-    #                 # Last wafer: end is always circular
-    #                 end_type = 'C'
-    #                 corrected_end_angle = 0.0
-    #             else:
-    #                 # Middle wafer: end is elliptical
-    #                 end_type = 'E'
-    #                 corrected_end_angle = end_angle
-    #
-    #             corrected_start_angle = 0.0 if start_type == 'C' else start_angle
-    #             corrected_rotation = rotation_angle
-    #
-    #         # Construct wafer type string
-    #         wafer_type = start_type + end_type
-    #
-    #         corrected_wafers.append((
-    #             start_point, end_point,
-    #             corrected_start_angle, corrected_end_angle,
-    #             corrected_rotation, wafer_type
-    #         ))
-    #
-    #     return corrected_wafers
 
     def _find_point_index(self, point: np.ndarray) -> int:
         """Find the index of a point in the curve points array.
@@ -634,46 +510,6 @@ class CurveFollower:
             if np.allclose(point, curve_point, atol=1e-6):
                 return i
         return 0
-
-    # def _correct_rotation_angles(self, wafers: List[Tuple]) -> List[Tuple]:
-    #     """Correct rotation angles so adjacent wafers have complementary cuts.
-    #
-    #     Ensures that adjacent wafers can be cut from a single cylinder using
-    #     compatible rotation angles.
-    #
-    #     Args:
-    #         wafers: List of wafer tuples
-    #
-    #     Returns:
-    #         List of corrected wafer tuples with complementary rotation angles
-    #     """
-    #     if len(wafers) <= 1:
-    #         return wafers
-    #
-    #     corrected_wafers = []
-    #     cumulative_rotation = 0.0
-    #
-    #     for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(wafers):
-    #
-    #         if i == 0:
-    #             # First wafer: use calculated rotation as-is
-    #             corrected_rotation = rotation_angle
-    #         else:
-    #             # Subsequent wafers: ensure complementary cutting
-    #             # The start of this wafer should align with the end of the previous wafer
-    #             prev_wafer = corrected_wafers[i-1]
-    #             prev_end_rotation = prev_wafer[4]  # Previous wafer's rotation
-    #
-    #             # For adjacent cuts to be complementary, rotations should be additive
-    #             corrected_rotation = rotation_angle
-    #
-    #         # Track cumulative rotation for debugging
-    #         cumulative_rotation += corrected_rotation
-    #
-    #         corrected_wafers.append((start_point, end_point, start_angle,
-    #                                end_angle, corrected_rotation, wafer_type))
-    #
-    #     return corrected_wafers
 
     def _calculate_outside_height(self, start_point: np.ndarray, end_point: np.ndarray,
                                   start_angle: float, end_angle: float, rotation_angle: float) -> float:
@@ -1238,10 +1074,3 @@ class CurveFollower:
                 'valid_segments_found': valid_segments_found
             }
         }
-
-
-def format_mixed(result):
-    if isinstance(result, float):
-        return f"{result:.4f}"
-    else:
-        return result

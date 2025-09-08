@@ -594,6 +594,7 @@ class FlexSegment(object):
             FreeCADGui.updateGui()
         except:
             pass
+
     def remove_prior_version(self):
         # TODO: not do so if making cut list???
         name = self.prefix + ".+"
@@ -706,15 +707,6 @@ class FlexSegment(object):
             str1 += f"\t\tat Global: [{global_x}, {global_y}, {global_z}]\n"
             cons_file.write(str1)
         return global_loc
-
-    @staticmethod
-    def make_transform_align(object_1, object_2):
-        """Create transform that will move an object by the same relative positions of two input objects"""
-        l1 = object_1.Placement
-        l2 = object_2.Placement
-        tr = l1.inverse().multiply(l2)
-        # logger.debug(f"MOVE_S: {object_1.Label}, {object_2.Label}, {tr}")
-        return tr
 
     def _setup_transform_properties(self):
         """Add custom properties to store transformation data."""

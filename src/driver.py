@@ -180,14 +180,8 @@ class Driver(object):
             self._execute_set_position(operation)
         elif op_type == 'build_segment':
             self._execute_build_segment(operation)
-        elif op_type == 'run_tests':
-            self._execute_run_tests(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
-
-    def _execute_run_tests(self, operation ):
-        run_freecad_wrapper()
-        foo = 3/0
 
     def _execute_remove_objects(self, operation: Dict[str, Any]) -> None:
         """Execute remove_objects operation."""
@@ -342,36 +336,6 @@ class Driver(object):
 
     def _get_workflow(self):
         return self.get_parm("workflow")
-
-    def validate_segment_connection(self, prev_segment, curr_segment):
-        """Validate that two segments can be connected properly.
-
-        Args:
-            prev_segment: Previous segment (must end with circular cut)
-            curr_segment: Current segment (must start with circular cut)
-
-        Raises:
-            ValueError: If segments cannot be connected
-        """
-        if not prev_segment.wafer_list:
-            raise ValueError(f"Previous segment {prev_segment.get_segment_name()} has no wafers")
-
-        if not curr_segment.wafer_list:
-            raise ValueError(f"Current segment {curr_segment.get_segment_name()} has no wafers")
-
-        # Check last wafer of previous segment
-        last_wafer = prev_segment.wafer_list[-1]
-        if hasattr(last_wafer, 'wafer_type'):
-            if last_wafer.wafer_type[1] != 'C':
-                raise ValueError(
-                    f"Previous segment {prev_segment.get_segment_name()} must end with circular cut, found {last_wafer.wafer_type}")
-
-        # Check first wafer of current segment
-        first_wafer = curr_segment.wafer_list[0]
-        if hasattr(first_wafer, 'wafer_type'):
-            if first_wafer.wafer_type[0] != 'C':
-                raise ValueError(
-                    f"Current segment {curr_segment.get_segment_name()} must start with circular cut, found {first_wafer.wafer_type}")
 
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
@@ -560,25 +524,4 @@ class Driver(object):
         """Return wafer extents in each dimension"""
         return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
 
-    @staticmethod
-    def make_tf(variable_name, parent_parms):
-        """Convert string boolean to actual boolean."""
-        logger.debug(f"make_tf: Variable: {variable_name}, parent: {parent_parms}")
-        try:
-            if parent_parms.get(variable_name) == "True":
-                logger.debug(f"{variable_name} = True")
-                return True
-            else:
-                logger.debug(f"{variable_name} = False")
-                return False
-        except Exception as e:
-            logger.error(f"Exception: {e} on reference to {variable_name}")
-            raise e
-
-    @staticmethod
-    def make_transform_align(object_1, object_2):
-        """Create transform that will move object_1 to object_2's placement"""
-        # Since object_1 (current segment base) is at origin,
-        # the transform is simply object_2's placement
-        return FreeCAD.Placement(object_2.Placement)
 

@@ -371,56 +371,6 @@ class Curves:
 
         return curve_points
 
-    def _generate_trefoil_old(self, **parameters):
-        """
-        Generate a trefoil (2,3) torus-knot curve.
-
-        Parameters (dict):
-          - major_radius (float): Torus major radius R (distance from origin to tube center).  [default: 6.0]
-          - tube_radius  (float): Torus minor radius r (tube radius).                           [default: 2.0]
-          - p            (int)  : Longitudinal wraps around the torus.                          [default: 2]
-          - q            (int)  : Meridional wraps in the tube cross-section.                   [default: 3]
-          - points       (int)  : Number of samples along one closed loop.                      [default: 200]
-          - center       (seq3) : Optional XYZ offset for the whole curve.                      [default: (0,0,0)]
-          - phase_deg    (float): Rotation about +Z before sampling (shifts start point).       [default: 0.0]
-          - scale_z      (float): Optional vertical scale of z if you want a “squashed” knot.   [default: 1.0]
-
-        Returns:
-          np.ndarray of shape (points, 3)
-        """
-        R = float(parameters.get("major_radius", 6.0))
-        r = float(parameters.get("tube_radius", 2.0))
-        p = int(parameters.get("p", 2))  # trefoil defaults (p=2, q=3)
-        q = int(parameters.get("q", 3))
-        n = int(parameters.get("points", 200))
-        cx, cy, cz = parameters.get("center", (0.0, 0.0, 0.0))
-        phase_deg = float(parameters.get("phase_deg", 0.0))
-        scale_z = float(parameters.get("scale_z", 1.0))
-
-        # Basic sanity (avoid fully degenerate cases)
-        n = max(3, n)
-        R = float(R)
-        r = float(r)
-
-        # Parameter t over exactly one closed loop; endpoint=False avoids duplicate
-        t0 = np.deg2rad(phase_deg)
-        t = np.linspace(0.0, 2.0 * np.pi, num=n, endpoint=False) + t0
-
-        # Torus-knot param: (p, q)
-        # x = (R + r cos(q t)) cos(p t)
-        # y = (R + r cos(q t)) sin(p t)
-        # z =  r sin(q t)
-        cq = np.cos(q * t)
-        sq = np.sin(q * t)
-        cp = np.cos(p * t)
-        sp = np.sin(p * t)
-
-        x = (R + r * cq) * cp + cx
-        y = (R + r * cq) * sp + cy
-        z = (r * sq) * scale_z + cz
-
-        pts = np.stack((x, y, z), axis=1).astype(float)
-        return pts
 
     def _trefoil_param(self, t, R, r, p, q, scale_z, cx, cy, cz):
         cq, sq = np.cos(q * t), np.sin(q * t)
@@ -439,55 +389,6 @@ class Curves:
             Ppad = np.vstack((P[-k // 2:], P, P[:k // 2]))
             S = np.vstack([np.convolve(Ppad[:, i], w, mode="valid") for i in range(3)]).T
             return S
-        return P
-
-    def _generate_trefoil_1(self, **parameters):
-        """
-        Trefoil (p,q) torus-knot with equal-arc-length sampling.
-        Returns np.ndarray of shape (points, 3).
-
-        parameters:
-          major_radius (R)  : default 6.0
-          tube_radius  (r)  : default 2.0
-          p, q              : default 2, 3 (trefoil)
-          points            : number of *final* samples (default 200)
-          refine_factor     : dense oversampling factor before resampling (default 10)
-          center            : (cx, cy, cz) offset (default (0,0,0))
-          phase_deg         : rotate start around +Z (default 0.0)
-          scale_z           : squash/scale z (default 1.0)
-          smooth_window     : odd int >=3 for optional circular moving average on output (default 0 -> off)
-        """
-        R = float(parameters.get("major_radius", 6.0))
-        r = float(parameters.get("tube_radius", 2.0))
-        p = int(parameters.get("p", 2))
-        q = int(parameters.get("q", 3))
-        n = int(parameters.get("points", 200))
-        refine = int(parameters.get("refine_factor", 10))
-        cx, cy, cz = parameters.get("center", (0.0, 0.0, 0.0))
-        phase = np.deg2rad(float(parameters.get("phase_deg", 0.0)))
-        scale_z = float(parameters.get("scale_z", 1.0))
-        smooth_win = int(parameters.get("smooth_window", 0))
-
-        # 1) dense sampling over one loop (endpoint=False to avoid duplicate)
-        n_dense = max(8, n * max(2, refine))
-        t_dense = np.linspace(0.0, 2.0 * np.pi, n_dense, endpoint=False) + phase
-        Pd = self._trefoil_param(t_dense, R, r, p, q, scale_z, cx, cy, cz)
-
-        # 2) cumulative arc-length (closed curve)
-        d = np.linalg.norm(np.diff(Pd, axis=0, append=Pd[:1]), axis=1)
-        s = np.cumsum(d)
-        s = np.insert(s, 0, 0.0)[:-1]  # align with Pd
-        s /= s[-1] if s[-1] > 0 else 1.0  # normalize to [0,1)
-
-        # 3) equal-arc-length targets and component-wise interpolation
-        s_target = np.linspace(0.0, 1.0, n, endpoint=False)
-        Px = np.interp(s_target, s, Pd[:, 0])
-        Py = np.interp(s_target, s, Pd[:, 1])
-        Pz = np.interp(s_target, s, Pd[:, 2])
-        P = np.stack((Px, Py, Pz), axis=1)
-
-        # 4) optional light smoothing (keeps closure)
-        P = self._moving_avg(P, win=smooth_win)
         return P
 
     def _generate_trefoil(self, **parameters):
@@ -863,7 +764,6 @@ class Curves:
         """
         return ['linear', 'helical', 'sinusoidal', 'overhand_knot',
                 'circle', 'spiral', 'figure_eight', 'trefoil', 'custom']
-
 
 
 def generate_woodcut_trefoil(slices=180, **parameters):

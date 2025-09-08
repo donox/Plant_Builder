@@ -11,7 +11,7 @@ from FreeCAD import Vector as Vec
 
 
 class Wafer(object):
-
+    EPS = 1e-9
     def __init__(self, app, gui, parm_set, wafer_type="EE"):
         self.app = app
         self.gui = gui
@@ -173,8 +173,6 @@ class Wafer(object):
         except Exception:
             return 0.0
 
-    EPS = 1e-9
-
     def get_rotation_angle(self):
         return self.rotation_angle
 
@@ -273,9 +271,6 @@ class Wafer(object):
         if segment2_first_wafer.wafer_type[0] != 'C':
             raise ValueError("Segment must start with circular cut for joining")
 
-
-def convert_angle(angle):
-    return np.round(np.rad2deg(angle), 3)
 
 def log_lcs_info(lcs, tag, logger_level="info"):
     """

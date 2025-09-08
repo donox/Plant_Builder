@@ -120,55 +120,6 @@ Build a segment that follows a mathematical curve:
       rotate_segment: 0.0      # Rotate entire segment (degrees)
       add_curve_vertices: true # Add visual points along curve
 
-BUILD TRADITIONAL HELIX SEGMENT
--------------------------------
-Build a traditional helix using the old method:
-
-  - operation: "build_segment"
-    segment_type: "helix"
-    name: "helix_name"
-    description: "Traditional helix construction"
-
-    helix_settings:
-      lift_angle: 9.0          # Lift angle in degrees
-      rotate_angle: 0.0        # Rotation angle in degrees
-      wafer_count: 16          # Number of wafers to create
-      outside_height: 2.0      # Height of each wafer
-      cylinder_diameter: 3.0   # Diameter of cylinder
-
-    segment_settings:
-      show_lcs: true
-      build_segment: true
-      rotate_segment: 0.0
-
-BUILD RECTANGLE SEGMENT
------------------------
-Build rectangular wafers instead of elliptical:
-
-  - operation: "build_segment"
-    segment_type: "rectangle"
-    name: "rectangle_name"
-
-    rectangle_settings:
-      lift_angle: 9.0
-      rotate_angle: 0.0
-      wafer_count: 16
-      outside_height: 2.0
-      cylinder_diameter: 3.0   # Creates square wafers
-
-    segment_settings:
-      show_lcs: true
-      build_segment: true
-      rotate_segment: 0.0
-
-ADD ARROWS
-----------
-Add directional arrows for visualization:
-
-  - operation: "add_arrows"
-    description: "Add directional arrows"
-    size: 5.0              # Size of arrows
-    point_number: 10       # Which curve point to target
 
 AVAILABLE CURVE TYPES
 =====================
