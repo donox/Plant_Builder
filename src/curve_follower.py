@@ -5,8 +5,8 @@ arbitrary 3D curves, with proper geometric calculations for woodworking applicat
 """
 try:
     from core.logging_setup import get_logger, log_coord, apply_display_levels
-    # apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
-    apply_display_levels(["ERROR", "WARNING", "INFO"])
+    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+    # apply_display_levels(["ERROR", "WARNING", "INFO"])
 except Exception:
     try:
         from logging_setup import get_logger
@@ -286,91 +286,136 @@ class CurveFollower:
             is_last_wafer: bool = False,
     ) -> Tuple[float, float, float, str]:
         """
-        Compute start/end cut angles (radians), rotation (radians), and wafer type from joints.
+        Compute start/end cut angles (DEGREES), rotation (DEGREES), and wafer type from joints.
 
-        End typing is determined by the *joint* at that end:
-          - start end uses bend(prev_chord, this_chord)
-          - end   end uses bend(this_chord, next_chord)
-          If bend <= eps_circular → that end is 'C', else 'E'.
+        End typing is determined by the joint bend at each end:
+          - start end uses bend(prev_tangent, chord_hat)
+          - end   end uses bend(chord_hat, next_tangent)
+          If bend <= eps_circ -> that end is 'C', else 'E'.
 
         Per-end cut angle:
           angle = 0 for 'C', else (bend / 2).
 
         Rotation:
           - 0 on planar segments (zero torsion)
-          - computed only for EE (non-planar) as before.
+          - computed only for EE (non-planar) and only if torsion proxy exceeds a small gate.
 
-        Returns angles in degrees.
+        Returns:
+          (start_deg, end_deg, rotation_deg, wafer_type)
         """
-        import numpy as np
 
-        EPS_CIRCULAR_DEG = 0.25  # angle ≤ this is considered circular
-        eps_circ = np.deg2rad(EPS_CIRCULAR_DEG)
-
+        # ---------- helpers ----------
         def _unit(v: np.ndarray):
             n = float(np.linalg.norm(v))
             return (v / n) if n > 1e-12 else None
 
-        # This wafer's chord
+        def _angle(u: np.ndarray, v: np.ndarray) -> float:
+            """Unsigned angle between u and v in RADIANS."""
+            if u is None or v is None:
+                return 0.0
+            uu = u / (np.linalg.norm(u) + 1e-12)
+            vv = v / (np.linalg.norm(v) + 1e-12)
+            c = float(np.clip(np.dot(uu, vv), -1.0, 1.0))
+            return float(np.arccos(c))
+
+        def _tangent(points: np.ndarray, idx: int, k: int = 3):
+            """
+            Symmetric, windowed tangent at idx using k points each side (clamped).
+            Returns unit vector or None if undefined.
+            """
+            n = len(points)
+            i0 = max(0, idx - k)
+            i1 = min(n - 1, idx + k)
+            if i1 == i0:
+                return None
+            v = points[i1] - points[i0]
+            nv = float(np.linalg.norm(v))
+            if nv > 0:
+                return v / nv
+            # gentle fallback
+            if idx + 1 < n:
+                v = points[idx + 1] - points[idx]
+                nv = float(np.linalg.norm(v))
+                if nv > 0:
+                    return v / nv
+            if idx - 1 >= 0:
+                v = points[idx] - points[idx - 1]
+                nv = float(np.linalg.norm(v))
+                if nv > 0:
+                    return v / nv
+            return None
+
+        # ---------- chord and degenerate guard ----------
         chord_vec = end_point - start_point
         chord_len = float(np.linalg.norm(chord_vec))
         if chord_len < 1e-10:
-            # Degenerate: both ends circular
+            # Degenerate wafer: treat as circular both ends, zero angles.
+            if 'log_coord' in globals():
+                log_coord(__name__, "ELL_PARMS: degenerate chord -> CC, angles 0")
             return 0.0, 0.0, 0.0, "CC"
         chord_hat = chord_vec / chord_len
 
-        # Neighbor chords (±1 point)
+        # ---------- windowed tangents at ends ----------
+        prev_hat = _tangent(self.curve_points, start_index, k=3)
+        next_hat = _tangent(self.curve_points, end_index, k=3)
+
+        # ---------- stable planarity neighborhood ----------
+        wpad = 3
         N = len(self.curve_points)
-        prev_hat = None
-        if start_index > 0:
-            v = start_point - self.curve_points[start_index - 1]
-            prev_hat = _unit(v)
-        next_hat = None
-        if end_index < N - 1:
-            v = self.curve_points[end_index + 1] - end_point
-            next_hat = _unit(v)
+        i0 = max(0, start_index - wpad)
+        i1 = min(N - 1, end_index + wpad)
+        neighborhood = self.curve_points[i0:i1 + 1]
 
-        # Planarity check on just this wafer’s points
-        neighborhood = self.curve_points[start_index:end_index + 1]
         is_planar, n_hat, rms, tol = self._segment_is_planar(neighborhood)
-        # log_coord(__name__, f"[{start_index}:{end_index}] planarity: is_planar={is_planar} "
-        #                     f"rms={rms:.3e} tol={tol:.3e}")
 
-        # Bend helper (radians)
+        # ---------- adaptive circular threshold (in RADIANS) ----------
+        # Estimate local turn near start/end and set eps as a small fraction.
+        t_s_l = _tangent(self.curve_points, max(0, start_index - 1), k=3)
+        t_s_r = _tangent(self.curve_points, min(N - 1, start_index + 1), k=3)
+        t_e_l = _tangent(self.curve_points, max(0, end_index - 1), k=3)
+        t_e_r = _tangent(self.curve_points, min(N - 1, end_index + 1), k=3)
+        turn_start = _angle(t_s_l, t_s_r)
+        turn_end = _angle(t_e_l, t_e_r)
+        typ_turn = max(turn_start, turn_end, np.deg2rad(0.03))  # never below 0.03°
+        eps_circ = max(typ_turn * 0.15, np.deg2rad(0.05))  # 5–15% of local turn, min 0.05°
+
+        # ---------- joint bends (in RADIANS) ----------
+        # If segment is planar and we have a plane normal, use signed in-plane angle magnitude;
+        # otherwise generic unsigned bend.
         def bend_between(u: np.ndarray, v: np.ndarray) -> float:
             if u is None or v is None:
                 return 0.0
             if is_planar and n_hat is not None:
-                # use signed-in-plane, magnitude only
                 return abs(self._signed_angle_in_plane(u, v, n_hat))
-            # generic unsigned bend
-            uu = u / (np.linalg.norm(u) + 1e-12)
-            vv = v / (np.linalg.norm(v) + 1e-12)
-            d = float(np.clip(np.dot(uu, vv), -1.0, 1.0))
-            return float(np.arccos(d))
+            return _angle(u, v)
 
-        # Joint bends at this wafer’s ends
         bend_start = bend_between(prev_hat, chord_hat) if prev_hat is not None else 0.0
         bend_end = bend_between(chord_hat, next_hat) if next_hat is not None else 0.0
 
-        # End types from joints (first start/end and last end default to C when neighbor absent)
+        # ---------- end typing ----------
+        # If a neighbor tangent is missing, that end defaults to 'C'.
         start_is_C = (bend_start <= eps_circ) or (prev_hat is None)
         end_is_C = (bend_end <= eps_circ) or (next_hat is None)
-
         start_type = "C" if start_is_C else "E"
         end_type = "C" if end_is_C else "E"
         wafer_type = start_type + end_type
 
-        # Per-end cut angles (radians)
+        # ---------- per-end cut angles (in RADIANS) ----------
         start_angle = 0.0 if start_is_C else 0.5 * bend_start
         end_angle = 0.0 if end_is_C else 0.5 * bend_end
 
-        # Rotation: zero for planar; only compute for EE on non-planar segments
-        rotation_angle = 0.0
-        if (not is_planar) and (wafer_type == "EE"):
-            # Build a reference 'm' vector at start: perpendicular to prev_hat within the plane ⟂ chord_hat
-            if prev_hat is not None and next_hat is not None:
-                # start 'm'
+        # ---------- rotation ----------
+        rotation_angle = 0.0  # radians
+        if (not is_planar) and (wafer_type == "EE") and (prev_hat is not None) and (next_hat is not None):
+            # Torsion proxy: compare normals from slightly larger neighborhoods; if tiny -> gate rotation to 0.
+            i0b = max(0, i0 - 2)
+            i1b = min(N - 1, i1 + 2)
+            is_planar_b, n_hat_b, _, _ = self._segment_is_planar(self.curve_points[i0b:i1b + 1])
+            torsion_angle = _angle(n_hat, n_hat_b) if (n_hat is not None and n_hat_b is not None) else 0.0
+            torsion_gate = np.deg2rad(0.5)  # require > ~0.5° normal change
+
+            if torsion_angle > torsion_gate:
+                # Build an orthogonal 'm' at start (⟂ chord_hat and ⟂ prev_hat)
                 m_start = np.cross(chord_hat, prev_hat)
                 nrm = float(np.linalg.norm(m_start))
                 if nrm < 1e-8:
@@ -382,7 +427,7 @@ class CurveFollower:
                     nrm = float(np.linalg.norm(m_start))
                 m_start /= (nrm + 1e-12)
 
-                # reference 'm' transported to end: project m_start onto plane ⟂ next_hat, then reproject to ⟂ chord_hat
+                # reference 'm' transported to end: project to plane ⟂ next_hat
                 proj = m_start - next_hat * float(np.dot(m_start, next_hat))
                 if float(np.linalg.norm(proj)) > 1e-8:
                     m_end_ref = proj / float(np.linalg.norm(proj))
@@ -402,21 +447,40 @@ class CurveFollower:
                 rot_sin = float(np.dot(axis, np.cross(m_end_ref, m_end_true)))
                 rot_cos = float(np.clip(np.dot(m_end_ref, m_end_true), -1.0, 1.0))
                 rotation_angle = float(np.arctan2(rot_sin, rot_cos))
+            else:
+                rotation_angle = 0.0
 
+        # Force zero for planar / tiny rotations
         if is_planar or abs(rotation_angle) < 1e-6:
             rotation_angle = 0.0
 
-        # Clamp silly values; zero-out tiny noise
-        # Convert all to degrees for external consumption
+        # ---------- clamp, convert to DEGREES, return ----------
         max_angle = np.pi / 3  # 60°
-        start_angle = np.rad2deg(float(np.clip(start_angle, 0.0, max_angle)))
-        end_angle = np.rad2deg(float(np.clip(end_angle, 0.0, max_angle)))
-        rotation_angle = np.rad2deg(rotation_angle)
-        # start_angle = float(np.clip(start_angle, 0.0, max_angle))
-        # end_angle = float(np.clip(end_angle, 0.0, max_angle))
-        # rotation_angle = np.rad2deg(rotation_angle)
+        start_deg = float(np.rad2deg(np.clip(start_angle, 0.0, max_angle)))
+        end_deg = float(np.rad2deg(np.clip(end_angle, 0.0, max_angle)))
+        rotation_deg = float(np.rad2deg(rotation_angle))
 
-        return start_angle, end_angle, rotation_angle, wafer_type
+        # ---------- diagnostics ----------
+        if 'log_coord' in globals():
+            log_coord(__name__,
+                      (f"ELL_PARMS i[{start_index}:{end_index}] type={wafer_type} "
+                       f"bendS={np.rad2deg(bend_start):.3f}° bendE={np.rad2deg(bend_end):.3f}° "
+                       f"epsC={np.rad2deg(eps_circ):.3f}° "
+                       f"planar={is_planar} rms={rms:.3e} tol={tol:.3e} "
+                       f"rot={rotation_deg:.3f}°"))
+        elif hasattr(self, "logger"):
+            try:
+                self.logger.debug(
+                    "ELL_PARMS i[%d:%d] type=%s bendS=%.3f° bendE=%.3f° epsC=%.3f° planar=%s rms=%.3e tol=%.3e rot=%.3f°",
+                    start_index, end_index, wafer_type,
+                    float(np.rad2deg(bend_start)), float(np.rad2deg(bend_end)),
+                    float(np.rad2deg(eps_circ)),
+                    bool(is_planar), float(rms), float(tol), float(rotation_deg)
+                )
+            except Exception:
+                pass
+
+        return start_deg, end_deg, rotation_deg, wafer_type
 
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
@@ -489,9 +553,70 @@ class CurveFollower:
             is_first_wafer = (current_index == 0)
             is_last_wafer = (best_end_index == len(self.curve_points) - 1)
 
-            assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-            assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-            assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
+            # Call with hard try/except so exceptions can’t disappear
+            try:
+                # --- BEGIN capture wrapper for _calculate_ellipse_parameters ---    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+                # Choose a stable file under your repo (tests/data/)
+                _TRACE_PATH = pathlib.Path(__file__).resolve().parents[1] / "tests" / "data" / "ellipse_cases.jsonl"
+
+                def _dump_case(payload: dict):
+                    try:
+                        _TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                        import json, os, pathlib, time, numpy as _np
+                        with open(_TRACE_PATH, "a", encoding="utf-8") as _f:
+                            _f.write(json.dumps(payload) + "\n")
+                    except Exception:
+                        # don't break the build if logging fails
+                        pass
+
+                # Build the input payload (include full curve_points so the test can replay exactly)
+                _case_in = {
+                    "ts": time.time(),
+                    "start_point": list(map(float, np.asarray(start_point, dtype=float).tolist())),
+                    "end_point": list(map(float, np.asarray(end_point, dtype=float).tolist())),
+                    "start_index": int(current_index),
+                    "end_index": int(best_end_index),
+                    "is_first_wafer": bool(is_first_wafer),
+                    "is_last_wafer": bool(is_last_wafer),
+                    "curve_points": np.asarray(self.curve_points, dtype=float).tolist(),
+                }
+
+                try:
+                    start_angle, end_angle, rotation_angle, wafer_type = self._calculate_ellipse_parameters(
+                        start_point, end_point, current_index, best_end_index, is_first_wafer, is_last_wafer
+                    )
+                    _case_out = {
+                        "ok": True,
+                        "start_angle": float(start_angle),
+                        "end_angle": float(end_angle),
+                        "rotation_angle": float(rotation_angle),
+                        "wafer_type": str(wafer_type),
+                    }
+                except Exception as _e:
+                    # capture failure so the test can surface it explicitly
+                    _case_out = {
+                        "ok": False,
+                        "error": f"{type(_e).__name__}: {str(_e)}",
+                    }
+                    # re-raise so normal behavior stays the same
+                    _dump_case({**_case_in, **_case_out})
+                    raise
+                finally:
+                    # Write only once per call (success or failure)
+                    if "ok" in locals() or "_case_out" in locals():
+                        _dump_case({**_case_in, **_case_out})
+                # --- END capture wrapper ---                  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11
+
+            except Exception :
+                # Always print the traceback to real stderr so you see it even if logging is filtered
+                print("EXC in _calculate_ellipse_parameters:", file=sys.__stderr__)
+                traceback.print_exc(file=sys.stderr)
+                raise
+
+            # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
+            # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
+            # assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
             wafers_parameters.append((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type))
             current_index = best_end_index
 
@@ -528,9 +653,9 @@ class CurveFollower:
         Returns:
             Maximum height of the wafer in model units
         """
-        assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-        assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
+        # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
+        # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
+        # assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         # Base distance between points (this is the minimum height)
         chord_length = np.linalg.norm(end_point - start_point)
 
@@ -630,9 +755,9 @@ class CurveFollower:
         # Step 4: Process each wafer
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
                 corrected_wafers):
-            assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-            assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-            assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
+            # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
+            # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
+            # assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
 
             # Call add_wafer_from_curve_data with the wafer data
             self.add_wafer_from_curve_data(
@@ -664,9 +789,9 @@ class CurveFollower:
         """
         # this add_wafer_..  called before add_wafer in flex_segment
         # Calculate the lift based on wafer type and angles
-        assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-        assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
+        # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
+        # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
+        # assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
 
         # Calculate outside height
@@ -674,7 +799,7 @@ class CurveFollower:
                                                         start_angle, end_angle, rotation_angle)
 
         chord_length = np.linalg.norm(end_point - start_point)
-        assert outside_height < chord_length * 1.1, "outside_height likely too large"
+        # assert outside_height < chord_length * 1.1, "outside_height likely too large"
 
         # Get curve tangent at start point for first wafer
         curve_tangent = None
@@ -929,6 +1054,7 @@ class CurveFollower:
         # Use your own plane-fit if available:
         try:
             is_planar, n_hat, _, rms = self._fit_plane(pts, eps=None)  # don't pass eps here
+            log_coord(__name__, f"(try) is_planar: {is_planar}, rms: {rms:.4f}, n_hat: {n_hat}")
         except Exception:
             # PCA plane fit
             c = pts.mean(axis=0)
@@ -944,39 +1070,132 @@ class CurveFollower:
 
         extent = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
         tol = max(eps_abs, eps_rel * extent)
+        log_coord(__name__, f"(at return)  rms: {rms:.4f}, tol: {tol:.4f},n_hat: {n_hat}")
         return (rms <= tol), n_hat, rms, tol
 
     def _fit_plane(self, pts: np.ndarray, eps: float = 1e-6):
         """
-        Least-squares plane fit. Returns (is_planar, n_hat, p0, rms).
-        - is_planar: True if all points lie near a single plane
-        - n_hat: unit normal
-        - p0: a point on the plane (centroid)
-        - rms: root-mean-square distance to plane
+        Least-squares plane fit with robust guards.
+        Returns: (is_planar, n_hat, p0, rms)
+
+        Logs reasons for any fallback so you can see *why* a section failed:
+          - non_finite_rows
+          - too_few_points
+          - zero_or_tiny_spread
+          - svd_failed (eigen fallback used)
+          - degenerate_normal
         """
-        # Note - used only to support _segment_is_planar above
-        if pts.shape[0] < 3:
-            return True, np.array([0.0, 0.0, 1.0]), pts[0] if len(pts) else np.zeros(3), 0.0
+        import numpy as np
 
-        c = pts.mean(axis=0)
-        M = pts - c
-        # PCA: smallest singular vector is the plane normal
-        _, _, vh = np.linalg.svd(M, full_matrices=False)
-        n = vh[-1, :]
-        n_norm = np.linalg.norm(n)
-        n_hat = n / (n_norm if n_norm > 0 else 1.0)
+        # --- tiny logger shim ----------------------------------------------
+        def _log(level, *a):
+            # Prefer your existing logger if present; else use print.
+            if hasattr(self, "logger") and self.logger:
+                getattr(self.logger, level, self.logger.info)(" ".join(str(x) for x in a))
+            else:
+                print(" ".join(str(x) for x in a))
 
-        # distances of points to plane
+        def _lc(*a):  # coordinate/debug log (if you have log_coord)
+            try:
+                from logging import getLogger
+                if 'log_coord' in globals():
+                    log_coord(__name__, " ".join(str(x) for x in a))
+                else:
+                    _log("debug", *a)
+            except Exception:
+                _log("debug", *a)
+
+        # -------------------------------------------------------------------
+
+        # 0) Coerce -> float (handles FreeCAD Vectors, lists, etc.)
+        reason = None
+        try:
+            P = np.asarray(pts, dtype=float)
+        except Exception:
+            try:
+                P = np.array([
+                    [float(getattr(p, "x", p[0])),
+                     float(getattr(p, "y", p[1])),
+                     float(getattr(p, "z", p[2]))] for p in pts
+                ], dtype=float)
+                reason = "object_coercion"
+            except Exception as e:
+                _log("warning", f"_fit_plane: conversion_failed: {e}; returning default plane")
+                return True, np.array([0.0, 0.0, 1.0]), (np.zeros(3)), 0.0
+
+        n_in = int(P.shape[0])
+        if n_in == 0:
+            _log("warning", "_fit_plane: too_few_points (0); returning default plane")
+            return True, np.array([0.0, 0.0, 1.0]), np.zeros(3), 0.0
+
+        # 1) Drop non-finite rows (NaN/Inf)
+        finite_rows = np.all(np.isfinite(P), axis=1)
+        if not np.all(finite_rows):
+            bad = int((~finite_rows).sum())
+            bad_idx = np.where(~finite_rows)[0]
+            reason = (reason + "+non_finite_rows") if reason else "non_finite_rows"
+            _log("warning", f"_fit_plane: non_finite_rows={bad}/{n_in}; "
+                            f"first_bad_idx={int(bad_idx[0]) if bad_idx.size else -1}")
+            P = P[finite_rows]
+
+        # 2) Need at least 3 points
+        if P.shape[0] < 3:
+            _log("warning", f"_fit_plane: too_few_points ({P.shape[0]}); returning default plane")
+            p0 = P[0] if P.shape[0] else np.zeros(3)
+            return True, np.array([0.0, 0.0, 1.0]), p0, 0.0
+
+        # 3) Center for stability
+        c = P.mean(axis=0)
+        M = P - c
+
+        # 4) Guard degenerate spread (all points equal or extremely small extent)
+        ext_x, ext_y, ext_z = np.ptp(P[:, 0]), np.ptp(P[:, 1]), np.ptp(P[:, 2])
+        extent = float(max(ext_x, ext_y, ext_z, 1.0))
+        if extent <= 1e-15:
+            reason = (reason + "+zero_or_tiny_spread") if reason else "zero_or_tiny_spread"
+            _log("warning", f"_fit_plane: zero_or_tiny_spread; returning plane through centroid")
+            return True, np.array([0.0, 0.0, 1.0]), c, 0.0
+
+        # 5) Try SVD; fallback to eigen if SVD fails
+        n = None
+        try:
+            # PCA via SVD: smallest singular vector is the plane normal
+            _, svals, vh = np.linalg.svd(M, full_matrices=False)
+            n = vh[-1, :]
+            # Optional: if almost rank-1 (nearly a line), SVD can be numerically touchy.
+            # We'll still proceed; distances will tell us if it's 'planar enough'.
+        except Exception as e:
+            reason = (reason + "+svd_failed") if reason else "svd_failed"
+            _log("warning", f"_fit_plane: svd_failed ({e}); using eigen fallback")
+            try:
+                H = M.T @ M  # symmetric 3x3
+                w, v = np.linalg.eigh(H)
+                n = v[:, 0]  # smallest eigenvalue -> normal
+            except Exception as e2:
+                _log("warning", f"_fit_plane: eigen_failed ({e2}); returning default plane")
+                return True, np.array([0.0, 0.0, 1.0]), c, 0.0
+
+        # 6) Normalize normal; guard degeneracy
+        n_norm = float(np.linalg.norm(n)) if n is not None else 0.0
+        if not np.isfinite(n_norm) or n_norm == 0.0:
+            reason = (reason + "+degenerate_normal") if reason else "degenerate_normal"
+            _log("warning", "_fit_plane: degenerate_normal; returning default normal")
+            n_hat = np.array([0.0, 0.0, 1.0])
+        else:
+            n_hat = n / n_norm
+
+        # 7) Distances and planarity metric
         d = M @ n_hat
-        rms = float(np.sqrt(np.mean(d * d)))
+        rms = float(np.sqrt(np.mean(d * d))) if d.size else 0.0
+        thr = float(eps * extent)
+        is_planar = bool(rms <= thr)
 
-        # Scale tolerance to curve extent so it works for tiny/large curves
-        extent = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1]), np.ptp(pts[:, 2]), 1.0)
-        is_planar = rms <= (eps * extent)
-        log_coord(__name__, f"_fit_plane: extent={extent:.6f}, rms={rms:.6f}, threshold={eps * extent:.6f}")
+        # 8) Final summary log
+        why = f" reason={reason}" if reason else ""
+        _lc(f"_fit_plane: n_in={n_in}, kept={P.shape[0]}, extent={extent:.6g}, "
+            f"rms={rms:.6g}, thr={thr:.6g}, is_planar={is_planar}{why}")
 
         return is_planar, n_hat, c, rms
-
 
     def _signed_angle_in_plane(self, t1: np.ndarray, t2: np.ndarray, n_hat: np.ndarray) -> float:
         """

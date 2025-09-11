@@ -493,12 +493,13 @@ class Curves:
 
         return curve_points
 
-    def _generate_spiral(self, max_radius: float = 10.0, turns: float = 3.0,
+    def _generate_spiral(self, max_radius: float = 10.0, max_height: float = 10.0, turns: float = 3.0,
                          points: int = 100, plane: str = 'xy') -> List[List[float]]:
         """Generate a spiral curve.
 
         Args:
             max_radius: Maximum radius of the spiral
+            max_height: Maximum height of the spiral
             turns: Number of complete turns
             points: Number of points to generate
             plane: Plane of the spiral ('xy', 'xz', 'yz')
@@ -509,16 +510,17 @@ class Curves:
         curve_points = []
         for i in range(points):
             t = i / (points - 1)
+            h = max_height * t
             angle = t * turns * 2 * math.pi
             radius = t * max_radius
             cos_a, sin_a = math.cos(angle), math.sin(angle)
 
             if plane.lower() == 'xy':
-                curve_points.append([radius * cos_a, radius * sin_a, 0])
+                curve_points.append([radius * cos_a, radius * sin_a, h])
             elif plane.lower() == 'xz':
-                curve_points.append([radius * cos_a, 0, radius * sin_a])
+                curve_points.append([radius * cos_a, h, radius * sin_a])
             elif plane.lower() == 'yz':
-                curve_points.append([0, radius * cos_a, radius * sin_a])
+                curve_points.append([h, radius * cos_a, radius * sin_a])
             else:
                 raise ValueError(f"Invalid plane: {plane}. Use 'xy', 'xz', or 'yz'")
 

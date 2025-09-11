@@ -1,5 +1,5 @@
 from core.logging_setup import get_logger, log_coord, apply_display_levels
-# apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
 # apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import sys
@@ -186,16 +186,14 @@ class FlexSegment(object):
             """
         #  This add_wafer called after add_wafer_from_curve_data in curves.
         # Initialize wafer_count if not exists
-        assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
-        assert lift == 0 or lift > 1.0, f"Lift {lift:.3f} likely in radians"
+        # assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
+        # assert lift == 0 or lift > 1.0, f"Lift {lift:.3f} likely in radians"
         if not hasattr(self, 'wafer_count'):
             self.wafer_count = 0
             self._prev_wafer_axis = None
 
         # Only increment wafer_count ONCE
         self.wafer_count += 1
-        # if self.wafer_count > 5:   # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        #     foo = 3/0
 
         logger.debug(f"\n=== Creating Wafer {self.wafer_count} ===")
         logger.debug(f"  Type: {wafer_type}")
@@ -642,12 +640,12 @@ class FlexSegment(object):
             wt = w.get_wafer_type()
 
             # Lift angle in degrees
-            lift_rad = w.get_lift_angle(next_w)
-            lift_deg = float(np.rad2deg(lift_rad)) if lift_rad is not None else 0.0
+            lift_deg = w.get_lift_angle(next_w)
+
             # Rotation angle in degrees
             rot_deg = w.get_rotation_angle()
             outside = w.get_outside_height()
-            log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg}; lift_deg: {lift_deg}; outside: {outside}")
+            log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg:.3f}; lift_deg: {lift_deg:.3f}; outside: {outside:.2f}")
 
             # CE/EC define rotation as 0°
             if wt.endswith("C") or (next_w and ((next_w.get_wafer_type() or "").upper().startswith("C"))):

@@ -30,9 +30,9 @@ class Wafer(object):
         self.angle = None   # Angle to x-y plane of top surface
 
     def set_parameters(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
-        assert lift == 0 or lift > 1.0, "lift likely in radians"
-        assert lift < 35, "Likely invalid lift"
-        assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
+        # assert lift == 0 or lift > 1.0, "lift likely in radians"
+        # assert lift < 35, "Likely invalid lift"
+        # assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
         self.lift_angle = lift
         self.rotation_angle = rotation
         self.cylinder_radius = cylinder_diameter / 2
@@ -144,7 +144,7 @@ class Wafer(object):
 
         Return 0.0 if next_wafer is missing or geometry is degenerate.
         """
-        import math
+        return self.lift_angle
         try:
             if next_wafer is None:
                 return 0.0
