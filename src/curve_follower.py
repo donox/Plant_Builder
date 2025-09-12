@@ -286,7 +286,7 @@ class CurveFollower:
             is_last_wafer: bool = False,
     ) -> Tuple[float, float, float, str]:
         """
-        Compute start/end cut angles (DEGREES), rotation (DEGREES), and wafer type from joints.
+        Compute start/end cut angles (DEGREES), rotation (DEGREES), and wafer type.
 
         End typing is determined by the joint bend at each end:
           - start end uses bend(prev_tangent, chord_hat)
@@ -298,11 +298,12 @@ class CurveFollower:
 
         Rotation:
           - 0 on planar segments (zero torsion)
-          - computed only for EE (non-planar) and only if torsion proxy exceeds a small gate.
+          - otherwise, for EE only, signed twist about the chord between
+            a transported in-plane reference at the end and the true end frame.
 
-        Returns:
-          (start_deg, end_deg, rotation_deg, wafer_type)
+        Returns: (start_deg, end_deg, rotation_deg, wafer_type)
         """
+        import numpy as np
 
         # ---------- helpers ----------
         def _unit(v: np.ndarray):
@@ -332,7 +333,7 @@ class CurveFollower:
             nv = float(np.linalg.norm(v))
             if nv > 0:
                 return v / nv
-            # gentle fallback
+            # gentle fallbacks
             if idx + 1 < n:
                 v = points[idx + 1] - points[idx]
                 nv = float(np.linalg.norm(v))
@@ -349,7 +350,6 @@ class CurveFollower:
         chord_vec = end_point - start_point
         chord_len = float(np.linalg.norm(chord_vec))
         if chord_len < 1e-10:
-            # Degenerate wafer: treat as circular both ends, zero angles.
             if 'log_coord' in globals():
                 log_coord(__name__, "ELL_PARMS: degenerate chord -> CC, angles 0")
             return 0.0, 0.0, 0.0, "CC"
@@ -380,12 +380,11 @@ class CurveFollower:
         eps_circ = max(typ_turn * 0.15, np.deg2rad(0.05))  # 5–15% of local turn, min 0.05°
 
         # ---------- joint bends (in RADIANS) ----------
-        # If segment is planar and we have a plane normal, use signed in-plane angle magnitude;
-        # otherwise generic unsigned bend.
         def bend_between(u: np.ndarray, v: np.ndarray) -> float:
             if u is None or v is None:
                 return 0.0
             if is_planar and n_hat is not None:
+                # use signed-in-plane, magnitude only
                 return abs(self._signed_angle_in_plane(u, v, n_hat))
             return _angle(u, v)
 
@@ -393,7 +392,6 @@ class CurveFollower:
         bend_end = bend_between(chord_hat, next_hat) if next_hat is not None else 0.0
 
         # ---------- end typing ----------
-        # If a neighbor tangent is missing, that end defaults to 'C'.
         start_is_C = (bend_start <= eps_circ) or (prev_hat is None)
         end_is_C = (bend_end <= eps_circ) or (next_hat is None)
         start_type = "C" if start_is_C else "E"
@@ -404,61 +402,60 @@ class CurveFollower:
         start_angle = 0.0 if start_is_C else 0.5 * bend_start
         end_angle = 0.0 if end_is_C else 0.5 * bend_end
 
-        # ---------- rotation ----------
-        rotation_angle = 0.0  # radians
+        # ---------- rotation (about the chord) ----------
+        # Compute a single, self-consistent twist measure and snap tiny noise.
+        rotation_deg = 0.0
         if (not is_planar) and (wafer_type == "EE") and (prev_hat is not None) and (next_hat is not None):
-            # Torsion proxy: compare normals from slightly larger neighborhoods; if tiny -> gate rotation to 0.
-            i0b = max(0, i0 - 2)
-            i1b = min(N - 1, i1 + 2)
-            is_planar_b, n_hat_b, _, _ = self._segment_is_planar(self.curve_points[i0b:i1b + 1])
-            torsion_angle = _angle(n_hat, n_hat_b) if (n_hat is not None and n_hat_b is not None) else 0.0
-            torsion_gate = np.deg2rad(0.5)  # require > ~0.5° normal change
-
-            if torsion_angle > torsion_gate:
-                # Build an orthogonal 'm' at start (⟂ chord_hat and ⟂ prev_hat)
-                m_start = np.cross(chord_hat, prev_hat)
+            # start reference m ⟂ chord_hat and ⟂ prev_hat
+            m_start = np.cross(chord_hat, prev_hat)
+            nrm = float(np.linalg.norm(m_start))
+            if nrm < 1e-8:
+                # fallback: any vector ⟂ chord_hat
+                ref = np.array([0.0, 0.0, 1.0], float)
+                if abs(np.dot(ref, chord_hat)) > 0.9:
+                    ref = np.array([1.0, 0.0, 0.0], float)
+                m_start = np.cross(chord_hat, ref)
                 nrm = float(np.linalg.norm(m_start))
-                if nrm < 1e-8:
-                    # fallback: any vector ⟂ chord_hat
-                    ref = np.array([0.0, 0.0, 1.0], float)
-                    if abs(np.dot(ref, chord_hat)) > 0.9:
-                        ref = np.array([1.0, 0.0, 0.0], float)
-                    m_start = np.cross(chord_hat, ref)
-                    nrm = float(np.linalg.norm(m_start))
-                m_start /= (nrm + 1e-12)
+            m_start /= (nrm + 1e-12)
 
-                # reference 'm' transported to end: project to plane ⟂ next_hat
-                proj = m_start - next_hat * float(np.dot(m_start, next_hat))
-                if float(np.linalg.norm(proj)) > 1e-8:
-                    m_end_ref = proj / float(np.linalg.norm(proj))
-                else:
-                    m_end_ref = m_start
+            # transport m_start to end: remove next_hat component
+            tmp = m_start - next_hat * float(np.dot(m_start, next_hat))
+            m_end_ref = (tmp / float(np.linalg.norm(tmp))) if float(np.linalg.norm(tmp)) > 1e-10 else m_start
 
-                # true 'm' at end is ⟂ next_hat within plane ⟂ chord_hat
-                m_end_true = np.cross(next_hat, chord_hat)
+            # true end 'm' ⟂ next_hat within plane ⟂ chord_hat
+            m_end_true = np.cross(next_hat, chord_hat)
+            nrm = float(np.linalg.norm(m_end_true))
+            if nrm < 1e-8:
+                m_end_true = m_end_ref
                 nrm = float(np.linalg.norm(m_end_true))
-                if nrm < 1e-8:
-                    m_end_true = m_end_ref
-                    nrm = float(np.linalg.norm(m_end_true))
-                m_end_true /= (nrm + 1e-12)
+            m_end_true /= (nrm + 1e-12)
 
-                # rotation about chord between m_end_ref → m_end_true
-                axis = chord_hat
-                rot_sin = float(np.dot(axis, np.cross(m_end_ref, m_end_true)))
-                rot_cos = float(np.clip(np.dot(m_end_ref, m_end_true), -1.0, 1.0))
-                rotation_angle = float(np.arctan2(rot_sin, rot_cos))
-            else:
-                rotation_angle = 0.0
+            # signed angle about chord
+            sin_term = float(np.dot(chord_hat, np.cross(m_end_ref, m_end_true)))
+            cos_term = float(np.clip(np.dot(m_end_ref, m_end_true), -1.0, 1.0))
+            angle_rad = float(np.arctan2(sin_term, cos_term))
+            rotation_deg = float(np.rad2deg(angle_rad))
 
-        # Force zero for planar / tiny rotations
-        if is_planar or abs(rotation_angle) < 1e-6:
-            rotation_angle = 0.0
+            # snap tiny noise only; do NOT mix with any other torsion proxy
+            ROT_EPS_DEG = 0.10
+            if abs(rotation_deg) < ROT_EPS_DEG:
+                rotation_deg = 0.0
+
+            log_coord(__name__,
+                      (f"ROT about chord: start_idx={start_index} end_idx={end_index} "
+                       f"type={wafer_type} planar={is_planar} "
+                       f"sin={sin_term:.6f} cos={cos_term:.6f} "
+                       f"angle_deg={rotation_deg:.3f}"))
+
+        if 'log_coord' in globals():
+            log_coord(__name__,
+                      f"HATS: prev_hat: {prev_hat}, next_hat: {next_hat}, planar: {is_planar}, type: {wafer_type}")
 
         # ---------- clamp, convert to DEGREES, return ----------
         max_angle = np.pi / 3  # 60°
         start_deg = float(np.rad2deg(np.clip(start_angle, 0.0, max_angle)))
         end_deg = float(np.rad2deg(np.clip(end_angle, 0.0, max_angle)))
-        rotation_deg = float(np.rad2deg(rotation_angle))
+        rotation_out = float(rotation_deg)  # already degrees
 
         # ---------- diagnostics ----------
         if 'log_coord' in globals():
@@ -467,7 +464,7 @@ class CurveFollower:
                        f"bendS={np.rad2deg(bend_start):.3f}° bendE={np.rad2deg(bend_end):.3f}° "
                        f"epsC={np.rad2deg(eps_circ):.3f}° "
                        f"planar={is_planar} rms={rms:.3e} tol={tol:.3e} "
-                       f"rot={rotation_deg:.3f}°"))
+                       f"rot={rotation_out:.3f}°"))
         elif hasattr(self, "logger"):
             try:
                 self.logger.debug(
@@ -475,12 +472,12 @@ class CurveFollower:
                     start_index, end_index, wafer_type,
                     float(np.rad2deg(bend_start)), float(np.rad2deg(bend_end)),
                     float(np.rad2deg(eps_circ)),
-                    bool(is_planar), float(rms), float(tol), float(rotation_deg)
+                    bool(is_planar), float(rms), float(tol), float(rotation_out)
                 )
             except Exception:
                 pass
 
-        return start_deg, end_deg, rotation_deg, wafer_type
+        return start_deg, end_deg, rotation_out, wafer_type
 
     def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
         """Create a list of wafers satisfying geometric constraints.
@@ -513,7 +510,7 @@ class CurveFollower:
         while current_index < len(self.curve_points) - 1:
             safety_counter += 1
             # SAFETY CHECK: Prevent infinite loops
-            if safety_counter > 1000:
+            if safety_counter > 200:
                 logger.error(f"🛑 SAFETY STOP: Generated {len(wafers_parameters)} wafers, stopping to prevent infinite loop")
                 break
 

@@ -960,9 +960,24 @@ class FlexSegment(object):
         base_error = (base_pos - first_start_pos).Length
         top_error = (top_pos - last_end_pos).Length
 
-        logger.debug(f"\n   Position errors:")
-        logger.debug(f"     Base LCS vs First wafer: {base_error:.6f}")
-        logger.debug(f"     Top LCS vs Last wafer: {top_error:.6f}")
+        tol_pos = 1e-6  # meters
+
+        def offset(a, b):
+            d = (a.sub(b)).Length  # or (a - b).Length depending on your Vector type
+            flag = "ERROR" if d > tol_pos else "OK"
+            return d, flag
+
+        d_base, f_base = offset(lcs_base.Placement.Base, first_lcs.Placement.Base)
+        d_top, f_top = offset(lcs_top.Placement.Base, last_lcs.Placement.Base)
+
+        logger.debug("Position mismatch (m; tol=%.1e):", tol_pos)
+        logger.debug("  Base LCS vs First wafer: %.6f  [%s]", d_base, f_base)
+        logger.debug("  Top  LCS vs Last  wafer: %.6f  [%s]", d_top, f_top)
+
+        # Optional: hard check
+        if d_base > tol_pos or d_top > tol_pos:
+            logger.warning("Segment endpoint(s) misaligned: base=%.6g m, top=%.6g m (tol=%.1e).",
+                           d_base, d_top, tol_pos)
 
         # Rotation comparison
         logger.debug(f"\n   Rotation comparisons:")

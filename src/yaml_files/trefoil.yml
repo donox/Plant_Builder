@@ -19,8 +19,8 @@ global_settings:
 # Output file settings
 output_files:
   working_directory: "/home/don/Documents/Temp/FreeCAD/"
-  cuts_file: "cutting_list.txt"
-  place_file: "placement_list.txt"
+  cuts_file: "trefoil_cutting_list.txt"
+  place_file: "trefoil_placement_list.txt"
   trace_file: "build_trace.log"
 
 # Workflow definition - operations executed in order
@@ -32,8 +32,9 @@ workflow:
       - "Curve.*"
       - "temp.*"
       - "close"
-      - "comp"
+      - "helix"
       - "base*"
+      - "trefoil*"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"

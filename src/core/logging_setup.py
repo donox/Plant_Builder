@@ -95,6 +95,7 @@ def setup_root_logger(
     log_dir = Path(log_dir or Path.home() / ".plantbuilder")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "plantbuilder.log"
+    print(f"LOGS: dir - {log_dir.absolute()}")
     if CLEAR_LOG:
         clear_log_file(log_path)
 

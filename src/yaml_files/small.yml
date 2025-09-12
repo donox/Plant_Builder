@@ -19,8 +19,8 @@ global_settings:
 # Output file settings
 output_files:
   working_directory: "/home/don/Documents/Temp/FreeCAD/"
-  cuts_file: "cutting_list.txt"
-  place_file: "placement_list.txt"
+  cuts_file: "small_cutting_list.txt"
+  place_file: "small_placement_list.txt"
   trace_file: "build_trace.log"
 
 # Workflow definition - operations executed in order
