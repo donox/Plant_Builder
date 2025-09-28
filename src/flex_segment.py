@@ -1,5 +1,5 @@
 from core.logging_setup import get_logger, log_coord, apply_display_levels
-apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+apply_display_levels(["ERROR", "WARNING", "INFO"])
 # apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import sys
@@ -171,7 +171,8 @@ class FlexSegment(object):
         self.z_max = bbox.ZMax
 
     def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
-                  start_pos=None, end_pos=None, curve_tangent=None):
+                  start_pos=None, end_pos=None, curve_tangent=None,
+                  start_extension=None, end_extension=None):
         """Add a wafer with optional 3D positioning data.
 
         Args:
@@ -183,6 +184,8 @@ class FlexSegment(object):
             start_pos: numpy array [x, y, z] or None
             end_pos: numpy array [x, y, z] or None
             curve_tangent: tangent to curve, if provided
+            start_extension: float, extension at start of cylinder or None
+            end_extension: float, extension at end of cylinder or None
             """
         #  This add_wafer called after add_wafer_from_curve_data in curves.
         # Initialize wafer_count if not exists
@@ -236,23 +239,23 @@ class FlexSegment(object):
 
                 # For lcs1 (start of wafer)
                 if self.wafer_count == 1:
-                    logger.debug(f"    📍 First wafer - creating initial LCS")
+                    logger.debug(f"    🔹 First wafer - creating initial LCS")
                     # Calculate rotation matrix based on wafer direction
                     z_axis = current_axis  # Along the cylinder
-                    logger.debug(f"    📍 Z-axis (current_axis): {z_axis}")
+                    logger.debug(f"    🔹 Z-axis (current_axis): {z_axis}")
 
                     # Create consistent orientation
                     if abs(z_axis.dot(FreeCAD.Vector(0, 0, 1))) > 0.99:
                         # Nearly vertical - use standard axes
                         x_axis = FreeCAD.Vector(1, 0, 0)
                         y_axis = FreeCAD.Vector(0, 1, 0)
-                        logger.debug("    📍 Using standard orientation for vertical cylinder")
+                        logger.debug("    🔹 Using standard orientation for vertical cylinder")
                     else:
                         # Non-vertical - create perpendicular frame
                         ref_vec = FreeCAD.Vector(0, 0, 1)
                         x_axis = z_axis.cross(ref_vec).normalize()
                         y_axis = z_axis.cross(x_axis).normalize()
-                        logger.debug(f"    📍 Created perpendicular frame for non-vertical cylinder")
+                        logger.debug(f"    🔹 Created perpendicular frame for non-vertical cylinder")
                         logger.debug(f"       X-axis: {x_axis}")
                         logger.debug(f"       Y-axis: {y_axis}")
 
@@ -268,7 +271,7 @@ class FlexSegment(object):
                         FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2]),
                         FreeCAD.Rotation(rotation_matrix)
                     )
-                    logger.debug(f"    📍 Set LCS1 placement with rotation")
+                    logger.debug(f"    🔹 Set LCS1 placement with rotation")
                 else:
                     # Use stored placement from previous wafer in same segment
                     if hasattr(self, '_last_lcs2_placement'):
@@ -287,7 +290,7 @@ class FlexSegment(object):
                         # Vertical cylinder - use standard orientation
                         x_axis = FreeCAD.Vector(1, 0, 0)
                         y_axis = FreeCAD.Vector(0, 1, 0)
-                        logger.debug("    📌 Using standard orientation for vertical cylinder LCS2")
+                        logger.debug("    🔌 Using standard orientation for vertical cylinder LCS2")
                     else:
                         # Non-vertical - existing cross product logic
                         if abs(z_axis.z) < 0.9:
@@ -400,7 +403,8 @@ class FlexSegment(object):
                 end_cut_angle = lift  # Or calculate based on geometry
 
             wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name,
-                                      start_cut_angle, end_cut_angle)
+                                      start_cut_angle, end_cut_angle,
+                                      start_extension, end_extension)  # Pass extensions
             self._last_wafer = wafer
             self.wafer_list.append(wafer)
 
@@ -473,8 +477,8 @@ class FlexSegment(object):
 
             # Fuse each subsequent wafer
             for i in range(1, len(self.wafer_list)):
-                if i > 500:           # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    foo = 3/0
+                if i > 500:           # Assume a long wafer list is an error
+                    raise ValueError(f"Too many wafers: {len(self.wafer_list)}")
                 else:
                     waf = self.wafer_list[i]
                     log_lcs_debug(waf.lcs1, f"Wafer_{i}_Start")
@@ -634,6 +638,7 @@ class FlexSegment(object):
 
         rows_written = 0
         saw_pos = 0.0  # running saw position (deg)
+        plus_180 = False
 
         for i, w in enumerate(wafers):
             next_w = wafers[i + 1] if i + 1 < len(wafers) else None
@@ -645,15 +650,25 @@ class FlexSegment(object):
             # Rotation angle in degrees
             rot_deg = w.get_rotation_angle()
             outside = w.get_outside_height()
-            log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg:.3f}; lift_deg: {lift_deg:.3f}; outside: {outside:.2f}")
+            outside_in = int(outside)
+            outside_fraction = int((outside - outside_in) * 16)
+            # log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg:.3f}; lift_deg: {lift_deg:.3f}; outside: {outside:.2f}")
 
             # CE/EC define rotation as 0°
             if wt.endswith("C") or (next_w and ((next_w.get_wafer_type() or "").upper().startswith("C"))):
                 if rot_deg > 1e-6:
                     raise ValueError(f"Seg: {seg_name}, wafer: {i} has unexpected rotation: {rot_deg}")
 
+            # Each cut rotates the cylinder 180 degrees +/- the calculated rotation.
+            if plus_180:
+                add_180 = 180
+                plus_180 = False
+            else:
+                add_180 = 0
+                plus_180 = True
             saw_pos = (saw_pos - rot_deg) % 360.0
-            cuts_file_obj.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside:.2f}\t\t{saw_pos:.2f}\n")
+            corrected_saw_pos = (saw_pos  + add_180) % 360.0
+            cuts_file_obj.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
             rows_written += 1
 
             # Soft guardrails; only warn when there *is* a next wafer (i.e. an actual transition)

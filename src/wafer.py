@@ -1,6 +1,16 @@
-from core.logging_setup import get_logger, log_coord, apply_display_levels
-# apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
-# apply_display_levels(["ERROR", "WARNING", "INFO"])
+import logging
+
+try:
+    from core.logging_setup import get_logger, log_coord, apply_display_levels
+    apply_display_levels(["ERROR", "WARNING", "INFO", "DEBUG"])
+    # apply_display_levels(["ERROR", "WARNING", "INFO"])
+except Exception:
+    try:
+        from logging_setup import get_logger
+    except Exception:
+        import logging
+        get_logger = lambda name: logging.getLogger(name)
+
 logger = get_logger(__name__)
 import numpy as np
 import math
@@ -40,15 +50,16 @@ class Wafer(object):
         self.wafer_type = wafer_type
 
     def make_wafer_from_lcs(self, lcs1, lcs2, cylinder_diameter, wafer_name,
-                            start_cut_angle=None, end_cut_angle=None):
+                            start_cut_angle=None, end_cut_angle=None,
+                            start_extension=None, end_extension=None):
         """Create a wafer from two LCS objects.
 
         Args:
-            start_cut_angle: Angle in radians (0 for circular cut)
-            end_cut_angle: Angle in radians (0 for circular cut)
+            start_cut_angle: Angle in degrees (0 for circular cut)
+            end_cut_angle: Angle in degrees (0 for circular cut)
+            start_extension: Extension at start of cylinder (overrides angle calculation)
+            end_extension: Extension at end of cylinder (overrides angle calculation)
         """
-        assert start_cut_angle == 0 or start_cut_angle > 1.0, "start_cut_angle likely in radians"
-        assert end_cut_angle == 0 or end_cut_angle > 1.0, "end_cut_angle likely in radians"
         self.lcs_top = lcs2
         self.lcs_base = lcs1
         self.cylinder_radius = cylinder_diameter / 2
@@ -65,49 +76,54 @@ class Wafer(object):
 
         wafer_axis.normalize()
 
-        # Determine extensions based on cut angles
-        epsilon = 0.001  # Small value to avoid numerical issues
+        # Use passed extensions if provided, otherwise calculate from angles
+        if start_extension is not None and end_extension is not None:
+            extend1 = start_extension
+            extend2 = end_extension
+            logger.debug(f"Using passed extensions: extend1={extend1:.3f}, extend2={extend2:.3f}")
+        else:
+            # Fallback to angle-based calculation
+            epsilon = 0.001  # Small value to avoid numerical issues
 
-        # Check the wafer type characters directly
-        if self.wafer_type[0] == 'C':  # Circular start
-            extend1 = epsilon
-        else:  # Elliptical start
-            if start_cut_angle is not None and abs(start_cut_angle) > 0.001:
-                extend1 = self.cylinder_radius * np.tan(np.deg2rad(abs(start_cut_angle))) + epsilon
-            else:
+            # Check the wafer type characters directly
+            if self.wafer_type[0] == 'C':  # Circular start
                 extend1 = epsilon
+            else:  # Elliptical start
+                if start_cut_angle is not None and abs(start_cut_angle) > 0.001:
+                    extend1 = self.cylinder_radius * np.tan(np.deg2rad(abs(start_cut_angle))) + epsilon
+                else:
+                    extend1 = epsilon
 
-        if self.wafer_type[1] == 'C':  # Circular end
-            extend2 = epsilon
-        else:  # Elliptical end
-            if end_cut_angle is not None and abs(end_cut_angle) > 0.001:
-                extend2 = self.cylinder_radius * np.tan(np.deg2rad(abs(end_cut_angle))) + epsilon
-            else:
+            if self.wafer_type[1] == 'C':  # Circular end
                 extend2 = epsilon
+            else:  # Elliptical end
+                if end_cut_angle is not None and abs(end_cut_angle) > 0.001:
+                    extend2 = self.cylinder_radius * np.tan(np.deg2rad(abs(end_cut_angle))) + epsilon
+                else:
+                    extend2 = epsilon
 
-        logger.debug(f"        Extensions based on type {self.wafer_type}: extend1={extend1:.3f}, extend2={extend2:.3f}")
-
-        # Cap extensions to reasonable values
-        max_extend = chord_length * 0.5
-        extend1 = min(extend1, max_extend)
-        extend2 = min(extend2, max_extend)
-        # logger.info(f"Extensions: {extend1:.3f}, {extend2:.3f} (in make_wafer_from_lcs)")
+            # Cap extensions to reasonable values
+            max_extend = chord_length * 0.5
+            extend1 = min(extend1, max_extend)
+            extend2 = min(extend2, max_extend)
+            logger.debug(f"Calculated extensions: extend1={extend1:.3f}, extend2={extend2:.3f}")
 
         # Create cylinder with extensions
+        # CRITICAL: LCS positions remain at pos1 and pos2, but cylinder extends beyond them
         cylinder_start = pos1 - wafer_axis * extend1
         cylinder_length = chord_length + extend1 + extend2
         cylinder_end = pos1 + wafer_axis * (chord_length + extend2)
 
         logger.debug(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
         logger.debug(f"      Total cylinder length: {cylinder_length:.3f}")
-        # DEBUG: Print the relationship between LCS and actual geometry
         logger.debug(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
         logger.debug(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
         logger.debug(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
-        logger.debug(f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
+        logger.debug(
+            f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
         logger.debug(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
-        logger.debug(f"           Offset from LCS1 to cylinder start: {extend1:.3f} (backwards)")
-        logger.debug(f"           Offset from LCS2 to cylinder end: {(cylinder_end - pos2).Length:.3f}")
+        logger.debug(f"           Extension beyond LCS1: {extend1:.3f} (backwards)")
+        logger.debug(f"           Extension beyond LCS2: {extend2:.3f} (forwards)")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -134,6 +150,7 @@ class Wafer(object):
         self.lcs2 = lcs2
 
         logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
+        logger.debug(f"      LCS positions unchanged - extensions are purely geometric")
 
     def get_lift_angle(self, next_wafer):
         """
@@ -232,6 +249,8 @@ class Wafer(object):
                  "EE": ("EC2", "CE2")}
         parts_used = parts[lcs_type]
         h2 = self.outside_height / 2
+        self.outside_height = 4.0                                            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        logger.debug(f"In wafer: outside_height: {self.outside_height}")     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         d2 = self.cylinder_radius
         la = self.lift_angle        # Lift angle already divided for end segments
         if lcs_type == "EE":
@@ -358,7 +377,7 @@ def log_lcs_info(lcs, tag, logger_level="info"):
 
 
 # Convenience wrapper functions for different log levels
-def log_lcs_debug(lcs, tag):
+def   log_lcs_debug(lcs, tag):
     """Log LCS info at DEBUG level"""
     log_lcs_info(lcs, tag, "debug")
 

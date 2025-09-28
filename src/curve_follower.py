@@ -5,7 +5,7 @@ arbitrary 3D curves, with proper geometric calculations for woodworking applicat
 """
 try:
     from core.logging_setup import get_logger, log_coord, apply_display_levels
-    apply_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+    apply_display_levels(["ERROR", "WARNING", "INFO"])
     # apply_display_levels(["ERROR", "WARNING", "INFO"])
 except Exception:
     try:
@@ -458,24 +458,24 @@ class CurveFollower:
         rotation_out = float(rotation_deg)  # already degrees
 
         # ---------- diagnostics ----------
-        if 'log_coord' in globals():
-            log_coord(__name__,
-                      (f"ELL_PARMS i[{start_index}:{end_index}] type={wafer_type} "
-                       f"bendS={np.rad2deg(bend_start):.3f}° bendE={np.rad2deg(bend_end):.3f}° "
-                       f"epsC={np.rad2deg(eps_circ):.3f}° "
-                       f"planar={is_planar} rms={rms:.3e} tol={tol:.3e} "
-                       f"rot={rotation_out:.3f}°"))
-        elif hasattr(self, "logger"):
-            try:
-                self.logger.debug(
-                    "ELL_PARMS i[%d:%d] type=%s bendS=%.3f° bendE=%.3f° epsC=%.3f° planar=%s rms=%.3e tol=%.3e rot=%.3f°",
-                    start_index, end_index, wafer_type,
-                    float(np.rad2deg(bend_start)), float(np.rad2deg(bend_end)),
-                    float(np.rad2deg(eps_circ)),
-                    bool(is_planar), float(rms), float(tol), float(rotation_out)
-                )
-            except Exception:
-                pass
+        # if 'log_coord' in globals():
+        #     log_coord(__name__,
+        #               (f"ELL_PARMS i[{start_index}:{end_index}] type={wafer_type} "
+        #                f"bendS={np.rad2deg(bend_start):.3f}° bendE={np.rad2deg(bend_end):.3f}° "
+        #                f"epsC={np.rad2deg(eps_circ):.3f}° "
+        #                f"planar={is_planar} rms={rms:.3e} tol={tol:.3e} "
+        #                f"rot={rotation_out:.3f}°"))
+        # elif hasattr(self, "logger"):
+        #     try:
+        #         self.logger.debug(
+        #             "ELL_PARMS i[%d:%d] type=%s bendS=%.3f° bendE=%.3f° epsC=%.3f° planar=%s rms=%.3e tol=%.3e rot=%.3f°",
+        #             start_index, end_index, wafer_type,
+        #             float(np.rad2deg(bend_start)), float(np.rad2deg(bend_end)),
+        #             float(np.rad2deg(eps_circ)),
+        #             bool(is_planar), float(rms), float(tol), float(rotation_out)
+        #         )
+        #     except Exception:
+        #         pass
 
         return start_deg, end_deg, rotation_out, wafer_type
 
@@ -634,8 +634,9 @@ class CurveFollower:
         return 0
 
     def _calculate_outside_height(self, start_point: np.ndarray, end_point: np.ndarray,
-                                  start_angle: float, end_angle: float, rotation_angle: float) -> float:
-        """Calculate the outside height (maximum distance between end ellipses).
+                                  start_angle: float, end_angle: float, rotation_angle: float) -> Tuple[
+        float, float, float]:
+        """Calculate the outside height (maximum distance between end ellipses) and individual extensions.
 
         Computes the physical height needed for the wafer based on the chord
         length and ellipse extensions at each end.
@@ -643,16 +644,13 @@ class CurveFollower:
         Args:
             start_point: 3D coordinates of wafer start
             end_point: 3D coordinates of wafer end
-            start_angle: Angle of start ellipse plane to perpendicular (radians)
-            end_angle: Angle of end ellipse plane to perpendicular (radians)
-            rotation_angle: Rotation between ellipse major axes (radians)
+            start_angle: Angle of start ellipse plane to perpendicular (degrees)
+            end_angle: Angle of end ellipse plane to perpendicular (degrees)
+            rotation_angle: Rotation between ellipse major axes (degrees)
 
         Returns:
-            Maximum height of the wafer in model units
+            Tuple of (outside_height, start_extension, end_extension)
         """
-        # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-        # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        # assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         # Base distance between points (this is the minimum height)
         chord_length = np.linalg.norm(end_point - start_point)
 
@@ -683,18 +681,20 @@ class CurveFollower:
 
         start_extension = safe_ellipse_extension(np.deg2rad(start_angle))
         end_extension = safe_ellipse_extension(np.deg2rad(end_angle))
-
         outside_height = chord_length + start_extension + end_extension
 
         # Sanity check: outside_height should be reasonable compared to chord_length
         if outside_height > chord_length * 5:  # If more than 5x chord length, something's wrong
-            # logger.debug(f"WARNING: Capping excessive outside_height")
-            # logger.debug(f"  Original calculation: {outside_height:.4f}")
-            # logger.debug(f"  Chord length: {chord_length:.4f}")
-            # logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")
-            # logger.debug(f"  End angle: {math.degrees(end_angle):.2f}°")
+            logger.debug(f"WARNING: Capping excessive outside_height")
+            logger.debug(f"  Original calculation: {outside_height:.4f}")
+            logger.debug(f"  Chord length: {chord_length:.4f}")
+            logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")
+            logger.debug(f"  End angle: {math.degrees(end_angle):.2f}°")
             outside_height = chord_length + self.cylinder_diameter  # Conservative fallback
-        return outside_height
+            start_extension = self.cylinder_diameter * 0.5
+            end_extension = self.cylinder_diameter * 0.5
+
+        return outside_height, start_extension, end_extension
 
     def get_curve_info(self) -> Dict[str, Any]:
         """Get information about the curve being followed.
@@ -752,6 +752,8 @@ class CurveFollower:
         # Step 4: Process each wafer
         for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
                 corrected_wafers):
+            if i > 2:       # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                break
             # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
             # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
             # assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
@@ -779,24 +781,22 @@ class CurveFollower:
         Args:
             start_point: numpy array [x, y, z]
             end_point: numpy array [x, y, z]
-            start_angle: float, start cut angle in radians
-            end_angle: float, end cut angle in radians
-            rotation_angle: float, rotation angle in radians
+            start_angle: float, start cut angle in degrees
+            end_angle: float, end cut angle in degrees
+            rotation_angle: float, rotation angle in degrees
             wafer_type: str, type of wafer (CE, EE, EC, CC)
         """
-        # this add_wafer_..  called before add_wafer in flex_segment
         # Calculate the lift based on wafer type and angles
-        # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-        # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-        # assert rotation_angle == 0 or  abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
 
-        # Calculate outside height
-        outside_height = self._calculate_outside_height(start_point, end_point,
-                                                        start_angle, end_angle, rotation_angle)
+        # Calculate outside height and individual extensions
+        outside_height, start_extension, end_extension = self._calculate_outside_height(
+            start_point, end_point, start_angle, end_angle, rotation_angle)
+
+        logger.debug(
+            f"curve_follower: add_wafer..: outside_height: {outside_height}, start_ext: {start_extension}, end_ext: {end_extension}")
 
         chord_length = np.linalg.norm(end_point - start_point)
-        # assert outside_height < chord_length * 1.1, "outside_height likely too large"
 
         # Get curve tangent at start point for first wafer
         curve_tangent = None
@@ -818,7 +818,9 @@ class CurveFollower:
             wafer_type=wafer_type,
             start_pos=start_point,  # Pass numpy array directly
             end_pos=end_point,  # Pass numpy array directly
-            curve_tangent=curve_tangent
+            curve_tangent=curve_tangent,
+            start_extension=start_extension,  # NEW
+            end_extension=end_extension  # NEW
         )
 
     # In curve_follower.py, CurveFollower class (around line 235)
