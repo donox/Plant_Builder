@@ -634,65 +634,84 @@ class CurveFollower:
         return 0
 
     def _calculate_outside_height(self, start_point: np.ndarray, end_point: np.ndarray,
-                                  start_angle: float, end_angle: float, rotation_angle: float) -> Tuple[
+                                  start_angle: float, end_angle: float, rotation_angle: float,
+                                  wafer_type: str,
+                                  start_bend_angle: float = None, end_bend_angle: float = None) -> Tuple[
         float, float, float]:
-        """Calculate the outside height (maximum distance between end ellipses) and individual extensions.
-
-        Computes the physical height needed for the wafer based on the chord
-        length and ellipse extensions at each end.
+        """Calculate the outside height and individual extensions using bisecting plane geometry.
 
         Args:
             start_point: 3D coordinates of wafer start
             end_point: 3D coordinates of wafer end
-            start_angle: Angle of start ellipse plane to perpendicular (degrees)
-            end_angle: Angle of end ellipse plane to perpendicular (degrees)
-            rotation_angle: Rotation between ellipse major axes (degrees)
+            start_angle: Angle of start ellipse (degrees) - NOT USED with bisecting plane
+            end_angle: Angle of end ellipse (degrees) - NOT USED with bisecting plane
+            rotation_angle: Rotation between ellipses (degrees) - NOT USED
+            wafer_type: Type of wafer (CE, EE, EC, CC)
+            start_bend_angle: Bend angle at start interface (degrees)
+            end_bend_angle: Bend angle at end interface (degrees)
 
         Returns:
             Tuple of (outside_height, start_extension, end_extension)
         """
-        # Base distance between points (this is the minimum height)
+
         chord_length = np.linalg.norm(end_point - start_point)
 
-        def safe_ellipse_extension(angle: float) -> float:
-            """Calculate ellipse extension safely avoiding division by zero.
+        def calculate_bisecting_extension(bend_angle_rad: float, is_circular: bool) -> float:
+            """Calculate extension for a bisecting plane cut.
 
             Args:
-                angle: Ellipse angle in radians
-
-            Returns:
-                Extension distance beyond cylinder diameter
+                bend_angle_rad: Bend angle in RADIANS (not degrees!)
+                is_circular: If True, this is a circular cut (perpendicular), return 0
             """
-            if abs(angle) < math.radians(1):  # Less than 1 degree - treat as circular
+            if is_circular:
                 return 0.0
-            elif abs(angle) > math.radians(89):  # More than 89 degrees - cap it
-                return self.cylinder_diameter * 2  # Reasonable maximum
-            else:
-                # Normal case: extension based on ellipse geometry
-                try:
-                    cos_angle = math.cos(angle)
-                    if abs(cos_angle) < 0.01:  # Avoid near-zero division
-                        return self.cylinder_diameter * 2
-                    major_axis = self.cylinder_diameter / abs(cos_angle)
-                    extension = (major_axis - self.cylinder_diameter) / 2
-                    return min(extension, self.cylinder_diameter * 2)  # Cap at reasonable value
-                except:
-                    return self.cylinder_diameter * 0.5  # Fallback
 
-        start_extension = safe_ellipse_extension(np.deg2rad(start_angle))
-        end_extension = safe_ellipse_extension(np.deg2rad(end_angle))
+            if abs(bend_angle_rad) < 0.001:  # Nearly straight
+                return 0.0
+
+            half_angle_rad = bend_angle_rad / 2.0
+
+            # Extension = R / tan(θ/2)
+            try:
+                tan_half = math.tan(half_angle_rad)
+                if abs(tan_half) < 0.001:  # Avoid division by very small numbers
+                    return self.cylinder_diameter * 2  # Large extension
+
+                extension = self.radius * tan_half
+
+                # Sanity cap
+                max_extension = self.cylinder_diameter * 3
+                return min(abs(extension), max_extension)
+            except:
+                return self.radius * 0.5
+
+        # Calculate extensions based on wafer type and bend angles
+        start_is_circular = (wafer_type[0] == 'C')
+        end_is_circular = (wafer_type[1] == 'C')
+
+        if start_bend_angle is not None:
+            start_extension = calculate_bisecting_extension(start_bend_angle, start_is_circular)
+            logger.debug(
+                f"Start: bend={start_bend_angle:.2f}°, type={'C' if start_is_circular else 'E'}, ext={start_extension:.4f}")
+        else:
+            start_extension = 0.0
+
+        if end_bend_angle is not None:
+            end_extension = calculate_bisecting_extension(end_bend_angle, end_is_circular)
+            logger.debug(
+                f"End: bend={end_bend_angle:.2f}°, type={'C' if end_is_circular else 'E'}, ext={end_extension:.4f}")
+        else:
+            end_extension = 0.0
+
         outside_height = chord_length + start_extension + end_extension
 
-        # Sanity check: outside_height should be reasonable compared to chord_length
-        if outside_height > chord_length * 5:  # If more than 5x chord length, something's wrong
-            logger.debug(f"WARNING: Capping excessive outside_height")
-            logger.debug(f"  Original calculation: {outside_height:.4f}")
-            logger.debug(f"  Chord length: {chord_length:.4f}")
-            logger.debug(f"  Start angle: {math.degrees(start_angle):.2f}°")
-            logger.debug(f"  End angle: {math.degrees(end_angle):.2f}°")
-            outside_height = chord_length + self.cylinder_diameter  # Conservative fallback
-            start_extension = self.cylinder_diameter * 0.5
-            end_extension = self.cylinder_diameter * 0.5
+        # Sanity check
+        if outside_height > chord_length * 5:
+            logger.warning(f"WARNING: Excessive outside_height: {outside_height:.4f} vs chord: {chord_length:.4f}")
+            logger.warning(f"  Capping extensions")
+            start_extension = min(start_extension, chord_length * 0.5)
+            end_extension = min(end_extension, chord_length * 0.5)
+            outside_height = chord_length + start_extension + end_extension
 
         return outside_height, start_extension, end_extension
 
@@ -742,85 +761,73 @@ class CurveFollower:
         # Step 1: Create wafer list
         wafers = self.create_wafer_list()
 
-        # Step 2: Apply wafer type consistency
-        # consistent_wafers = self._determine_consistent_wafer_types(wafers)
+        # Step 2: Pre-calculate all LCS orientations and bend angles
+        lcs_orientations = self._precalculate_lcs_orientations(wafers)
 
-        # Step 3: Correct rotation angles
-        # corrected_wafers = consistent_wafers    # removed null correction
-        corrected_wafers = wafers  # They are supposed to be correct now
+        # Step 3: Process each wafer with pre-calculated orientations and bend angles
+        for i, ((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type), lcs_data) in enumerate(
+                zip(wafers, lcs_orientations)):
+            if i > 2:  # Remove this limit when testing is complete
+                pass
 
-        # Step 4: Process each wafer
-        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
-                corrected_wafers):
-            if i > 2:       # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                break
-            # assert start_angle == 0 or start_angle > 1.0, "start_angle likely in radians"
-            # assert end_angle == 0 or end_angle > 1.0, "end_angle likely in radians"
-            # assert rotation_angle == 0 or abs(rotation_angle) > 1.0, f"Rotation ({rotation_angle})likely in radians"
-
-            # Call add_wafer_from_curve_data with the wafer data
+            # Call add_wafer_from_curve_data with pre-calculated data
             self.add_wafer_from_curve_data(
                 start_point,
                 end_point,
                 start_angle,
                 end_angle,
                 rotation_angle,
-                wafer_type
+                wafer_type,
+                lcs1_rotation=lcs_data['lcs1_rotation'],
+                lcs2_rotation=lcs_data['lcs2_rotation'],
+                start_bend_angle=lcs_data['start_bend_angle'],  # NEW
+                end_bend_angle=lcs_data['end_bend_angle']  # NEW
             )
 
-        # Step 5: Add curve visualization if requested
+        # Step 4: Add curve visualization if requested
         if add_curve_vertices:
             self.add_curve_visualization()
 
     def add_wafer_from_curve_data(self, start_point, end_point, start_angle,
-                                  end_angle, rotation_angle, wafer_type):
-        """Add a wafer using curve-derived data.
+                                  end_angle, rotation_angle, wafer_type,
+                                  lcs1_rotation=None, lcs2_rotation=None,
+                                  start_bend_angle=None, end_bend_angle=None):  # NEW parameters
+        """Add a wafer using curve-derived data with pre-calculated LCS orientations and bend angles."""
 
-        This method converts curve data into the format expected by flex_segment.add_wafer()
-
-        Args:
-            start_point: numpy array [x, y, z]
-            end_point: numpy array [x, y, z]
-            start_angle: float, start cut angle in degrees
-            end_angle: float, end cut angle in degrees
-            rotation_angle: float, rotation angle in degrees
-            wafer_type: str, type of wafer (CE, EE, EC, CC)
-        """
         # Calculate the lift based on wafer type and angles
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
 
-        # Calculate outside height and individual extensions
+        # Calculate outside height and individual extensions using bend angles
         outside_height, start_extension, end_extension = self._calculate_outside_height(
-            start_point, end_point, start_angle, end_angle, rotation_angle)
+            start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type,
+            start_bend_angle, end_bend_angle)  # NEW parameters
 
         logger.debug(
-            f"curve_follower: add_wafer..: outside_height: {outside_height}, start_ext: {start_extension}, end_ext: {end_extension}")
-
-        chord_length = np.linalg.norm(end_point - start_point)
+            f"curve_follower: add_wafer: outside_height: {outside_height}, start_ext: {start_extension}, end_ext: {end_extension}")
 
         # Get curve tangent at start point for first wafer
         curve_tangent = None
-        if self.segment.wafer_count == 0:  # First wafer
-            # Calculate tangent from curve
+        if self.segment.wafer_count == 0:
             start_idx = self._find_point_index(start_point)
             if start_idx < len(self.curve_points) - 1:
                 tangent_vec = self.curve_points[start_idx + 1] - self.curve_points[start_idx]
                 tangent_vec = tangent_vec / np.linalg.norm(tangent_vec)
                 curve_tangent = FreeCAD.Vector(tangent_vec[0], tangent_vec[1], tangent_vec[2])
 
-        # Keep positions as numpy arrays - no conversion needed!
-        # The add_wafer method in flex_segment expects numpy arrays
+        # Call segment.add_wafer with pre-calculated data
         self.segment.add_wafer(
             lift=lift,
-            rotation=rotation_angle,
+            rotation=0.0,
             cylinder_diameter=self.cylinder_diameter,
             outside_height=outside_height,
             wafer_type=wafer_type,
-            start_pos=start_point,  # Pass numpy array directly
-            end_pos=end_point,  # Pass numpy array directly
+            start_pos=start_point,
+            end_pos=end_point,
             curve_tangent=curve_tangent,
-            start_extension=start_extension,  # NEW
-            end_extension=end_extension  # NEW
+            start_extension=start_extension,
+            end_extension=end_extension,
+            lcs1_rotation=lcs1_rotation,
+            lcs2_rotation=lcs2_rotation
         )
 
     # In curve_follower.py, CurveFollower class (around line 235)
@@ -1292,3 +1299,175 @@ class CurveFollower:
                 'valid_segments_found': valid_segments_found
             }
         }
+
+    def _precalculate_lcs_orientations(self, wafers_parameters: List[Tuple]) -> List[Dict[str, Any]]:
+        """Pre-calculate LCS orientations and interface bend angles for all wafer interfaces."""
+        # Calculate all chord directions first
+        chord_axes = []
+        for start_point, end_point, _, _, _, _ in wafers_parameters:
+            chord_vec = end_point - start_point
+            chord_axis = FreeCAD.Vector(chord_vec[0], chord_vec[1], chord_vec[2])
+            chord_axis.normalize()
+            chord_axes.append(chord_axis)
+
+        # Calculate interface orientations and bend angles
+        interface_orientations = []
+        interface_bend_angles = []  # Bend angle AT each interface
+
+        for i in range(len(chord_axes) + 1):  # Need len+1 interfaces for len wafers
+            # Interface i is between wafer i-1 and wafer i
+            # Special cases: interface 0 is before first wafer, interface len is after last wafer
+
+            if i == 0:
+                # Before first wafer - no bend angle
+                prev_chord = None
+                current_chord = chord_axes[0]
+                next_chord = chord_axes[1] if len(chord_axes) > 1 else None
+                interface_rot = self._calculate_interface_orientation(None, current_chord, next_chord)
+                bend_angle = 0.0  # First interface has no previous chord
+
+            elif i == len(chord_axes):
+                # After last wafer - no bend angle for next
+                prev_chord = chord_axes[i - 1]
+                current_chord = chord_axes[i - 1]  # Use last chord
+                next_chord = None
+                interface_rot = self._calculate_interface_orientation(prev_chord, current_chord, None)
+                bend_angle = 0.0  # Last interface has no next chord
+
+            else:
+                # Middle interfaces - between wafer i-1 and wafer i
+                prev_chord = chord_axes[i - 1]
+                current_chord = chord_axes[i]
+                next_chord = chord_axes[i + 1] if i + 1 < len(chord_axes) else None
+                interface_rot = self._calculate_interface_orientation(prev_chord, current_chord, next_chord)
+
+                # Bend angle AT THIS INTERFACE is between the two chords meeting here
+                bend_angle_rad = prev_chord.getAngle(current_chord)
+                bend_angle = bend_angle_rad  # Already in radians!
+                logger.debug(
+                    f"Interface {i}: prev_chord={i - 1}, current_chord={i}, bend_angle_rad={bend_angle_rad:.4f}, bend_angle_deg={math.degrees(bend_angle_rad):.2f}°")
+                logger.debug(f"  prev_chord: [{prev_chord.x:.3f}, {prev_chord.y:.3f}, {prev_chord.z:.3f}]")
+                logger.debug(f"  current_chord: [{current_chord.x:.3f}, {current_chord.y:.3f}, {current_chord.z:.3f}]")
+                logger.debug(f"  prev length: {prev_chord.Length:.3f}, current length: {current_chord.Length:.3f}")
+
+            interface_orientations.append(interface_rot)
+            interface_bend_angles.append(bend_angle)
+
+        # Now assign orientations to wafer ends and store bend angles
+        lcs_orientations = []
+
+        for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(
+                wafers_parameters):
+            # LCS1 uses the orientation from interface i
+            lcs1_rotation = interface_orientations[i]
+
+            # Get bend angle at start (interface i)
+            start_bend_angle = interface_bend_angles[i]
+
+            # LCS2 uses the orientation from interface i+1
+            if i + 1 < len(interface_orientations):
+                lcs2_base_rotation = interface_orientations[i + 1]
+                end_bend_angle = interface_bend_angles[i + 1]
+            else:
+                lcs2_base_rotation = interface_orientations[i]
+                end_bend_angle = 0.0  # Last wafer end
+
+            # Apply lift angle tilt to LCS2 for elliptical end
+            if wafer_type[1] == 'E' and abs(end_angle) > 0.1:
+                tilt_matrix = FreeCAD.Matrix()
+                tilt_matrix.rotateX(end_angle)
+                combined_matrix = lcs2_base_rotation.toMatrix().multiply(tilt_matrix)
+                lcs2_rotation = FreeCAD.Rotation(combined_matrix)
+            else:
+                lcs2_rotation = lcs2_base_rotation
+
+            lcs_orientations.append({
+                'lcs1_rotation': lcs1_rotation,
+                'lcs2_rotation': lcs2_rotation,
+                'start_point': start_point,
+                'end_point': end_point,
+                'start_bend_angle': start_bend_angle,  # NEW
+                'end_bend_angle': end_bend_angle,  # NEW
+                'wafer_index': i  # NEW: for debugging
+            })
+
+        # Validate that adjacent LCS orientations match
+        for i in range(len(lcs_orientations) - 1):
+            if i + 1 < len(interface_orientations):
+                lcs2_base_rot = interface_orientations[i + 1]
+            else:
+                lcs2_base_rot = interface_orientations[i]
+
+            lcs1_next_rot = lcs_orientations[i + 1]['lcs1_rotation']
+
+            try:
+                diff_matrix = lcs2_base_rot.toMatrix().multiply(lcs1_next_rot.toMatrix().inverse())
+                diff_rotation = FreeCAD.Rotation(diff_matrix)
+                angle_diff = math.degrees(abs(diff_rotation.Angle))
+
+                if angle_diff > 0.1:
+                    logger.error(f"BUG: Interface {i}-{i + 1} base orientations don't match!")
+                    logger.error(f"  Angle difference: {angle_diff:.3f}°")
+                    raise ValueError(f"LCS orientation mismatch at interface {i}-{i + 1}")
+                else:
+                    logger.debug(f"Interface {i}-{i + 1} orientations match (diff={angle_diff:.4f}°)")
+            except Exception as e:
+                logger.error(f"Error validating interface {i}-{i + 1}: {e}")
+
+        logger.debug(f"Pre-calculated LCS orientations for {len(lcs_orientations)} wafers")
+        return lcs_orientations
+
+    def _calculate_interface_orientation(self, prev_chord, current_chord, next_chord):
+        """Calculate orientation for an interface between two cylinders.
+
+        The X-axis should lie in the plane containing the two chords.
+
+        Args:
+            prev_chord: Previous chord axis (or None)
+            current_chord: Current chord axis
+            next_chord: Next chord axis (or None)
+        """
+        import FreeCAD
+
+        z_axis = current_chord.normalize()
+
+        # Determine plane normal from the two chords meeting at this interface
+        if next_chord is not None:
+            # Use current and next chord
+            plane_normal = current_chord.cross(next_chord)
+        elif prev_chord is not None:
+            # Use previous and current chord
+            plane_normal = prev_chord.cross(current_chord)
+        else:
+            # Single wafer case - arbitrary
+            if abs(z_axis.z) < 0.9:
+                plane_normal = z_axis.cross(FreeCAD.Vector(0, 0, 1))
+            else:
+                plane_normal = z_axis.cross(FreeCAD.Vector(1, 0, 0))
+
+        if plane_normal.Length < 1e-6:
+            # Parallel chords - use perpendicular to z-axis
+            if abs(z_axis.z) < 0.9:
+                plane_normal = z_axis.cross(FreeCAD.Vector(0, 0, 1))
+            else:
+                plane_normal = z_axis.cross(FreeCAD.Vector(1, 0, 0))
+
+        plane_normal.normalize()
+
+        # X-axis perpendicular to plane normal and z-axis
+        x_axis = plane_normal.cross(z_axis)
+        x_axis.normalize()
+
+        # Y-axis completes right-handed system
+        y_axis = z_axis.cross(x_axis)
+        y_axis.normalize()
+
+        # Create rotation matrix
+        matrix = FreeCAD.Matrix(
+            x_axis.x, y_axis.x, z_axis.x, 0,
+            x_axis.y, y_axis.y, z_axis.y, 0,
+            x_axis.z, y_axis.z, z_axis.z, 0,
+            0, 0, 0, 1
+        )
+
+        return FreeCAD.Rotation(matrix)
