@@ -303,7 +303,6 @@ class CurveFollower:
 
         Returns: (start_deg, end_deg, rotation_deg, wafer_type)
         """
-        import numpy as np
 
         # ---------- helpers ----------
         def _unit(v: np.ndarray):
@@ -457,25 +456,22 @@ class CurveFollower:
         end_deg = float(np.rad2deg(np.clip(end_angle, 0.0, max_angle)))
         rotation_out = float(rotation_deg)  # already degrees
 
-        # ---------- diagnostics ----------
-        # if 'log_coord' in globals():
-        #     log_coord(__name__,
-        #               (f"ELL_PARMS i[{start_index}:{end_index}] type={wafer_type} "
-        #                f"bendS={np.rad2deg(bend_start):.3f}° bendE={np.rad2deg(bend_end):.3f}° "
-        #                f"epsC={np.rad2deg(eps_circ):.3f}° "
-        #                f"planar={is_planar} rms={rms:.3e} tol={tol:.3e} "
-        #                f"rot={rotation_out:.3f}°"))
-        # elif hasattr(self, "logger"):
-        #     try:
-        #         self.logger.debug(
-        #             "ELL_PARMS i[%d:%d] type=%s bendS=%.3f° bendE=%.3f° epsC=%.3f° planar=%s rms=%.3e tol=%.3e rot=%.3f°",
-        #             start_index, end_index, wafer_type,
-        #             float(np.rad2deg(bend_start)), float(np.rad2deg(bend_end)),
-        #             float(np.rad2deg(eps_circ)),
-        #             bool(is_planar), float(rms), float(tol), float(rotation_out)
-        #         )
-        #     except Exception:
-        #         pass
+        # Force first wafer to start with 'C' and last wafer to end with 'C'
+        if is_first_wafer:
+            start_is_C = True
+            start_type = "C"
+        else:
+            start_is_C = (bend_start <= eps_circ) or (prev_hat is None)
+            start_type = "C" if start_is_C else "E"
+
+        if is_last_wafer:
+            end_is_C = True
+            end_type = "C"
+        else:
+            end_is_C = (bend_end <= eps_circ) or (next_hat is None)
+            end_type = "C" if end_is_C else "E"
+
+        wafer_type = start_type + end_type
 
         return start_deg, end_deg, rotation_out, wafer_type
 
@@ -817,7 +813,7 @@ class CurveFollower:
         # Call segment.add_wafer with pre-calculated data
         self.segment.add_wafer(
             lift=lift,
-            rotation=0.0,
+            rotation=rotation_angle,
             cylinder_diameter=self.cylinder_diameter,
             outside_height=outside_height,
             wafer_type=wafer_type,

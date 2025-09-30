@@ -38,6 +38,7 @@ class Wafer(object):
         self.wafer_name = None
         self.wafer = None
         self.angle = None   # Angle to x-y plane of top surface
+        self.chord_length = None
 
     def set_parameters(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
         # assert lift == 0 or lift > 1.0, "lift likely in radians"
@@ -73,6 +74,7 @@ class Wafer(object):
 
         if chord_length < 1e-6:
             raise ValueError("Wafer has zero length")
+        self.chord_length = chord_length
 
         wafer_axis.normalize()
 
@@ -152,7 +154,7 @@ class Wafer(object):
         logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
         logger.debug(f"      LCS positions unchanged - extensions are purely geometric")
 
-    def get_lift_angle(self, next_wafer):
+    def get_lift_angle(self):
         """
         Per-step lift/tilt (radians) to go from LCS1(n) to LCS1(n+1).
 
@@ -204,6 +206,10 @@ class Wafer(object):
 
     def get_angle(self):
         return self.angle
+
+    def get_chord_length(self):
+        """Return the chord length (distance between LCS1 and LCS2)."""
+        return self.chord_length
 
     def get_top(self):
         return self.lcs_top

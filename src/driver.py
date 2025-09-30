@@ -495,11 +495,10 @@ class Driver(object):
         doc_list = [obj for obj in self.doc.Objects if pattern.match(obj.Label)]
 
         for item in doc_list:
-            if item.Label != 'Parms_Master':
-                try:
-                    self.doc.removeObject(item.Label)
-                except Exception as e:
-                    logger.debug(f"Remove object exception: {e}")
+            try:
+                self.doc.removeObject(item.Label)
+            except Exception as e:
+                logger.debug(f"Remove object exception: {e}")
 
     def set_composite_bounds(self):
         """Set bounds of result object based on all segments"""

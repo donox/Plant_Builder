@@ -546,7 +546,6 @@ class FlexSegment(object):
             max_rotate (float): Maximum rotation angle in degrees.
         """
 
-        # --- Find wafers on this segment ---
         seg_name = self.get_segment_name()
         wafers = self.get_wafer_list()
         if not wafers:
@@ -555,55 +554,64 @@ class FlexSegment(object):
             logger.warning(none_str)
             return
 
-        # --- Write header (once per segment) ---
         cuts_file_obj.write(f"Segment '{seg_name}' cuts\n\n")
         cuts_file_obj.write("Wafer\tType\tLift(deg)\tRotate(deg)\tOutside\t\tSawPos(deg)\n")
 
         rows_written = 0
-        saw_pos = 0.0  # running saw position (deg)
-        plus_180 = False
+        total_cylinder_length = 0
+        saw_pos = 0.0
+        plus_180 = True
 
+        # Process all wafers
         for i, w in enumerate(wafers):
             next_w = wafers[i + 1] if i + 1 < len(wafers) else None
             wt = w.get_wafer_type()
-
-            # Lift angle in degrees
-            lift_deg = w.get_lift_angle(next_w)
-
-            # Rotation angle in degrees
-            rot_deg = w.get_rotation_angle()
             outside = w.get_outside_height()
             outside_in = int(outside)
             outside_fraction = int((outside - outside_in) * 16)
-            # log_coord(__name__, f"mk_cut_lst: rot_deg: {rot_deg:.3f}; lift_deg: {lift_deg:.3f}; outside: {outside:.2f}")
-
-            # CE/EC define rotation as 0°
-            if wt.endswith("C") or (next_w and ((next_w.get_wafer_type() or "").upper().startswith("C"))):
-                if rot_deg > 1e-6:
-                    raise ValueError(f"Seg: {seg_name}, wafer: {i} has unexpected rotation: {rot_deg}")
-
-            # Each cut rotates the cylinder 180 degrees +/- the calculated rotation.
+            total_cylinder_length += w.get_chord_length()
+            # Calculate saw position
             if plus_180:
-                add_180 = 180
+                add_180 = 0
                 plus_180 = False
             else:
-                add_180 = 0
+                add_180 = 180
                 plus_180 = True
-            saw_pos = (saw_pos - rot_deg) % 360.0
-            corrected_saw_pos = (saw_pos  + add_180) % 360.0
-            cuts_file_obj.write(f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
-            rows_written += 1
+            if i == 0:
+                saw_adj = 0.0
+            else:
+                saw_adj = wafers[i - 1].get_rotation_angle()
+            saw_pos = (saw_pos - saw_adj) % 360.0
+            corrected_saw_pos = (saw_pos + add_180) % 360.0
 
-            # Soft guardrails; only warn when there *is* a next wafer (i.e. an actual transition)
-            if next_w is not None:
+            # Last wafer has no cut after it
+            if i == len(wafers) - 1:
+                # Last wafer - no cut, just dimensions
+                cuts_file_obj.write(f"{i + 1}\t{wt}\t---\t\t---\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
+            else:
+                # Regular wafer with cut after it
+                lift_deg = w.get_lift_angle()
+                rot_deg = w.get_rotation_angle()
+
+                # CE/EC define rotation as 0°
+                if wt.endswith("C") or next_w.get_wafer_type().startswith("C"):
+                    if rot_deg > 1e-6:
+                        raise ValueError(f"Seg: {seg_name}, wafer: {i} has unexpected rotation: {rot_deg}")
+                cuts_file_obj.write(
+                    f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
+
+                # Guardrails
                 if abs(lift_deg) < min_lift or abs(lift_deg) > max_lift:
                     logger.warning(f"Lift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
                 if abs(rot_deg) < min_rotate or abs(rot_deg) > max_rotate:
                     logger.warning(f"Rotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
 
-        cuts_file_obj.flush()
-        logger.info(f"✂️  Wrote {rows_written} cut rows for segment '{seg_name}'")
+            rows_written += 1
 
+        cuts_file_obj.write(f"\n\tTotal Cylinder Length: {total_cylinder_length:.2f}\n")
+
+        cuts_file_obj.flush()
+        logger.info(f"✂️  Wrote {rows_written} wafer rows ({rows_written - 1} cuts) for segment '{seg_name}'")
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
         """Print list giving local and global position and orientation of each wafer."""
         parm_str = f"\nConstruction list for segment: {self.get_segment_name()}\n"
