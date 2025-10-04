@@ -6,7 +6,7 @@ apply transformations, and prepare them for use in wafer generation systems.
 
 from core.logging_setup import get_logger, apply_display_levels
 # apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
-# apply_display_levels(["ERROR", "WARNING", "INFO"])
+apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import math
 import numpy as np
@@ -493,12 +493,14 @@ class Curves:
 
         return curve_points
 
-    def _generate_spiral(self, max_radius: float = 10.0, max_height: float = 10.0, turns: float = 3.0,
+    def _generate_spiral(self, max_radius: float = 10.0, min_radius: float = 5.0,
+                         max_height: float = 10.0, turns: float = 2.0,
                          points: int = 100, plane: str = 'xy') -> List[List[float]]:
         """Generate a spiral curve.
 
         Args:
             max_radius: Maximum radius of the spiral
+            min_radius: Minimum radius of the spiral
             max_height: Maximum height of the spiral
             turns: Number of complete turns
             points: Number of points to generate
@@ -512,7 +514,7 @@ class Curves:
             t = i / (points - 1)
             h = max_height * t
             angle = t * turns * 2 * math.pi
-            radius = t * max_radius
+            radius = t * (max_radius - min_radius) + min_radius
             cos_a, sin_a = math.cos(angle), math.sin(angle)
 
             if plane.lower() == 'xy':
@@ -557,7 +559,6 @@ class Curves:
 
     def add_visualization_vertices_with_lcs(self, lcs_obj, group_name: str = None) -> str:
         """Add vertices using LCS coordinate system as reference."""
-        return          # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         if group_name is None:
             curve_type = self.curve_spec.get('type', 'curve')
             group_name = f"{curve_type}_vertices_lcs"

@@ -1,23 +1,12 @@
-import logging
-
-try:
-    from core.logging_setup import get_logger, log_coord, apply_display_levels
-    apply_display_levels(["ERROR", "WARNING", "INFO", "DEBUG"])
-    # apply_display_levels(["ERROR", "WARNING", "INFO"])
-except Exception:
-    try:
-        from logging_setup import get_logger
-    except Exception:
-        import logging
-        get_logger = lambda name: logging.getLogger(name)
+from core.logging_setup import get_logger, log_coord, apply_display_levels
+apply_display_levels(["ERROR", "WARNING", "INFO", "DEBUG"])
+# apply_display_levels(["ERROR", "WARNING", "INFO"])
 
 logger = get_logger(__name__)
 import numpy as np
 import math
-import time
 import FreeCAD
 import Part
-from FreeCAD import Vector as Vec
 
 
 class Wafer(object):
@@ -41,9 +30,6 @@ class Wafer(object):
         self.chord_length = None
 
     def set_parameters(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE"):
-        # assert lift == 0 or lift > 1.0, "lift likely in radians"
-        # assert lift < 35, "Likely invalid lift"
-        # assert rotation == 0 or  abs(rotation) > 1.0, f"Rotation ({rotation})likely in radians"
         self.lift_angle = lift
         self.rotation_angle = rotation
         self.cylinder_radius = cylinder_diameter / 2
@@ -116,16 +102,16 @@ class Wafer(object):
         cylinder_length = chord_length + extend1 + extend2
         cylinder_end = pos1 + wafer_axis * (chord_length + extend2)
 
-        logger.debug(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
-        logger.debug(f"      Total cylinder length: {cylinder_length:.3f}")
-        logger.debug(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
-        logger.debug(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
-        logger.debug(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
-        logger.debug(
-            f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
-        logger.debug(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
-        logger.debug(f"           Extension beyond LCS1: {extend1:.3f} (backwards)")
-        logger.debug(f"           Extension beyond LCS2: {extend2:.3f} (forwards)")
+        # logger.debug(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
+        # logger.debug(f"      Total cylinder length: {cylinder_length:.3f}")
+        # logger.debug(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
+        # logger.debug(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
+        # logger.debug(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
+        # logger.debug(
+        #     f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
+        # logger.debug(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
+        # logger.debug(f"           Extension beyond LCS1: {extend1:.3f} (backwards)")
+        # logger.debug(f"           Extension beyond LCS2: {extend2:.3f} (forwards)")
 
         # Create the cylinder
         cylinder = Part.makeCylinder(
@@ -151,8 +137,8 @@ class Wafer(object):
         self.lcs1 = lcs1
         self.lcs2 = lcs2
 
-        logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
-        logger.debug(f"      LCS positions unchanged - extensions are purely geometric")
+        # logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
+        # logger.debug(f"      LCS positions unchanged - extensions are purely geometric")
 
     def get_lift_angle(self):
         """
@@ -164,33 +150,6 @@ class Wafer(object):
         Return 0.0 if next_wafer is missing or geometry is degenerate.
         """
         return self.lift_angle
-        try:
-            if next_wafer is None:
-                return 0.0
-
-            lcs1_cur = getattr(self, 'lcs1', None) or getattr(self, 'lcs_base', None)
-            lcs1_next = getattr(next_wafer, 'lcs1', None) or getattr(next_wafer, 'lcs_base', None)
-            if not lcs1_cur or not lcs1_next:
-                return 0.0
-
-            R1 = lcs1_cur.Placement.Rotation
-            R2 = lcs1_next.Placement.Rotation
-
-            zhat = FreeCAD.Vector(0, 0, 1)
-            z1 = R1.multVec(zhat)
-            z2 = R2.multVec(zhat)
-
-            if z1.Length < 1e-12 or z2.Length < 1e-12:
-                return 0.0
-
-            z1.normalize();
-            z2.normalize()
-            dotv = max(-1.0, min(1.0, z1.dot(z2)))
-            res =  math.acos(dotv)
-            assert np.rad2deg(res) < 35, f"GET LIFT ANGLE CALCULATION FAILED: {np.rad2deg(res):.3f}"
-            return res
-        except Exception:
-            return 0.0
 
     def get_rotation_angle(self):
         return self.rotation_angle
@@ -226,75 +185,76 @@ class Wafer(object):
     def get_wafer(self):
         return self.wafer
 
-    def lift_lcs(self, lcs, lcs_type):
-        """Move lcs on base surface to corresponding position on top.
-
-        This is a side-effecting operation.  Result is modified input lcs.
-
-        There are four cases where the base is a circle (C) or ellipse (E) and similarly on top.
-
-            For CC:  The lift angle is zero and the new placement is simply the addition of the
-                outside height to the z-axis.
-            For CE: The wafer is a cylinder of height outside height / 2 and an inclined section
-                with a circle at the base and ellipse at the top.
-            For EC: The wafer is an inverted CE.
-            For EE: The wafer is an EC at the base and a CE on top.
-
-        Calculations:
-            Calculate each part separately (thus CE above is a cylinder on bottom and an ellipse on top with the
-            cylinder of height outside_height / 2).  Then combine two parts appropriately to create the full case above.
-
-            If base is an ellipse, rotate point to global zero.  Figure will be a cylinder inclined
-            by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
-
-        """
-        # logger.debug(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
-        parts = {"CC": ("CC2", "CC2"),
-                 "CE": ("CC2", "CE2"),
-                 "EC": ("EC2", "CC2"),
-                 "EE": ("EC2", "CE2")}
-        parts_used = parts[lcs_type]
-        h2 = self.outside_height / 2
-        self.outside_height = 4.0                                            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        logger.debug(f"In wafer: outside_height: {self.outside_height}")     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        d2 = self.cylinder_radius
-        la = self.lift_angle        # Lift angle already divided for end segments
-        if lcs_type == "EE":
-            la = self.lift_angle / 2
-        result_vec = []
-        for i in range(2):
-            # logger.debug(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
-            if "EC2" == parts_used[i]:
-                del_x = 0  # -d2 * np.sin(la)
-                del_z = h2 - d2 * np.tan(la)
-                result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # logger.debug(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
-            if "CE2" == parts_used[i]:
-                del_x = 0  # -d2 * np.sin(la)
-                del_z = h2 - d2 * np.tan(la)
-                result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # logger.debug(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
-            if "CC2" == parts_used[i]:
-                del_x = 0
-                del_z = 0              # removes cylindrical part
-                result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
-                # logger.debug(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
-            rot = FreeCAD.Rotation(0, 0, 0)
-            if parts_used[i] in ["CE2", "EC2"]:
-                # Not clear if Rotation wants radians or degrees.  Testing says radians - complex_path says degrees
-                rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
-            # if parts_used[i] == "EE2":          # there is no EE2
-            #     rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
-            new_place = FreeCAD.Placement(result_vec[i], rot)
-            lcs.Placement = lcs.Placement.multiply(new_place)
-            # break
-
-    def validate_segment_join(segment1_last_wafer, segment2_first_wafer):
-        # Check that segment1 ends with 'C' and segment2 starts with 'C'
-        if segment1_last_wafer.wafer_type[1] != 'C':
-            raise ValueError("Segment must end with circular cut for joining")
-        if segment2_first_wafer.wafer_type[0] != 'C':
-            raise ValueError("Segment must start with circular cut for joining")
+    # THESE ARE CANDIDATES FOR REMOVAL IF NEED IS NOT SHOWN
+    # def lift_lcs(self, lcs, lcs_type):
+    #     """Move lcs on base surface to corresponding position on top.
+    #
+    #     This is a side-effecting operation.  Result is modified input lcs.
+    #
+    #     There are four cases where the base is a circle (C) or ellipse (E) and similarly on top.
+    #
+    #         For CC:  The lift angle is zero and the new placement is simply the addition of the
+    #             outside height to the z-axis.
+    #         For CE: The wafer is a cylinder of height outside height / 2 and an inclined section
+    #             with a circle at the base and ellipse at the top.
+    #         For EC: The wafer is an inverted CE.
+    #         For EE: The wafer is an EC at the base and a CE on top.
+    #
+    #     Calculations:
+    #         Calculate each part separately (thus CE above is a cylinder on bottom and an ellipse on top with the
+    #         cylinder of height outside_height / 2).  Then combine two parts appropriately to create the full case above.
+    #
+    #         If base is an ellipse, rotate point to global zero.  Figure will be a cylinder inclined
+    #         by the lift angle with inclination in the xz plane. Make changes and rotate back to original position.
+    #
+    #     """
+    #     # logger.debug(f"LIFT_LCS: {lcs_type}, angle: {convert_angle(lift_angle)}, diam: {cylinder_diameter}, oh: {outside_height}")
+    #     parts = {"CC": ("CC2", "CC2"),
+    #              "CE": ("CC2", "CE2"),
+    #              "EC": ("EC2", "CC2"),
+    #              "EE": ("EC2", "CE2")}
+    #     parts_used = parts[lcs_type]
+    #     h2 = self.outside_height / 2
+    #     self.outside_height = 4.0                                            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    #     logger.debug(f"In wafer: outside_height: {self.outside_height}")     # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    #     d2 = self.cylinder_radius
+    #     la = self.lift_angle        # Lift angle already divided for end segments
+    #     if lcs_type == "EE":
+    #         la = self.lift_angle / 2
+    #     result_vec = []
+    #     for i in range(2):
+    #         # logger.debug(f"PARTS: {parts_used}, LCS: {lcs.Label}, i: {i}")
+    #         if "EC2" == parts_used[i]:
+    #             del_x = 0  # -d2 * np.sin(la)
+    #             del_z = h2 - d2 * np.tan(la)
+    #             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+    #             # logger.debug(f"EC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}, {i}: {parts_used}")
+    #         if "CE2" == parts_used[i]:
+    #             del_x = 0  # -d2 * np.sin(la)
+    #             del_z = h2 - d2 * np.tan(la)
+    #             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+    #             # logger.debug(f"CE  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)}  {i}: {parts_used}")
+    #         if "CC2" == parts_used[i]:
+    #             del_x = 0
+    #             del_z = 0              # removes cylindrical part
+    #             result_vec.append(FreeCAD.Vector(del_x, 0, del_z))
+    #             # logger.debug(f"CC  x: {np.round(del_x, 3)}, z: {np.round(del_z, 3)} res: {result_vec[i]}")
+    #         rot = FreeCAD.Rotation(0, 0, 0)
+    #         if parts_used[i] in ["CE2", "EC2"]:
+    #             # Not clear if Rotation wants radians or degrees.  Testing says radians - complex_path says degrees
+    #             rot = FreeCAD.Rotation(0, -np.rad2deg(la), 0)
+    #         # if parts_used[i] == "EE2":          # there is no EE2
+    #         #     rot = FreeCAD.Rotation(0, -np.rad2deg(la * 2), 0)
+    #         new_place = FreeCAD.Placement(result_vec[i], rot)
+    #         lcs.Placement = lcs.Placement.multiply(new_place)
+    #         # break
+    #
+    # def validate_segment_join(segment1_last_wafer, segment2_first_wafer):
+    #     # Check that segment1 ends with 'C' and segment2 starts with 'C'
+    #     if segment1_last_wafer.wafer_type[1] != 'C':
+    #         raise ValueError("Segment must end with circular cut for joining")
+    #     if segment2_first_wafer.wafer_type[0] != 'C':
+    #         raise ValueError("Segment must start with circular cut for joining")
 
 
 def log_lcs_info(lcs, tag, logger_level="info"):

@@ -45,16 +45,16 @@ workflow:
     curve_spec:
       type: "spiral"
       parameters:
-        max_height: 10.0
-        max_radius: 10.0
+        max_height: 3.0
+        max_radius: 2.5
         turns: 1
-        points: 150
+        points: 300
     wafer_settings:
-      cylinder_diameter: 2.25
-      min_height: .3
-      max_chord: 0.3
+      cylinder_diameter: 1.875
+      min_height: .1
+      max_chord: 0.05
     segment_settings:
-      show_lcs: false
+      show_lcs: true
       build_segment: true
       rotate_segment: 0.0
       add_curve_vertices: true      # This is displaying improperly (though calculations appear correct)
@@ -65,19 +65,19 @@ workflow:
 #      build_segment: true
 #      rotate_segment: 0.0
 #      add_curve_vertices: true
-
+#
 #  - operation: "build_segment"
 #    segment_type: "curve_follower"
 #    name: "close_seg"
-#    description: "Horizontal end  columnr"
+#    description: "Horizontal end  columnn"
 #    curve_spec:
 #      type: "linear"
 #      parameters:
-#        length: 7.0
+#        length: 2.0
 #        points: 10
 #    wafer_settings:
 #      cylinder_diameter: 2.25
-#      min_height: 1.0
+#      min_height: .2
 #      max_chord: 0.3
 #      max_angular_span: 45
 #    segment_settings:

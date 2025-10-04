@@ -112,14 +112,6 @@ class FlexSegment(object):
         except Exception:
             pass
 
-        if keep_debug or  True:        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            # keep all the per-wafer LCSs
-            try:
-                self.doc.recompute()
-            except Exception:
-                pass
-            return
-
         # 2) Delete only the temporary wafer LCS objects (…_1lcs / …_2lcs)
         temp_items = list(getattr(self.lcs_group, "Group", []))
         for obj in temp_items:
@@ -149,7 +141,6 @@ class FlexSegment(object):
                 self.main_group.removeObject(self.lcs_group)
         except Exception:
             pass
-
         try:
             self.doc.recompute()
         except Exception:
@@ -521,13 +512,11 @@ class FlexSegment(object):
             pass
 
     def remove_prior_version(self):
-        # TODO: not do so if making cut list???
         name = self.prefix + ".+"
         doc = FreeCAD.activeDocument()
         doc_list = doc.findObjects(Name=name)  # remove prior occurrence of set being built
         for item in doc_list:
-            if item.Label != 'Parms_Master':
-                doc.removeObject(item.Name)
+            doc.removeObject(item.Name)
 
     def make_cut_list(self,  cuts_file_obj,
                       min_lift=0.0, max_lift=45.0,
@@ -554,8 +543,8 @@ class FlexSegment(object):
             logger.warning(none_str)
             return
 
-        cuts_file_obj.write(f"Segment '{seg_name}' cuts\n\n")
-        cuts_file_obj.write("Wafer\tType\tLift(deg)\tRotate(deg)\tOutside\t\tSawPos(deg)\n")
+        cuts_file_obj.write(f"\tSegment '{seg_name}' cuts\n\n")
+        cuts_file_obj.write("\tWafer\tType\tLift(deg)\tRotate(deg)\tOutside\t\tSawPos(deg)\n")
 
         rows_written = 0
         total_cylinder_length = 0
@@ -587,7 +576,7 @@ class FlexSegment(object):
             # Last wafer has no cut after it
             if i == len(wafers) - 1:
                 # Last wafer - no cut, just dimensions
-                cuts_file_obj.write(f"{i + 1}\t{wt}\t---\t\t---\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
+                cuts_file_obj.write(f"\t{i + 1}\t{wt}\t---\t\t---\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
             else:
                 # Regular wafer with cut after it
                 lift_deg = w.get_lift_angle()
@@ -598,28 +587,24 @@ class FlexSegment(object):
                     if rot_deg > 1e-6:
                         raise ValueError(f"Seg: {seg_name}, wafer: {i} has unexpected rotation: {rot_deg}")
                 cuts_file_obj.write(
-                    f"{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
+                    f"\t{i + 1}\t{wt}\t{lift_deg:.2f}\t\t{rot_deg:.2f}\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
 
                 # Guardrails
                 if abs(lift_deg) < min_lift or abs(lift_deg) > max_lift:
-                    logger.warning(f"Lift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
+                    cuts_file_obj.write(f"\n\tLift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
                 if abs(rot_deg) < min_rotate or abs(rot_deg) > max_rotate:
-                    logger.warning(f"Rotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
+                    cuts_file_obj.write(f"\n\yRotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
 
             rows_written += 1
 
-        cuts_file_obj.write(f"\n\tTotal Cylinder Length: {total_cylinder_length:.2f}\n")
+        cuts_file_obj.write(f"\n\t\tTotal Cylinder Length: {total_cylinder_length:.2f}\n\n\n")
 
         cuts_file_obj.flush()
         logger.info(f"✂️  Wrote {rows_written} wafer rows ({rows_written - 1} cuts) for segment '{seg_name}'")
+
     def print_construction_list(self, segment_no, cons_file, global_placement, find_min_max):
         """Print list giving local and global position and orientation of each wafer."""
         parm_str = f"\nConstruction list for segment: {self.get_segment_name()}\n"
-        # if self.inside_height:
-        #     parm_str += f"Inside Wafer Height: {position_to_str(self.inside_height)} in\n"
-        # else:
-        #     parm_str += f"Inside Wafer Height: NONE\n"
-        # parm_str += f"Cylinder Diameter:{position_to_str(self.cylinder_diameter)} in\n"
         parm_str += f"Segment Rotation: \t{position_to_str(self.rotate_segment)} in\n"
         parm_str += f"\n\tNote 'angle' below is angle of top wafer surface to X-Y plane.\n"
         cons_file.write(parm_str)
@@ -845,12 +830,7 @@ class FlexSegment(object):
 
         try:
             # Try to get LCS positions and rotations from wafer objects
-            if hasattr(first_wafer, 'get_lcs1') and hasattr(first_wafer, 'get_lcs2'):
-                first_start_pos = first_wafer.get_lcs1().Placement.Base
-                first_start_rot = first_wafer.get_lcs1().Placement.Rotation.toEuler()
-                last_end_pos = last_wafer.get_lcs2().Placement.Base
-                last_end_rot = last_wafer.get_lcs2().Placement.Rotation.toEuler()
-            elif hasattr(first_wafer, 'lcs1') and hasattr(last_wafer, 'lcs2'):
+            if hasattr(first_wafer, 'lcs1') and hasattr(last_wafer, 'lcs2'):
                 first_start_pos = first_wafer.lcs1.Placement.Base
                 first_start_rot = first_wafer.lcs1.Placement.Rotation.toEuler()
                 last_end_pos = last_wafer.lcs2.Placement.Base
@@ -887,7 +867,8 @@ class FlexSegment(object):
 
         logger.debug(f"   Last wafer end (LCS2):")
         logger.debug(f"     Position: [{last_end_pos.x:.3f}, {last_end_pos.y:.3f}, {last_end_pos.z:.3f}]")
-        logger.debug(f"     Rotation: [Yaw={last_end_rot[0]:.1f}°, Pitch={last_end_rot[1]:.1f}°, Roll={last_end_rot[2]:.1f}°]")
+        logger.debug(
+            f"     Rotation: [Yaw={last_end_rot[0]:.1f}°, Pitch={last_end_rot[1]:.1f}°, Roll={last_end_rot[2]:.1f}°]")
 
         # Print segment object info
         seg_pos = self.segment_object.Placement.Base
@@ -900,44 +881,41 @@ class FlexSegment(object):
         bounds = self.segment_object.Shape.BoundBox
         if bounds.isValid():
             logger.debug(f"     Bounds: Min=[{bounds.XMin:.3f}, {bounds.YMin:.3f}, {bounds.ZMin:.3f}] "
-                  f"Max=[{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
+                         f"Max=[{bounds.XMax:.3f}, {bounds.YMax:.3f}, {bounds.ZMax:.3f}]")
 
-        # Position validation
-        base_error = (base_pos - first_start_pos).Length
-        top_error = (top_pos - last_end_pos).Length
-
+        # Position validation with tolerance
         tol_pos = 1e-6  # meters
 
         def offset(a, b):
-            d = (a.sub(b)).Length  # or (a - b).Length depending on your Vector type
+            d = (a - b).Length
             flag = "ERROR" if d > tol_pos else "OK"
             return d, flag
 
-        d_base, f_base = offset(lcs_base.Placement.Base, first_lcs.Placement.Base)
-        d_top, f_top = offset(lcs_top.Placement.Base, last_lcs.Placement.Base)
+        d_base, f_base = offset(self.lcs_base.Placement.Base, first_start_pos)
+        d_top, f_top = offset(self.lcs_top.Placement.Base, last_end_pos)
 
-        logger.debug("Position mismatch (m; tol=%.1e):", tol_pos)
-        logger.debug("  Base LCS vs First wafer: %.6f  [%s]", d_base, f_base)
-        logger.debug("  Top  LCS vs Last  wafer: %.6f  [%s]", d_top, f_top)
+        logger.debug(f"\n   Position mismatch (m; tol={tol_pos:.1e}):")
+        logger.debug(f"     Base LCS vs First wafer: {d_base:.6f}  [{f_base}]")
+        logger.debug(f"     Top  LCS vs Last  wafer: {d_top:.6f}  [{f_top}]")
 
         # Optional: hard check
         if d_base > tol_pos or d_top > tol_pos:
-            logger.warning("Segment endpoint(s) misaligned: base=%.6g m, top=%.6g m (tol=%.1e).",
-                           d_base, d_top, tol_pos)
+            logger.warning(
+                f"Segment endpoint(s) misaligned: base={d_base:.6g} m, top={d_top:.6g} m (tol={tol_pos:.1e}).")
 
         # Rotation comparison
         logger.debug(f"\n   Rotation comparisons:")
         logger.debug(f"     Base LCS vs First wafer: ΔYaw={base_rot[0] - first_start_rot[0]:.1f}°, "
-              f"ΔPitch={base_rot[1] - first_start_rot[1]:.1f}°, ΔRoll={base_rot[2] - first_start_rot[2]:.1f}°")
+                     f"ΔPitch={base_rot[1] - first_start_rot[1]:.1f}°, ΔRoll={base_rot[2] - first_start_rot[2]:.1f}°")
         logger.debug(f"     Top LCS vs Last wafer: ΔYaw={top_rot[0] - last_end_rot[0]:.1f}°, "
-              f"ΔPitch={top_rot[1] - last_end_rot[1]:.1f}°, ΔRoll={top_rot[2] - last_end_rot[2]:.1f}°")
+                     f"ΔPitch={top_rot[1] - last_end_rot[1]:.1f}°, ΔRoll={top_rot[2] - last_end_rot[2]:.1f}°")
 
         # Validation result
-        if base_error > 0.001:
-            return False, f"Base LCS mismatch: {base_error:.6f} units from first wafer start"
+        if d_base > 0.001:
+            return False, f"Base LCS mismatch: {d_base:.6f} units from first wafer start"
 
-        if top_error > 0.001:
-            return False, f"Top LCS mismatch: {top_error:.6f} units from last wafer end"
+        if d_top > 0.001:
+            return False, f"Top LCS mismatch: {d_top:.6f} units from last wafer end"
 
         return True, "Segment geometry valid"
 
@@ -1144,8 +1122,3 @@ class FlexSegment(object):
         matrix_str = ",".join([str(matrix.A[i]) for i in range(16)])
         lcs_obj.AppliedTransformMatrix = matrix_str
         lcs_obj.HasStoredTransform = True
-
-
-
-
-

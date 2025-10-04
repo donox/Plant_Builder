@@ -8,8 +8,6 @@ except Exception:
 
 logger = get_logger(__name__)
 
-import sys
-import os
 import Part
 import FreeCAD
 import FreeCADGui
@@ -17,18 +15,8 @@ import numpy as np
 import re
 import yaml
 from typing import Dict, Any, List, Optional
-from wafer import Wafer
 from curve_follower import CurveFollower
 from flex_segment import FlexSegment
-from curves import Curves
-from make_helix import MakeHelix
-from test_get_rotation_angle_freecad_wrapper import run_freecad_wrapper
-print("PyCharm 0", flush=True)
-# import pydevd_pycharm
-
-
-# pip install pydevd-pycharm~=241.15989.155
-# pip install pyyaml
 
 class Driver(object):
     """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
@@ -73,13 +61,6 @@ class Driver(object):
         # Utility functions
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label
-
-        # import pydevd_pycharm
-        # pydevd_pycharm.settrace("127.0.0.1", port=46845, suspend=True)
-
-        # Support for remote debugging to FreeCAD
-        # pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
-        # raise ValueError("Forced ABORT")
 
     def     load_yaml_config(self, yaml_file_path: str) -> None:
         """Load project configuration from YAML file.
@@ -334,9 +315,6 @@ class Driver(object):
 
         return gobj
 
-    def _get_workflow(self):
-        return self.get_parm("workflow")
-
     def relocate_segment(self):
         """Relocate segments end to end as set in the parameters"""
         # return
@@ -356,8 +334,7 @@ class Driver(object):
         logger.debug(f"\n🔧 RELOCATING SEGMENT: {segment_name}")
 
         # Validate segment before relocation
-        # is_valid, error_msg = segment.validate_segment_geometry()
-        is_valid = True # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        is_valid, error_msg = segment.validate_segment_geometry()
         if not is_valid:
             if segment.fix_segment_lcs_alignment():
                 is_valid, error_msg = segment.validate_segment_geometry()
@@ -391,7 +368,6 @@ class Driver(object):
             # Calculate alignment transform
             target_placement = prev_end_lcs.Placement
             current_placement = current_start_lcs.Placement
-            # target_placement.Rotation = rot    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             align_transform = target_placement.multiply(current_placement.inverse())
 
             logger.debug(f"\n  📐 CALCULATED TRANSFORM:")
@@ -434,27 +410,21 @@ class Driver(object):
         self.doc.recompute()
         segment.set_bounds()
 
-    def build_cut_list(self, filename: Optional[str] = None):
+    def build_cut_list(self, filename: Optional[str] = "default_cuts_file"):
         """Build cutting list file."""
-        if filename is None:
-            filename = self.get_parm("cuts_file")
-
         logger.info(f"Building cut list: {filename}")
         with open(filename, "w+") as cuts_file:
-            cuts_file.write(f"Cut List for: {self.project_config.get('metadata', {})['project_name']}\n\n")
-            cuts_file.write(f'Project Bounds\n')
-            cuts_file.write(f'\tX-min: {self.x_min:.2f}\tX_max: {self.x_max:.2f}\n')
-            cuts_file.write(f'\tY-min: {self.y_min:.2f}\tY_max: {self.y_max:.2f}\n')
-            cuts_file.write(f'\tZ-min: {self.z_min:.2f}\tZ_max: {self.z_max:.2f}\n\n')
-            cuts_file.write("Cutting order:\n")
+            cuts_file.write(f"\tCut List for: {self.project_config.get('metadata', {})['project_name']}\n\n")
+            cuts_file.write(f"\tProject Bounds\n")
+            cuts_file.write(f'\t\tX-min: {self.x_min:.2f}\tX_max: {self.x_max:.2f}\n')
+            cuts_file.write(f'\t\tY-min: {self.y_min:.2f}\tY_max: {self.y_max:.2f}\n')
+            cuts_file.write(f'\t\tZ-min: {self.z_min:.2f}\tZ_max: {self.z_max:.2f}\n\n')
+            cuts_file.write("\tCutting order:\n")
             for nbr, segment in enumerate(self.segment_list):
                 segment.make_cut_list(cuts_file)
 
-    def build_place_list(self, filename: Optional[str] = None):
+    def build_place_list(self, filename: Optional[str] = "default_places_file"):
         """Build placement list file."""
-        if filename is None:
-            filename = self.get_parm("place_file")
-
         logger.info(f"Building place list: {filename}")
         min_max = [[0, 0], [0, 0], [0, 0]]
 

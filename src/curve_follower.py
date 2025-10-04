@@ -763,9 +763,6 @@ class CurveFollower:
         # Step 3: Process each wafer with pre-calculated orientations and bend angles
         for i, ((start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type), lcs_data) in enumerate(
                 zip(wafers, lcs_orientations)):
-            if i > 2:  # Remove this limit when testing is complete
-                pass
-
             # Call add_wafer_from_curve_data with pre-calculated data
             self.add_wafer_from_curve_data(
                 start_point,
@@ -1042,7 +1039,7 @@ class CurveFollower:
     #         x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
     #         y_axis = self.lc
 
-    def _segment_is_planar(self, points: np.ndarray, eps_abs: float = 1e-6, eps_rel: float = 1e-4):
+    def _segment_is_planar(self, points: np.ndarray, eps_abs: float = 1e-6, eps_rel: float = 1e-5):
         """
         Returns (is_planar: bool, n_hat: np.ndarray, rms: float, tol: float)
 
@@ -1055,7 +1052,7 @@ class CurveFollower:
 
         # Use your own plane-fit if available:
         try:
-            is_planar, n_hat, _, rms = self._fit_plane(pts, eps=None)  # don't pass eps here
+            is_planar, n_hat, _, rms = self._fit_plane(pts)  # don't pass eps here
             log_coord(__name__, f"(try) is_planar: {is_planar}, rms: {rms:.4f}, n_hat: {n_hat}")
         except Exception:
             # PCA plane fit
