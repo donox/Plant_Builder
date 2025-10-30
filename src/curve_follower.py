@@ -24,6 +24,7 @@ import FreeCAD
 from curves import Curves  # Import the new Curves class
 import traceback
 import json, os, pathlib, time
+import pathlib
 
 class CurveFollower:
     """Creates wafer slices along a curved cylinder path.
@@ -303,7 +304,19 @@ class CurveFollower:
 
         Returns: (start_deg, end_deg, rotation_deg, wafer_type)
         """
+        # DEBUGGING -------------------------------
+        logger.info(f"🔍 === _calc_ellipse_params ENTRY ===")
+        logger.info(f"  start_index={start_index}, end_index={end_index}")
+        logger.info(f"  is_first_wafer={is_first_wafer}, is_last_wafer={is_last_wafer}")
+        logger.info(f"  start_point={start_point}")
+        logger.info(f"  end_point={end_point}")
+        logger.info(f"  chord_length={np.linalg.norm(end_point - start_point):.6f}")
 
+        # Extract the curve segment for this wafer
+        curve_segment = self.curve_points[start_index:end_index + 1]
+        logger.info(f"  curve_segment has {len(curve_segment)} points")
+        logger.info(f"  curve_segment[0]={curve_segment[0]}")
+        logger.info(f"  curve_segment[-1]={curve_segment[-1]}")
         # ---------- helpers ----------
         def _unit(v: np.ndarray):
             n = float(np.linalg.norm(v))
@@ -430,6 +443,9 @@ class CurveFollower:
             m_end_true /= (nrm + 1e-12)
 
             # signed angle about chord
+            logger.info(f"🔍 Rotation calc: m_end_ref={m_end_ref}, m_end_true={m_end_true}")
+            logger.info(f"🔍 chord_hat={chord_hat}")
+            logger.info(f"🔍 prev_hat={prev_hat}, next_hat={next_hat}")
             sin_term = float(np.dot(chord_hat, np.cross(m_end_ref, m_end_true)))
             cos_term = float(np.clip(np.dot(m_end_ref, m_end_true), -1.0, 1.0))
             angle_rad = float(np.arctan2(sin_term, cos_term))
@@ -440,11 +456,10 @@ class CurveFollower:
             if abs(rotation_deg) < ROT_EPS_DEG:
                 rotation_deg = 0.0
 
-            log_coord(__name__,
-                      (f"ROT about chord: start_idx={start_index} end_idx={end_index} "
+            logger.debug(f"ROT about chord: start_idx={start_index} end_idx={end_index} "
                        f"type={wafer_type} planar={is_planar} "
                        f"sin={sin_term:.6f} cos={cos_term:.6f} "
-                       f"angle_deg={rotation_deg:.3f}"))
+                       f"angle_deg={rotation_deg:.3f}")
 
         if 'log_coord' in globals():
             log_coord(__name__,
@@ -472,14 +487,25 @@ class CurveFollower:
             end_type = "C" if end_is_C else "E"
 
         wafer_type = start_type + end_type
-
+        logger.info(f"🔍 _calc_ellipse_params RETURNING: start={start_deg:.6f}°, end={end_deg:.6f}°, rotation={rotation_out:.6f}°, type={wafer_type}")
         return start_deg, end_deg, rotation_out, wafer_type
 
-    def create_wafer_list(self) -> List[Tuple[np.ndarray, np.ndarray, float, float, float, str]]:
+    def create_wafer_list(self, curve_points: np.ndarray,
+                          cylinder_diameter: float,
+                          min_height: float,
+                          max_chord: float,
+                          max_wafer_count: int = None) -> List[Dict[str, Any]]:
         """Create a list of wafers satisfying geometric constraints.
 
         Generates wafers that satisfy both minimum height and maximum chord
         distance constraints while maximizing wafer size.
+
+         Args:
+            curve_points: Array of curve points
+            cylinder_diameter: Diameter of cylinders
+            min_height: Minimum wafer height
+            max_chord: Maximum chord deviation from curve
+            max_wafer_count: Optional limit on number of wafers (for testing)
 
         Returns:
             List of tuples: (start_point, end_point, start_angle, end_angle,
@@ -487,7 +513,6 @@ class CurveFollower:
         """
 
         # --- CLEAR ellipse capture file for this run --------------------
-        import pathlib
         _TRACE_PATH = pathlib.Path(__file__).resolve().parents[1] / "tests" / "data" / "ellipse_cases.jsonl"
         try:
             _TRACE_PATH.parent.mkdir(parents=True, exist_ok=True)  # ensure tests/data/ exists
@@ -508,6 +533,11 @@ class CurveFollower:
             # SAFETY CHECK: Prevent infinite loops
             if safety_counter > 200:
                 logger.error(f"🛑 SAFETY STOP: Generated {len(wafers_parameters)} wafers, stopping to prevent infinite loop")
+                break
+
+            # CHECK: max_wafer_count limit (ADD THIS)
+            if max_wafer_count and len(wafers_parameters) >= max_wafer_count:
+                logger.info(f"✂️ Reached max_wafer_count={max_wafer_count}, stopping wafer generation")
                 break
 
             start_point = self.curve_points[current_index]
@@ -755,7 +785,13 @@ class CurveFollower:
                 logger.warning(f"  - {warning}")
 
         # Step 1: Create wafer list
-        wafers = self.create_wafer_list()
+        wafers = self.create_wafer_list(
+            curve_points=self.curve_points,
+            cylinder_diameter=self.cylinder_diameter,
+            min_height=self.min_height,
+            max_chord=self.max_chord,
+            max_wafer_count=getattr(self, 'max_wafer_count', None)  # Get from instance if set
+        )
 
         # Step 2: Pre-calculate all LCS orientations and bend angles
         lcs_orientations = self._precalculate_lcs_orientations(wafers)
@@ -784,16 +820,49 @@ class CurveFollower:
     def add_wafer_from_curve_data(self, start_point, end_point, start_angle,
                                   end_angle, rotation_angle, wafer_type,
                                   lcs1_rotation=None, lcs2_rotation=None,
-                                  start_bend_angle=None, end_bend_angle=None):  # NEW parameters
+                                  start_bend_angle=None, end_bend_angle=None):
         """Add a wafer using curve-derived data with pre-calculated LCS orientations and bend angles."""
 
         # Calculate the lift based on wafer type and angles
         lift = self._calculate_lift(start_angle, end_angle, wafer_type)
 
+        # CALCULATE CORRECT ROTATION FROM LCS ORIENTATIONS
+        # The rotation_angle parameter from _calculate_ellipse_parameters is WRONG
+        # Extract the actual rotation from the change in Yaw angle
+        if lcs1_rotation is not None and lcs2_rotation is not None:
+            try:
+                # Get Euler angles for both LCS orientations
+                euler1 = lcs1_rotation.toEuler()  # [Yaw, Pitch, Roll] in degrees
+                euler2 = lcs2_rotation.toEuler()
+
+                # Calculate the difference in Yaw angle
+                # This represents rotation about the vertical (Z) axis
+                yaw1 = euler1[0]
+                yaw2 = euler2[0]
+
+                # Calculate difference, handling angle wrapping
+                yaw_diff = yaw2 - yaw1
+
+                # Normalize to [-180, 180] range
+                while yaw_diff > 180:
+                    yaw_diff -= 360
+                while yaw_diff < -180:
+                    yaw_diff += 360
+
+                rotation_angle_corrected = yaw_diff
+
+                logger.info(
+                    f"🔧 CORRECTED rotation (Yaw diff): yaw1={yaw1:.2f}°, yaw2={yaw2:.2f}°, diff={rotation_angle_corrected:.6f}° (was {rotation_angle:.6f}°)")
+                rotation_angle = rotation_angle_corrected
+            except Exception as e:
+                logger.warning(f"⚠️ Could not calculate rotation from LCS: {e}, using original value")
+        else:
+            logger.warning(f"⚠️ No LCS rotations provided, using original rotation value")
+
         # Calculate outside height and individual extensions using bend angles
         outside_height, start_extension, end_extension = self._calculate_outside_height(
             start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type,
-            start_bend_angle, end_bend_angle)  # NEW parameters
+            start_bend_angle, end_bend_angle)
 
         logger.debug(
             f"curve_follower: add_wafer: outside_height: {outside_height}, start_ext: {start_extension}, end_ext: {end_extension}")
@@ -807,10 +876,10 @@ class CurveFollower:
                 tangent_vec = tangent_vec / np.linalg.norm(tangent_vec)
                 curve_tangent = FreeCAD.Vector(tangent_vec[0], tangent_vec[1], tangent_vec[2])
 
-        # Call segment.add_wafer with pre-calculated data
+        # Call segment.add_wafer with corrected rotation
         self.segment.add_wafer(
             lift=lift,
-            rotation=rotation_angle,
+            rotation=rotation_angle,  # Now using corrected value
             cylinder_diameter=self.cylinder_diameter,
             outside_height=outside_height,
             wafer_type=wafer_type,
@@ -822,6 +891,7 @@ class CurveFollower:
             lcs1_rotation=lcs1_rotation,
             lcs2_rotation=lcs2_rotation
         )
+
 
     # In curve_follower.py, CurveFollower class (around line 235)
     @staticmethod
@@ -840,99 +910,6 @@ class CurveFollower:
 
         return normalized
 
-    # def calculate_cutting_planes(self, wafers):
-    #     """Pre-calculate all cutting planes for the wafer sequence.
-    #
-    #     Args:
-    #         wafers: List of (start_point, end_point, ...) tuples
-    #
-    #     Returns:
-    #         List of cutting plane data for each wafer
-    #     """
-    #     cutting_planes = []
-    #
-    #     for i, (start_point, end_point, start_angle, end_angle, rotation_angle, wafer_type) in enumerate(wafers):
-    #         # Current wafer axis (chord)
-    #         current_axis = end_point - start_point
-    #         current_axis_length = np.linalg.norm(current_axis)
-    #         if current_axis_length > 1e-6:
-    #             current_axis = current_axis / current_axis_length
-    #
-    #         # Start cutting plane
-    #         if i == 0:
-    #             # First wafer: perpendicular cut
-    #             start_normal = current_axis
-    #         else:
-    #             # Get previous wafer axis
-    #             prev_start, prev_end = wafers[i - 1][0], wafers[i - 1][1]
-    #             prev_axis = prev_end - prev_start
-    #             prev_axis_length = np.linalg.norm(prev_axis)
-    #             if prev_axis_length > 1e-6:
-    #                 prev_axis = prev_axis / prev_axis_length
-    #
-    #             # Calculate bisecting plane normal
-    #             start_normal = self._calculate_bisecting_plane_normal(prev_axis, current_axis)
-    #
-    #         # End cutting plane
-    #         if i == len(wafers) - 1:
-    #             # Last wafer: perpendicular cut
-    #             end_normal = current_axis
-    #         else:
-    #             # Get next wafer axis
-    #             next_start, next_end = wafers[i + 1][0], wafers[i + 1][1]
-    #             next_axis = next_end - next_start
-    #             next_axis_length = np.linalg.norm(next_axis)
-    #             if next_axis_length > 1e-6:
-    #                 next_axis = next_axis / next_axis_length
-    #
-    #             # Calculate bisecting plane normal
-    #             end_normal = self._calculate_bisecting_plane_normal(current_axis, next_axis)
-    #
-    #         cutting_planes.append({
-    #             'start_pos': start_point,
-    #             'end_pos': end_point,
-    #             'start_normal': start_normal,
-    #             'end_normal': end_normal,
-    #             'wafer_axis': current_axis,
-    #             'rotation': rotation_angle,
-    #             'wafer_type': wafer_type
-    #         })
-    #
-    #     return cutting_planes
-
-
-    # def _calculate_bisecting_plane_normal(self, axis1, axis2):
-    #     """Calculate normal to the plane that bisects two cylinder axes.
-    #
-    #     The bisecting plane contains both axes and has a normal that makes
-    #     equal angles with both axes.
-    #     """
-    #     # Handle parallel/antiparallel axes
-    #     cross = np.cross(axis1, axis2)
-    #     cross_length = np.linalg.norm(cross)
-    #
-    #     if cross_length < 1e-6:
-    #         # Axes are parallel - return perpendicular to axis
-    #         return axis1
-    #
-    #     # The bisecting plane normal is the normalized sum of the axes
-    #     # (for acute angles) or difference (for obtuse angles)
-    #     dot_product = np.dot(axis1, axis2)
-    #
-    #     if dot_product > 0:
-    #         # Acute angle - bisector is sum
-    #         bisector = axis1 + axis2
-    #     else:
-    #         # Obtuse angle - bisector is difference
-    #         bisector = axis1 - axis2
-    #
-    #     bisector_length = np.linalg.norm(bisector)
-    #     if bisector_length > 1e-6:
-    #         bisector = bisector / bisector_length
-    #
-    #     # The cutting plane normal is the bisector direction
-    #     # (which is perpendicular to the intersection line of the two cylinders)
-    #     return bisector
 
     def _calculate_lift(self, start_angle: float, end_angle: float, wafer_type: str) -> float:
         """Calculate the lift angle for a wafer based on its cutting angles.
@@ -954,90 +931,8 @@ class CurveFollower:
         elif wafer_type == "EC":
             return start_angle  # Use start angle for last wafer
         else:  # "EE"
-            return (start_angle + end_angle) / 2.0  # Average for middle wafers
+            return (start_angle + end_angle)   # Average for middle wafers
 
-    # def add_wafer_with_cutting_planes(self, curve, cutting_data, diameter, doc_object, base_placement):
-    #     """Create a wafer from curve data with angled cutting planes.
-    #
-    #     For the first wafer in a segment, establishes the segment's coordinate system
-    #     by aligning the Y-axis with the plane containing both the chord and the curve
-    #     tangent. This creates a deterministic, geometrically meaningful orientation.
-    #
-    #     Args:
-    #         curve: The curve object to follow
-    #         cutting_data: Dictionary with start/end points, normals, cut angles, and cut types
-    #         diameter: Wafer cylinder diameter
-    #         doc_object: FreeCAD document object
-    #         base_placement: Base placement for the segment
-    #     """
-    #     raise ValueError("add_wafer_with_cutting_planes - method to be removed")
-    #     # Extract cutting data
-    #     start_point = cutting_data['start_point']
-    #     end_point = cutting_data['end_point']
-    #     start_normal = cutting_data['start_normal']
-    #     end_normal = cutting_data['end_normal']
-    #     wafer_type = cutting_data['type']
-    #     cut_rotation = cutting_data.get('rotation', 0.0)
-    #     start_cut_angle = cutting_data.get('start_angle', 0)
-    #     end_cut_angle = cutting_data.get('end_angle', 0)
-    #
-    #     # Calculate wafer properties
-    #     wafer_axis = (end_point - start_point).normalize()
-    #     chord_length = (end_point - start_point).Length
-    #
-    #     logger.info(f"\n=== Creating Wafer {len(self.wafer_list) + 1} with cutting planes ===")
-    #     logger.info(f"    Type: {wafer_type}")
-    #     logger.debug(f"    Rotation: {cut_rotation:.2f}°")
-    #
-    #     # Check if this is the first wafer
-    #     is_first_wafer = (len(self.wafer_list) == 0)
-    #
-    #     # Create coordinate system
-    #     if is_first_wafer:
-    #         # For first wafer, create deterministic orientation based on curve geometry
-    #         # Get the curve tangent at the start point
-    #         start_param = curve.getParameterByLength(0)
-    #         start_tangent = curve.tangent(start_param)[0]
-    #
-    #         # Z-axis is the wafer/cylinder axis
-    #         z_axis = wafer_axis
-    #
-    #         # Find the normal to the plane containing chord and tangent
-    #         plane_normal = z_axis.cross(start_tangent)
-    #
-    #         if plane_normal.Length < 0.001:
-    #             # Chord and tangent are parallel (straight section)
-    #             # Use perpendicular to Z and global Z if possible
-    #             if abs(z_axis.z) < 0.9:
-    #                 plane_normal = z_axis.cross(FreeCAD.Vector(0, 0, 1))
-    #             else:
-    #                 plane_normal = z_axis.cross(FreeCAD.Vector(1, 0, 0))
-    #
-    #         plane_normal.normalize()
-    #
-    #         # X-axis is the plane normal (perpendicular to bending plane)
-    #         x_axis = plane_normal
-    #
-    #         # Y-axis lies in the bending plane
-    #         y_axis = z_axis.cross(x_axis)
-    #         y_axis.normalize()
-    #
-    #         # Update base LCS orientation to match first wafer
-    #         placement_matrix = FreeCAD.Matrix()
-    #         placement_matrix.A11, placement_matrix.A21, placement_matrix.A31 = x_axis.x, x_axis.y, x_axis.z
-    #         placement_matrix.A12, placement_matrix.A22, placement_matrix.A32 = y_axis.x, y_axis.y, y_axis.z
-    #         placement_matrix.A13, placement_matrix.A23, placement_matrix.A33 = z_axis.x, z_axis.y, z_axis.z
-    #         placement_matrix.A14, placement_matrix.A24, placement_matrix.A34 = 0, 0, 0  # Keep at origin
-    #
-    #         self.lcs_base.Placement = FreeCAD.Placement(placement_matrix)
-    #
-    #         logger.debug(f"\n     First wafer - updating base LCS orientation")
-    #         logger.debug(f"       Base LCS Z-axis alignment with cylinder: {z_axis.dot(wafer_axis):.4f}")
-    #         logger.debug(f"       Base LCS position: {self.lcs_base.Placement.Base}")
-    #     else:
-    #         # For subsequent wafers, use the established coordinate system
-    #         x_axis = self.lcs_base.Placement.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
-    #         y_axis = self.lc
 
     def _segment_is_planar(self, points: np.ndarray, eps_abs: float = 1e-6, eps_rel: float = 1e-5):
         """

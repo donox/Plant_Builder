@@ -14,7 +14,7 @@ import Part
 from utilities import position_to_str
 
 
-class FlexSegment(object):
+class LoftSegment(object):
     def __init__(self, prefix,  show_lcs, temp_file, to_build, rotate_segment):
         self.doc = FreeCAD.ActiveDocument
         self.gui = FreeCADGui
@@ -66,295 +66,30 @@ class FlexSegment(object):
                         current.append(obj)
                 self.wafer_group.Group = current
 
-        self.transform_callbacks = []
-        self._setup_transform_properties()
         self.already_relocated = False  # Track relocation status
         self.stopper = False
 
-    def cleanup_wafer_lcs(self, keep_debug: bool = None):
-        """
-        Remove temporary per-wafer LCSs (…_1lcs / …_2lcs) and ensure the segment's
-        *_lcs_base / *_lcs_top live only in the wafers group.
+    def remove_prior_version(self):
+        name = self.prefix + ".+"
+        doc = FreeCAD.activeDocument()
+        doc_list = doc.findObjects(Name=name)  # remove prior occurrence of set being built
+        for item in doc_list:
+            doc.removeObject(item.Name)
 
-        If keep_debug is True we keep the temp LCSs (useful for inspection).
-        By default it honors self.show_lcs; pass keep_debug=False to force cleanup.
-        """
-        if keep_debug is None:
-            keep_debug = bool(getattr(self, "show_lcs", False))
-
-        base_obj = self.lcs_base
-        top_obj = self.lcs_top
-
-        # 1) Ensure base/top are in the wafers group
-        try:
-            self.wafer_group.addObjects([base_obj, top_obj])
-        except Exception:
-            current = list(getattr(self.wafer_group, "Group", []))
-            for obj in (base_obj, top_obj):
-                if obj not in current:
-                    current.append(obj)
-            self.wafer_group.Group = current
-
-        # …and make sure they are NOT in the lcs_group anymore
-        try:
-            # FreeCAD >= 0.21
-            if hasattr(self.lcs_group, "removeObject"):
-                for obj in (base_obj, top_obj):
-                    try:
-                        self.lcs_group.removeObject(obj)
-                    except Exception:
-                        pass
-            # very old FreeCAD fallback
-            else:
-                g = list(getattr(self.lcs_group, "Group", []))
-                g = [o for o in g if o not in (base_obj, top_obj)]
-                self.lcs_group.Group = g
-        except Exception:
-            pass
-
-        # 2) Delete only the temporary wafer LCS objects (…_1lcs / …_2lcs)
-        temp_items = list(getattr(self.lcs_group, "Group", []))
-        for obj in temp_items:
-            label = getattr(obj, "Label", "") or ""
-            name = getattr(obj, "Name", "") or ""
-
-            # strictly match only the temp LCS names
-            is_temp_lcs = label.endswith(("1lcs", "2lcs")) or name.endswith(("1lcs", "2lcs"))
-            if not is_temp_lcs:
-                continue  # never delete base/top or anything else here
-
-            # remove from group then from document
-            try:
-                if hasattr(self.lcs_group, "removeObject"):
-                    self.lcs_group.removeObject(obj)
-            except Exception:
-                pass
-            try:
-                self.doc.removeObject(obj.Name)
-            except Exception:
-                pass
-
-        # Optionally drop now-empty lcs_group from the segment group
-        try:
-            group_empty = not getattr(self.lcs_group, "Group", [])
-            if group_empty and hasattr(self.main_group, "removeObject"):
-                self.main_group.removeObject(self.lcs_group)
-        except Exception:
-            pass
-        try:
-            self.doc.recompute()
-        except Exception:
-            pass
-
-    def get_bounds(self):
-        """Return wafer extents in each dimension"""
-        return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
-
-    def set_bounds(self):
-        """Set bounds of fused segment result."""
-        if not self.segment_object:
-            return
-        bbox = self.segment_object.Shape.BoundBox
-        self.x_min = bbox.XMin
-        self.x_max = bbox.XMax
-        self.y_min = bbox.YMin
-        self.y_max = bbox.YMax
-        self.z_min = bbox.ZMin
-        self.z_max = bbox.ZMax
-
-    def add_wafer(self, lift, rotation, cylinder_diameter, outside_height, wafer_type="EE",
-                  start_pos=None, end_pos=None, curve_tangent=None,
-                  start_extension=None, end_extension=None,
-                  lcs1_rotation=None, lcs2_rotation=None):  # NEW parameters
-        """Add a wafer with optional 3D positioning data and pre-calculated LCS orientations.
-
-        Args:
-            lift: float, lift angle in degrees
-            rotation: float, rotation angle in degrees (DEPRECATED - ignored if lcs rotations provided)
-            cylinder_diameter: float, diameter of cylinder
-            outside_height: float, outside height of wafer
-            wafer_type: str, type of wafer (CE, EE, EC, CC)
-            start_pos: numpy array [x, y, z] or None
-            end_pos: numpy array [x, y, z] or None
-            curve_tangent: tangent to curve, if provided
-            start_extension: float, extension at start of cylinder or None
-            end_extension: float, extension at end of cylinder or None
-            lcs1_rotation: FreeCAD.Rotation for LCS1 (optional, pre-calculated)
-            lcs2_rotation: FreeCAD.Rotation for LCS2 (optional, pre-calculated)
-        """
-        if not hasattr(self, 'wafer_count'):
-            self.wafer_count = 0
-            self._prev_wafer_axis = None
-
-        self.wafer_count += 1
-
-        logger.debug(f"\n=== Creating Wafer {self.wafer_count} ===")
-        logger.debug(f"  Type: {wafer_type}")
-        logger.debug(f"  Lift: {lift:.2f}°")
-
-        # Create wafer objects
-        name_base = self.prefix + str(self.wafer_count)
-        wafer_name = name_base + "_w"
-        wafer = Wafer(FreeCAD, self.gui, self.prefix, wafer_type=wafer_type)
-        logger.info(f"🔍 About to call set_parameters with rotation={rotation:.6f}")
-        wafer.set_parameters(lift, rotation, cylinder_diameter, outside_height, wafer_type=wafer_type)
-
-        lcs1 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_1lcs")
-        lcs2 = self.doc.addObject('PartDesign::CoordinateSystem', name_base + "_2lcs")
-        self.lcs_group.addObjects([lcs1, lcs2])
-        wafer.lcs1 = lcs1
-        wafer.lcs2 = lcs2
-        wafer.segment = self
-
-        if not self.show_lcs:
-            lcs1.Visibility = False
-            lcs2.Visibility = False
-
-        # Use pre-calculated orientations if provided
-        if start_pos is not None and end_pos is not None:
-            if not isinstance(start_pos, np.ndarray):
-                start_pos = np.array(start_pos)
-            if not isinstance(end_pos, np.ndarray):
-                end_pos = np.array(end_pos)
-
-            wafer_vector = end_pos - start_pos
-            wafer_length = np.linalg.norm(wafer_vector)
-
-            if wafer_length > 1e-6:
-                # Set LCS1
-                if self.wafer_count == 1:
-                    logger.debug(f"    🔹 First wafer - using pre-calculated LCS orientation")
-                    if lcs1_rotation is not None:
-                        lcs1.Placement = FreeCAD.Placement(
-                            FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2]),
-                            lcs1_rotation
-                        )
-                    else:
-                        # Fallback to simple orientation
-                        wafer_direction = wafer_vector / wafer_length
-                        current_axis = FreeCAD.Vector(wafer_direction[0], wafer_direction[1], wafer_direction[2])
-                        z_axis = current_axis
-
-                        if abs(z_axis.dot(FreeCAD.Vector(0, 0, 1))) > 0.99:
-                            x_axis = FreeCAD.Vector(1, 0, 0)
-                            y_axis = FreeCAD.Vector(0, 1, 0)
-                        else:
-                            ref_vec = FreeCAD.Vector(0, 0, 1)
-                            x_axis = z_axis.cross(ref_vec).normalize()
-                            y_axis = z_axis.cross(x_axis).normalize()
-
-                        rotation_matrix = FreeCAD.Matrix(
-                            x_axis.x, y_axis.x, z_axis.x, 0,
-                            x_axis.y, y_axis.y, z_axis.y, 0,
-                            x_axis.z, y_axis.z, z_axis.z, 0,
-                            0, 0, 0, 1
-                        )
-
-                        lcs1.Placement = FreeCAD.Placement(
-                            FreeCAD.Vector(start_pos[0], start_pos[1], start_pos[2]),
-                            FreeCAD.Rotation(rotation_matrix)
-                        )
-                else:
-                    # Use stored placement from previous wafer
-                    if hasattr(self, '_last_lcs2_placement'):
-                        lcs1.Placement = self._last_lcs2_placement
-                    else:
-                        logger.error("ERROR: No previous LCS2 placement found!")
-
-                # Set LCS2
-                if lcs2_rotation is not None:
-                    lcs2.Placement = FreeCAD.Placement(
-                        FreeCAD.Vector(end_pos[0], end_pos[1], end_pos[2]),
-                        lcs2_rotation
-                    )
-                    logger.debug(f"    🔹 Using pre-calculated LCS2 orientation")
-                else:
-                    # Fallback - simple perpendicular orientation
-                    logger.warning("    ⚠️ No pre-calculated LCS2 rotation, using fallback")
-                    wafer_direction = wafer_vector / wafer_length
-                    current_axis = FreeCAD.Vector(wafer_direction[0], wafer_direction[1], wafer_direction[2])
-
-                    if abs(current_axis.z) < 0.9:
-                        x_axis = FreeCAD.Vector(0, 0, 1).cross(current_axis)
-                    else:
-                        x_axis = FreeCAD.Vector(1, 0, 0).cross(current_axis)
-                    x_axis.normalize()
-                    y_axis = current_axis.cross(x_axis).normalize()
-
-                    rotation_matrix = FreeCAD.Matrix(
-                        x_axis.x, y_axis.x, current_axis.x, 0,
-                        x_axis.y, y_axis.y, current_axis.y, 0,
-                        x_axis.z, y_axis.z, current_axis.z, 0,
-                        0, 0, 0, 1
-                    )
-
-                    lcs2.Placement = FreeCAD.Placement(
-                        FreeCAD.Vector(end_pos[0], end_pos[1], end_pos[2]),
-                        FreeCAD.Rotation(rotation_matrix)
-                    )
-
-                # Store for next wafer
-                self._last_lcs2_placement = lcs2.Placement
-
-                # Update lcs_top
-                self.lcs_top.Placement = lcs2.Placement
-
-                logger.debug(
-                    f"  LCS1 at: [{lcs1.Placement.Base.x:.3f}, {lcs1.Placement.Base.y:.3f}, {lcs1.Placement.Base.z:.3f}]")
-                logger.debug(
-                    f"  LCS2 at: [{lcs2.Placement.Base.x:.3f}, {lcs2.Placement.Base.y:.3f}, {lcs2.Placement.Base.z:.3f}]")
-
-        else:
-            raise ValueError(f"Missing start or end position")
-
-        # Create the wafer geometry (rest of method unchanged)
-        try:
-            if wafer_type[0] == 'C':
-                start_cut_angle = 0.0
-            else:
-                start_cut_angle = lift
-
-            if wafer_type[1] == 'C':
-                end_cut_angle = 0.0
-            else:
-                end_cut_angle = lift
-
-            wafer.make_wafer_from_lcs(lcs1, lcs2, cylinder_diameter, wafer_name,
-                                      start_cut_angle, end_cut_angle,
-                                      start_extension, end_extension)
-
-            self._last_wafer = wafer
-            self.wafer_list.append(wafer)
-
-            # Ensure wafer is placed under segment's wafers subgroup
-            try:
-                if not hasattr(self, 'wafer_group') or self.wafer_group is None:
-                    self.wafer_group = self.doc.addObject('App::DocumentObjectGroup', self.prefix + 'wafers')
-                    if hasattr(self, 'main_group') and self.main_group is not None:
-                        try:
-                            self.main_group.addObject(self.wafer_group)
-                        except Exception:
-                            pass
-                if hasattr(wafer, 'wafer') and wafer.wafer is not None:
-                    try:
-                        self.wafer_group.addObject(wafer.wafer)
-                    except Exception:
-                        try:
-                            current = list(getattr(self.wafer_group, 'Group', []))
-                            current.append(wafer.wafer)
-                            self.wafer_group.Group = current
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"ERROR creating wafer: {e}")
-            import traceback
-            traceback.print_exc()
-
-        logger.debug(f"  ✅ Wafer {self.wafer_count} completed")
     def get_segment_name(self):
         return self.prefix[:-1]    # strip trailing underscore
+
+    def get_segment_object(self):
+        return self.segment_object
+
+    def get_lcs_top(self):
+        # logger.debug(f"LCS TOP: {self.lcs_top.Label}")
+        return self.lcs_top
+
+    def get_lcs_base(self):
+        if not self.lcs_base:
+            raise ValueError(f"lcs_base not set")
+        return self.lcs_base
 
     def get_segment_object(self):
         return self.segment_object
@@ -377,6 +112,7 @@ class FlexSegment(object):
     def fuse_wafers(self):
         """Fuse wafers using sequential binary fusion for robustness."""
         name = self.get_segment_name()
+        raise ValueError("Forced STOP")
 
         if len(self.wafer_list) == 0:
             raise ValueError("Zero Length Wafer List when building helix")
@@ -392,7 +128,7 @@ class FlexSegment(object):
 
             # Fuse each subsequent wafer
             for i in range(1, len(self.wafer_list)):
-                if i > 500:           # Assume a long wafer list is an error
+                if i > 100:  # Assume a long wafer list is an error
                     raise ValueError(f"Too many wafers: {len(self.wafer_list)}")
                 else:
                     waf = self.wafer_list[i]
@@ -512,14 +248,7 @@ class FlexSegment(object):
         except:
             pass
 
-    def remove_prior_version(self):
-        name = self.prefix + ".+"
-        doc = FreeCAD.activeDocument()
-        doc_list = doc.findObjects(Name=name)  # remove prior occurrence of set being built
-        for item in doc_list:
-            doc.removeObject(item.Name)
-
-    def make_cut_list(self,  cuts_file_obj,
+    def make_cut_list(self, cuts_file_obj,
                       min_lift=0.0, max_lift=45.0,
                       min_rotate=0.0, max_rotate=45.0):
         """
@@ -577,7 +306,8 @@ class FlexSegment(object):
             # Last wafer has no cut after it
             if i == len(wafers) - 1:
                 # Last wafer - no cut, just dimensions
-                cuts_file_obj.write(f"\t{i + 1}\t{wt}\t---\t\t---\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
+                cuts_file_obj.write(
+                    f"\t{i + 1}\t{wt}\t---\t\t---\t\t{outside_in} {outside_fraction}/16\t\t{corrected_saw_pos:.2f}\n")
             else:
                 # Regular wafer with cut after it
                 lift_deg = w.get_lift_angle()
@@ -592,9 +322,11 @@ class FlexSegment(object):
 
                 # Guardrails
                 if abs(lift_deg) < min_lift or abs(lift_deg) > max_lift:
-                    cuts_file_obj.write(f"\n\tLift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
+                    cuts_file_obj.write(
+                        f"\n\tLift {lift_deg:.2f}° for wafer {i + 1} outside [{min_lift}, {max_lift}]°.")
                 if abs(rot_deg) < min_rotate or abs(rot_deg) > max_rotate:
-                    cuts_file_obj.write(f"\n\yRotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
+                    cuts_file_obj.write(
+                        f"\n\yRotation {rot_deg:.2f}° for wafer {i + 1} outside [{min_rotate}, {max_rotate}]°.")
 
             rows_written += 1
 
@@ -619,7 +351,7 @@ class FlexSegment(object):
             #     prior_top = top_lcs_place
             top_lcs_place = wafer.get_top().Placement
             global_loc = global_placement.multiply(top_lcs_place)
-            num_str = str(wafer_num + 1)       # Make one-based for conformance with  in shop
+            num_str = str(wafer_num + 1)  # Make one-based for conformance with  in shop
             local_x = position_to_str(top_lcs_place.Base.x)
             global_x = position_to_str(global_loc.Base.x)
             local_y = position_to_str(top_lcs_place.Base.y)
@@ -1123,3 +855,4 @@ class FlexSegment(object):
         matrix_str = ",".join([str(matrix.A[i]) for i in range(16)])
         lcs_obj.AppliedTransformMatrix = matrix_str
         lcs_obj.HasStoredTransform = True
+

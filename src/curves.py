@@ -9,6 +9,7 @@ from core.logging_setup import get_logger, apply_display_levels
 apply_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 import math
+import sys
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import FreeCAD
@@ -758,17 +759,6 @@ class Curves:
 
     # ... add similar methods for other curve types
 
-    @classmethod
-    def get_available_curves(cls) -> List[str]:
-        """Get list of available built-in curve types.
-
-        Returns:
-            List of curve type names
-        """
-        return ['linear', 'helical', 'sinusoidal', 'overhand_knot',
-                'circle', 'spiral', 'figure_eight', 'trefoil', 'custom']
-
-
 def generate_woodcut_trefoil(slices=180, **parameters):
     """
     Generate a trefoil curve optimized for wood cutting with cylindrical slices.
@@ -881,6 +871,81 @@ def analyze_cutting_requirements(points):
         'angle_per_slice': angle_per_slice,
         'radii': radii
     }
+
+
+def get_available_curves():
+    """
+    Return list of available curve types from the Curves class
+
+    Returns:
+        set of curve type names (without generate_ prefix)
+    """
+    available = set()
+
+    # Look at the Curves class methods
+    for name in dir(Curves):
+        # Look for both public and private generate methods
+        if name.startswith('_generate_') or name.startswith('generate_'):
+            # Remove prefix
+            if name.startswith('_generate_'):
+                curve_type = name.replace('_generate_', '')
+            else:
+                curve_type = name.replace('generate_', '')
+
+            # Skip double underscore methods
+            if not curve_type.startswith('_'):
+                available.add(curve_type)
+
+    return available
+
+
+def generate_curve(curve_type, doc=None, curve_spec=None, **params):
+    """
+    Generate a curve of the specified type
+
+    Args:
+        curve_type: Type of curve (e.g., 'spiral', 'helix')
+        doc: FreeCAD document (required by Curves class)
+        curve_spec: Curve specification (required by Curves class)
+        **params: Parameters for the curve generator
+
+    Returns:
+        List of App.Vector points
+
+    Raises:
+        ValueError if curve_type not available
+    """
+    # Create Curves instance with required arguments
+    if doc is None:
+        import FreeCAD as App
+        doc = App.ActiveDocument
+        if doc is None:
+            doc = App.newDocument("TempDoc")
+
+    if curve_spec is None:
+        curve_spec = {'type': curve_type, 'parameters': params}
+
+    curves_instance = Curves(doc, curve_spec)
+
+    # Try both naming conventions
+    func_name = f'generate_{curve_type}'
+    private_func_name = f'_generate_{curve_type}'
+
+    if hasattr(curves_instance, func_name):
+        func = getattr(curves_instance, func_name)
+        return func(**params)
+    elif hasattr(curves_instance, private_func_name):
+        func = getattr(curves_instance, private_func_name)
+        return func(**params)
+    else:
+        # Function not found - get available and raise error
+        available = get_available_curves()
+        raise ValueError(
+            f"Curve type '{curve_type}' not available.\n"
+            f"Available types: {sorted(available)}\n"
+            f"Could not find method: {func_name} or {private_func_name}"
+        )
+
 
 
 # Example usage for woodcutting

@@ -14,9 +14,15 @@ import FreeCADGui
 import numpy as np
 import re
 import yaml
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from curve_follower import CurveFollower
 from flex_segment import FlexSegment
+import curves
+from loft_segment import LoftSegment
+from curve_follower_loft import CurveFollowerLoft
+from curve_follower_loft import get_curve_points_from_curves_module as get_curve_points
+from curve_follower_loft import create_sampler_function
+from wafer_loft import LoftWaferGenerator
 
 class Driver(object):
     """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
@@ -40,6 +46,7 @@ class Driver(object):
 
         # Project configuration (loaded from YAML)
         self.project_config = None
+        self.global_settings = None
         self.curve_templates = {}
         self.workflows = {}
 
@@ -57,44 +64,52 @@ class Driver(object):
 
         self.relocate_segments_tf = None
         self.stopper = False
+        self.use_loft = False
 
         # Utility functions
         self.get_object_by_label = self._gobj()
         FreeCAD.gobj = self.get_object_by_label
 
-    def     load_yaml_config(self, yaml_file_path: str) -> None:
-        """Load project configuration from YAML file.
+    def load_configuration(self, config_file):
+        """Load and validate YAML configuration"""
+        with open(config_file, 'r') as f:
+            self.project_config = yaml.safe_load(f)  # ← Changed from self.config
 
-        Args:
-            yaml_file_path: Path to the YAML configuration file
+        self.global_settings = self.project_config.get('global_settings', {})  # ← Changed
 
-        Raises:
-            FileNotFoundError: If YAML file doesn't exist
-            yaml.YAMLError: If YAML file has syntax errors
-            ValueError: If required sections are missing
-        """
-        try:
-            logger.info(f"YAML FILE PATH: {yaml_file_path}")
-            with open(yaml_file_path, 'r') as file:
-                self.project_config = yaml.safe_load(file)
+        # Validate curve availability
+        available_curves = self._validate_curve_availability()
+        print(f"Available curve types: {sorted(available_curves)}")
 
-            # Validate required sections
-            required_sections = ['metadata', 'global_settings', 'workflow']
-            for section in required_sections:
-                if section not in self.project_config:
-                    raise ValueError(f"Required section '{section}' missing from YAML config")
+        # Validate all operations that use curves
+        operations = self.project_config.get('operations', [])  # ← Changed
+        errors = []
 
-            # Extract templates and alternative workflows
-            self.curve_templates = self.project_config.get('curve_templates', {})
-            self.workflows = self.project_config.get('workflows', {})
+        for i, operation in enumerate(operations):
+            if operation.get('operation') == 'build_segment':
+                curve_spec = operation.get('curve_spec', {})
+                curve_type = curve_spec.get('type')
 
-            # Apply global settings
-            self._apply_global_settings()
+                if curve_type and curve_type not in available_curves:
+                    error_msg = (
+                        f"Operation {i} ('{operation.get('name', 'unnamed')}'): "
+                        f"curve type '{curve_type}' is not available"
+                    )
+                    errors.append(error_msg)
 
-        except FileNotFoundError:
-            raise FileNotFoundError(f"YAML configuration file not found: {yaml_file_path}")
-        except yaml.YAMLError as e:
-            raise yaml.YAMLError(f"YAML syntax error: {e}")
+        # If there are errors, report them all and fail
+        if errors:
+            error_report = "\n".join(f"  ❌ {err}" for err in errors)
+            available_list = ", ".join(f"'{c}'" for c in sorted(available_curves))
+
+            raise ValueError(
+                f"\n❌ Configuration validation failed:\n"
+                f"{error_report}\n\n"
+                f"Available curve types: {available_list}\n"
+                f"Check curves.py for available generate_* functions"
+            )
+
+        print(f"✅ Config loaded and validated")
 
     def _apply_global_settings(self) -> None:
         """Apply global settings from the YAML configuration."""
@@ -106,6 +121,19 @@ class Driver(object):
         # Remove existing objects if specified
         if global_settings.get('remove_existing', False):
             self._remove_existing_objects()
+
+    # In driver.py, add this method to the Driver class
+
+    def _validate_curve_availability(self):
+        """
+        Check what curve generation functions are available
+
+        Returns:
+            set of available curve types
+        """
+
+        # Let the curves module tell us what it provides
+        return curves.get_available_curves()
 
     def _remove_existing_objects(self) -> None:
         """Remove existing objects based on global settings."""
@@ -161,6 +189,8 @@ class Driver(object):
             self._execute_set_position(operation)
         elif op_type == 'build_segment':
             self._execute_build_segment(operation)
+        elif op_type == 'validate_reconstruction':
+            self._execute_validate_reconstruction(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
 
@@ -205,6 +235,7 @@ class Driver(object):
     def _build_curve_follower_segment(self, operation: Dict[str, Any]) -> None:
         """Build a curve follower segment."""
         name = operation['name']
+        segment_loft = operation.get('lofted_segment', False)
         curve_spec = operation.get('curve_spec', {})
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
@@ -219,6 +250,7 @@ class Driver(object):
         cylinder_diameter = wafer_settings.get('cylinder_diameter', 2.0)
         min_height = wafer_settings.get('min_height', 1.0)
         max_chord = wafer_settings.get('max_chord', 0.5)
+        max_wafer_count = wafer_settings.get('max_wafer_count', None)
 
         show_lcs = segment_settings.get('show_lcs', True)
         build_segment = segment_settings.get('build_segment', True)
@@ -228,58 +260,79 @@ class Driver(object):
         # Get temp file setting
         temp_file = self.project_config.get('global_settings', {}).get('temp_file', 'temp.dat')
 
-        # Create segment
-        segment = FlexSegment(name, show_lcs, temp_file, build_segment, rotate_segment)
-        self.segment_list.append(segment)
+        if segment_loft:
+            # Use new loft-based approach
+            from curve_follower_loft import CurveFollowerLoft
 
-        try:
-            # Create curve follower
-            follower = CurveFollower(
-                doc=self.doc,
-                segment=segment,
-                cylinder_diameter=cylinder_diameter,
-                curve_spec=curve_spec,
-                min_height=min_height,
-                max_chord=max_chord
-            )
+            # Create follower with just wafer_settings
+            follower = CurveFollowerLoft(wafer_settings=wafer_settings)
 
-            # Get the actual segment base position
-            segment_base = segment.get_lcs_base()
-            logger.debug(f"Segment base placement: {segment_base.Placement}")
+            # Generate loft wafers
+            wafers = follower.generate_loft_wafers(curve_spec, wafer_settings)
 
-            # Process wafers
-            follower.process_wafers(add_curve_vertices=False)
+            # Get the wafer list
+            wafer_list = follower.get_wafer_list()
 
-            # Fuse wafers if any were created
-            if segment.get_wafer_count() > 0:
-                segment.fuse_wafers()
+            # Visualize if requested
+            if self.doc:
+                follower.visualize_wafers(self.doc)
 
-                segment_obj = segment.get_segment_object()
+            print(f"✓ Created {len(wafer_list)} wafers using loft approach")
+        else:
+        # Create NON-LOFT segment
+            segment = FlexSegment(name, show_lcs, temp_file, build_segment, rotate_segment)
+            self.segment_list.append(segment)
 
-                if segment_obj:
-                    logger.info(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
+            try:
+                # Create curve follower
+                follower = CurveFollower(
+                    doc=self.doc,
+                    segment=segment,
+                    cylinder_diameter=cylinder_diameter,
+                    curve_spec=curve_spec,
+                    min_height=min_height,
+                    max_chord=max_chord
+                )
 
-                    # Add curve vertices BEFORE relocation
-                    if add_curve_vertices:
-                        logger.debug("Adding curve vertices...")
-                        follower.add_curve_visualization()
+                follower.max_wafer_count = max_wafer_count
 
-                    # Relocate segment - ONLY CALL THIS ONCE!
-                    self.relocate_segment()
-                    logger.debug(f"Completed relocation for segment '{name}'")
+                # Get the actual segment base position
+                segment_base = segment.get_lcs_base()
+                logger.debug(f"Segment base placement: {segment_base.Placement}")
 
+                # Process wafers
+                follower.process_wafers(add_curve_vertices=False)
+
+                # Fuse wafers if any were created
+                if segment.get_wafer_count() > 0:
+                    segment.fuse_wafers()
+
+                    segment_obj = segment.get_segment_object()
+
+                    if segment_obj:
+                        logger.info(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
+
+                        # Add curve vertices BEFORE relocation
+                        if add_curve_vertices:
+                            logger.debug("Adding curve vertices...")
+                            follower.add_curve_visualization()
+
+                        # Relocate segment - ONLY CALL THIS ONCE!
+                        self.relocate_segment()
+                        logger.debug(f"Completed relocation for segment '{name}'")
+
+                    else:
+                        logger.warning(f"Warning: Segment '{name}' created wafers but fusing failed")
                 else:
-                    logger.warning(f"Warning: Segment '{name}' created wafers but fusing failed")
-            else:
-                logger.warning(f"Warning: No wafers created for segment '{name}'")
+                    logger.warning(f"Warning: No wafers created for segment '{name}'")
 
-            # Force recompute
-            FreeCAD.ActiveDocument.recompute()
-            FreeCADGui.updateGui()
+                # Force recompute
+                FreeCAD.ActiveDocument.recompute()
+                FreeCADGui.updateGui()
 
-        except Exception as e:
-            logger.error(f"Error creating curve follower segment '{name}': {e}")
-            raise
+            except Exception as e:
+                logger.error(f"Error creating curve follower segment '{name}': {e}")
+                raise
 
     def _generate_output_files(self) -> None:
         """Generate output files based on global settings."""
@@ -412,6 +465,7 @@ class Driver(object):
 
     def build_cut_list(self, filename: Optional[str] = "default_cuts_file"):
         """Build cutting list file."""
+        return
         logger.info(f"Building cut list: {filename}")
         with open(filename, "w+") as cuts_file:
             cuts_file.write(f"\tCut List for: {self.project_config.get('metadata', {})['project_name']}\n\n")
@@ -493,5 +547,45 @@ class Driver(object):
     def get_composite_bounds(self):
         """Return wafer extents in each dimension"""
         return self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max
+
+    def _execute_validate_reconstruction(self, operation: Dict[str, Any]):
+        """Execute reconstruction validation operation."""
+        from reconstruction.reconstruction_workflow import ReconstructionWorkflow
+
+        segment_name = operation.get('segment_name')
+        cutlist_file = operation.get('cutlist_file')
+        create_vertices = operation.get('create_vertices', False)
+        match_original = operation.get('match_original_position', False)
+
+        # Get the original segment
+        original_segment = None
+        for seg in self.segment_list:
+            if seg.get_segment_name() == segment_name:
+                original_segment = seg
+                break
+
+        if not original_segment:
+            logger.error(f"Cannot find original segment '{segment_name}' for validation")
+            return
+
+        # Create workflow with correct units (inches, not mm)
+        workflow = ReconstructionWorkflow(self.doc, units_per_inch=1.0)  # ← ADD THIS
+
+        # Get original starting LCS if requested
+        starting_lcs = None
+        if match_original:
+            starting_lcs = original_segment.get_lcs_base()
+            logger.info(f"Original segment starts at: {starting_lcs.Placement.Base}")
+            logger.info(f"Original segment rotation: {starting_lcs.Placement.Rotation.toEuler()}")
+
+        # Reconstruct
+        result = workflow.reconstruct_from_cutlist_with_start(
+            cutlist_file=cutlist_file,
+            cylinder_diameter=1.875,  # inches
+            create_vertices_only=create_vertices,
+            starting_lcs=starting_lcs
+        )
+
+        logger.info(f"Reconstruction complete: {len(result.segments)} segment(s)")
 
 
