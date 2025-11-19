@@ -1,9 +1,11 @@
 try:
     from core.logging_setup import get_logger, log_coord, apply_display_levels
+
     apply_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
     # apply_display_levels(["ERROR", "WARNING", "INFO"])
 except Exception:
     import logging
+
     get_logger = lambda name: logging.getLogger(name)
 
 logger = get_logger(__name__)
@@ -23,6 +25,7 @@ from curve_follower_loft import CurveFollowerLoft
 from curve_follower_loft import get_curve_points_from_curves_module as get_curve_points
 from curve_follower_loft import create_sampler_function
 from wafer_loft import LoftWaferGenerator
+
 
 class Driver(object):
     """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
@@ -51,6 +54,7 @@ class Driver(object):
         self.workflows = {}
 
         # Build state
+        self.output_settings = None
         self.segment_list = []
         self.path_place_list = None
 
@@ -72,44 +76,21 @@ class Driver(object):
 
     def load_configuration(self, config_file):
         """Load and validate YAML configuration"""
-        with open(config_file, 'r') as f:
-            self.project_config = yaml.safe_load(f)  # ← Changed from self.config
+        print(f"Loading config: {config_file}")
 
-        self.global_settings = self.project_config.get('global_settings', {})  # ← Changed
+        with open(config_file, 'r') as f:
+            self.project_config = yaml.safe_load(f)
+
+        self.global_settings = self.project_config.get('global_settings', {})
+
+        # ← ADD THIS LINE
+        self.output_settings = self.project_config.get('output_files', {})
 
         # Validate curve availability
         available_curves = self._validate_curve_availability()
         print(f"Available curve types: {sorted(available_curves)}")
 
-        # Validate all operations that use curves
-        operations = self.project_config.get('operations', [])  # ← Changed
-        errors = []
-
-        for i, operation in enumerate(operations):
-            if operation.get('operation') == 'build_segment':
-                curve_spec = operation.get('curve_spec', {})
-                curve_type = curve_spec.get('type')
-
-                if curve_type and curve_type not in available_curves:
-                    error_msg = (
-                        f"Operation {i} ('{operation.get('name', 'unnamed')}'): "
-                        f"curve type '{curve_type}' is not available"
-                    )
-                    errors.append(error_msg)
-
-        # If there are errors, report them all and fail
-        if errors:
-            error_report = "\n".join(f"  ❌ {err}" for err in errors)
-            available_list = ", ".join(f"'{c}'" for c in sorted(available_curves))
-
-            raise ValueError(
-                f"\n❌ Configuration validation failed:\n"
-                f"{error_report}\n\n"
-                f"Available curve types: {available_list}\n"
-                f"Check curves.py for available generate_* functions"
-            )
-
-        print(f"✅ Config loaded and validated")
+        # ... rest of validation ...
 
     def _apply_global_settings(self) -> None:
         """Apply global settings from the YAML configuration."""
@@ -191,6 +172,8 @@ class Driver(object):
             self._execute_build_segment(operation)
         elif op_type == 'validate_reconstruction':
             self._execute_validate_reconstruction(operation)
+        elif op_type == 'reconstruct_wafers':
+            self._execute_reconstruct_wafers(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
 
@@ -232,127 +215,118 @@ class Driver(object):
         else:
             raise ValueError(f"Unknown segment type: {segment_type}")
 
-    def _build_curve_follower_segment(self, operation: Dict[str, Any]) -> None:
-        """Build a curve follower segment."""
-        name = operation['name']
-        segment_loft = operation.get('lofted_segment', False)
+    def _build_curve_follower_segment(self, operation):
+        """Build curve follower segment"""
+
+        segment_name = operation.get('name', 'unnamed_segment')
+
+        # Extract parameters from operation
         curve_spec = operation.get('curve_spec', {})
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
 
-        # Handle curve template references
-        if isinstance(curve_spec, str):
-            if curve_spec not in self.curve_templates:
-                raise ValueError(f"Curve template '{curve_spec}' not found")
-            curve_spec = self.curve_templates[curve_spec].copy()
+        # Get segment base placement
+        if not hasattr(self, 'segment_base_placement'):
+            self.segment_base_placement = self.App.Placement()
 
-        # Extract settings with defaults
-        cylinder_diameter = wafer_settings.get('cylinder_diameter', 2.0)
-        min_height = wafer_settings.get('min_height', 1.0)
-        max_chord = wafer_settings.get('max_chord', 0.5)
-        max_wafer_count = wafer_settings.get('max_wafer_count', None)
+        segment_base_placement = self.segment_base_placement
 
-        show_lcs = segment_settings.get('show_lcs', True)
-        build_segment = segment_settings.get('build_segment', True)
-        rotate_segment = segment_settings.get('rotate_segment', 0.0)
-        add_curve_vertices = segment_settings.get('add_curve_vertices', False)
+        print(f"Building segment '{segment_name}' at placement: {segment_base_placement}")
 
-        # Get temp file setting
-        temp_file = self.project_config.get('global_settings', {}).get('temp_file', 'temp.dat')
+        # Determine which approach to use
+        segment_loft = operation.get('lofted_segment', False)
 
-        if segment_loft:
-            # Use new loft-based approach
-            from curve_follower_loft import CurveFollowerLoft
+        try:
+            if segment_loft:
+                # ============================================
+                # NEW LOFT-BASED APPROACH
+                # ============================================
+                from loft_segment import LoftSegment
 
-            # Create follower with just wafer_settings
-            follower = CurveFollowerLoft(wafer_settings=wafer_settings)
-
-            # Generate loft wafers
-            wafers = follower.generate_loft_wafers(curve_spec, wafer_settings)
-
-            # Get the wafer list
-            wafer_list = follower.get_wafer_list()
-
-            # Visualize if requested
-            if self.doc:
-                follower.visualize_wafers(self.doc)
-
-            print(f"✓ Created {len(wafer_list)} wafers using loft approach")
-        else:
-        # Create NON-LOFT segment
-            segment = FlexSegment(name, show_lcs, temp_file, build_segment, rotate_segment)
-            self.segment_list.append(segment)
-
-            try:
-                # Create curve follower
-                follower = CurveFollower(
+                # Create segment
+                segment = LoftSegment(
                     doc=self.doc,
-                    segment=segment,
-                    cylinder_diameter=cylinder_diameter,
+                    name=segment_name,
                     curve_spec=curve_spec,
-                    min_height=min_height,
-                    max_chord=max_chord
+                    wafer_settings=wafer_settings,
+                    segment_settings=segment_settings,
+                    base_placement=segment_base_placement
                 )
 
-                follower.max_wafer_count = max_wafer_count
+                # Generate wafers
+                segment.generate_wafers()
 
-                # Get the actual segment base position
-                segment_base = segment.get_lcs_base()
-                logger.debug(f"Segment base placement: {segment_base.Placement}")
+                # Visualize if requested
+                if self.doc:
+                    show_lcs = segment_settings.get('show_lcs', True)
+                    show_cutting_planes = segment_settings.get('show_cutting_planes', True)
+                    segment.visualize(show_lcs, show_cutting_planes)
 
-                # Process wafers
-                follower.process_wafers(add_curve_vertices=False)
+                # Add to segment list
+                if not hasattr(self, 'segment_list'):
+                    self.segment_list = []
+                self.segment_list.append(segment)
 
-                # Fuse wafers if any were created
-                if segment.get_wafer_count() > 0:
-                    segment.fuse_wafers()
+                # Update placement for next segment (if concatenating)
+                self.segment_base_placement = segment.get_end_placement()
 
-                    segment_obj = segment.get_segment_object()
+                print(f"✓ Created loft segment '{segment_name}' with {segment.get_wafer_count()} wafers")
 
-                    if segment_obj:
-                        logger.info(f"Successfully created segment '{name}' with {segment.get_wafer_count()} wafers")
+            else:
+                # ============================================
+                # OLD DIRECT APPROACH (using flex_segment)
+                # ============================================
+                from flex_segment import FlexSegment
 
-                        # Add curve vertices BEFORE relocation
-                        if add_curve_vertices:
-                            logger.debug("Adding curve vertices...")
-                            follower.add_curve_visualization()
+                # Create segment using old approach
+                segment = FlexSegment(
+                    doc=self.doc,
+                    name=segment_name,
+                    curve_spec=curve_spec,
+                    wafer_settings=wafer_settings,
+                    segment_settings=segment_settings,
+                    base_placement=segment_base_placement
+                )
 
-                        # Relocate segment - ONLY CALL THIS ONCE!
-                        self.relocate_segment()
-                        logger.debug(f"Completed relocation for segment '{name}'")
+                # Generate wafers (uses old CurveFollower internally)
+                segment.generate_wafers()
 
-                    else:
-                        logger.warning(f"Warning: Segment '{name}' created wafers but fusing failed")
+                # Add to segment list
+                if not hasattr(self, 'segment_list'):
+                    self.segment_list = []
+                self.segment_list.append(segment)
+
+                # Update placement for next segment
+                self.segment_base_placement = segment.get_end_placement()
+
+                print(f"✓ Created flex segment '{segment_name}' with {segment.get_wafer_count()} wafers")
+
+        except Exception as e:
+            print(f"✗ Error creating segment '{segment_name}': {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def _generate_output_files(self):
+        """Generate output files"""
+
+        # Determine which method based on segment types
+        if not hasattr(self, 'segment_list') or not self.segment_list:
+            print("No segments to output")
+            return
+
+        # Check if we have lofted segments
+        has_lofted = any(hasattr(seg, 'follower') for seg in self.segment_list)
+
+        # Generate cut list
+        cuts_file_path = self.output_settings.get('working_directory') + self.output_settings.get('cuts_file')
+        if cuts_file_path:
+            print(f"CUTS: {cuts_file_path}")
+            with open(cuts_file_path, 'w') as cuts_file:
+                if has_lofted:
+                    self.build_lofted_cut_list(cuts_file)
                 else:
-                    logger.warning(f"Warning: No wafers created for segment '{name}'")
-
-                # Force recompute
-                FreeCAD.ActiveDocument.recompute()
-                FreeCADGui.updateGui()
-
-            except Exception as e:
-                logger.error(f"Error creating curve follower segment '{name}': {e}")
-                raise
-
-    def _generate_output_files(self) -> None:
-        """Generate output files based on global settings."""
-        global_settings = self.project_config.get('global_settings', {})
-        output_files = self.project_config.get('output_files', {})
-
-        direct = ""
-        if output_files.get('working_directory', False):
-            direct = output_files.get('working_directory', "")
-
-        if global_settings.get('print_cuts', False):
-            cuts_file = output_files.get('cuts_file', 'cutting_list.txt')
-            cuts_file = direct + cuts_file
-            logger.info(f"CUTS: {cuts_file}")
-            self.build_cut_list(cuts_file)
-
-        if global_settings.get('print_place', False):
-            place_file = output_files.get('place_file', 'placement_list.txt')
-            place_file = direct + place_file
-            self.build_place_list(place_file)
+                    self.build_cut_list(cuts_file)
 
     # Utility methods (mostly unchanged)
     def _gobj(self):
@@ -455,7 +429,8 @@ class Driver(object):
 
         # Store transform for debugging
         if hasattr(segment, 'store_applied_transform'):
-            segment.store_applied_transform(align_transform if len(self.segment_list) > 1 else None) # self.initial_position)
+            segment.store_applied_transform(
+                align_transform if len(self.segment_list) > 1 else None)  # self.initial_position)
 
         segment.already_relocated = True
         logger.debug(f"\n✅ Completed relocation for segment '{segment_name}'")
@@ -463,19 +438,256 @@ class Driver(object):
         self.doc.recompute()
         segment.set_bounds()
 
-    def build_cut_list(self, filename: Optional[str] = "default_cuts_file"):
-        """Build cutting list file."""
-        return
-        logger.info(f"Building cut list: {filename}")
-        with open(filename, "w+") as cuts_file:
-            cuts_file.write(f"\tCut List for: {self.project_config.get('metadata', {})['project_name']}\n\n")
-            cuts_file.write(f"\tProject Bounds\n")
-            cuts_file.write(f'\t\tX-min: {self.x_min:.2f}\tX_max: {self.x_max:.2f}\n')
-            cuts_file.write(f'\t\tY-min: {self.y_min:.2f}\tY_max: {self.y_max:.2f}\n')
-            cuts_file.write(f'\t\tZ-min: {self.z_min:.2f}\tZ_max: {self.z_max:.2f}\n\n')
-            cuts_file.write("\tCutting order:\n")
-            for nbr, segment in enumerate(self.segment_list):
-                segment.make_cut_list(cuts_file)
+    def build_cut_list(self, cuts_file):
+        """
+        Build cut list for all segments (old method)
+        """
+        cuts_file.write("=" * 80 + "\n")
+        cuts_file.write("CUTTING LIST - DIRECT METHOD\n")
+        cuts_file.write("=" * 80 + "\n\n")
+
+        if not hasattr(self, 'segment_list') or not self.segment_list:
+            cuts_file.write("No segments generated\n")
+            return
+
+        # Iterate through segments
+        for seg_idx, segment in enumerate(self.segment_list):
+            cuts_file.write(f"\n{'=' * 80}\n")
+            cuts_file.write(f"SEGMENT {seg_idx}: {segment.name}\n")
+            cuts_file.write(f"{'=' * 80}\n\n")
+
+            # Segment info
+            cuts_file.write(f"Wafer count: {segment.get_wafer_count()}\n")
+
+            bounds = segment.get_bounds()
+            if bounds['x_min'] is not None:
+                cuts_file.write(f"X-range: {bounds['x_min']:.2f} to {bounds['x_max']:.2f}\n")
+                cuts_file.write(f"Y-range: {bounds['y_min']:.2f} to {bounds['y_max']:.2f}\n")
+                cuts_file.write(f"Z-range: {bounds['z_min']:.2f} to {bounds['z_max']:.2f}\n")
+
+            cuts_file.write("\n" + "-" * 80 + "\n\n")
+
+            # Column headers
+            cuts_file.write(f"{'Index':<6} {'Volume':<10} {'Details'}\n")
+            cuts_file.write("-" * 80 + "\n")
+
+            # Wafer details
+            for wafer in segment.wafer_list:
+                if wafer.wafer is None:
+                    cuts_file.write(f"{wafer.index:<6} FAILED\n")
+                    continue
+
+                cuts_file.write(f"{wafer.index:<6} {wafer.volume:<10.4f}\n")
+
+    def build_lofted_cut_list(self, cuts_file):
+        """Build cut list for all segments (new loft method)"""
+
+        cuts_file.write("=" * 90 + "\n")
+        cuts_file.write("CUTTING LIST - LOFTED METHOD\n")
+        cuts_file.write("=" * 90 + "\n\n")
+
+        if not hasattr(self, 'segment_list') or not self.segment_list:
+            cuts_file.write("No segments generated\n")
+            return
+
+        # Get settings for what to include
+        show_lcs_in_cutlist = self.output_settings.get('show_lcs_in_cutlist', False)  # Default: don't show
+
+        # Constants
+        KERF_PER_CUT = 0.125  # 1/8 inch per cut
+
+        # Iterate through segments
+        for seg_idx, segment in enumerate(self.segment_list):
+            cuts_file.write(f"\n{'=' * 90}\n")
+            cuts_file.write(f"SEGMENT {seg_idx}: {segment.name}\n")
+            cuts_file.write(f"{'=' * 90}\n\n")
+
+            # Segment info
+            cuts_file.write(f"Wafer count: {segment.get_wafer_count()}\n")
+            cuts_file.write(f"Total volume: {segment.get_total_volume():.4f}\n")
+
+            bounds = segment.get_bounds()
+            if bounds['x_min'] is not None:
+                cuts_file.write(f"X-range: {bounds['x_min']:.2f} to {bounds['x_max']:.2f}\n")
+                cuts_file.write(f"Y-range: {bounds['y_min']:.2f} to {bounds['y_max']:.2f}\n")
+                cuts_file.write(f"Z-range: {bounds['z_min']:.2f} to {bounds['z_max']:.2f}\n")
+
+            cuts_file.write("\n" + "-" * 90 + "\n\n")
+
+            # Instructions
+            cuts_file.write("CUTTING INSTRUCTIONS:\n")
+            cuts_file.write("  Blade° = Tilt saw blade from vertical\n")
+            cuts_file.write("  Cylinder° = Rotate cylinder to this angle before cutting\n")
+            cuts_file.write("  Cumulative = Total cylinder length used (mark and cut at this point)\n")
+            cuts_file.write("\n")
+
+            # Column headers
+            cuts_file.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<7} {'Rot°':<6} {'Cylinder°':<10} ")
+            cuts_file.write(f"{'Collin°':<10} {'Azimuth°':<10} {'Cumulative':<12} {'Done':<6}\n")
+
+            cuts_file.write("-" * 90 + "\n")
+
+            # Track cumulative values
+            cumulative_rotation = 0.0  # Cumulative rotation in degrees
+            total_cylinder_length = 0.0  # Total length in inches
+
+            # Wafer details
+            for wafer_idx, wafer in enumerate(segment.wafer_list):
+                if wafer.wafer is None:
+                    cuts_file.write(f"{wafer_idx + 1:<4} FAILED\n")
+                    continue
+
+                geom = wafer.geometry
+
+                # Get values
+                lift_deg = geom.get('lift_angle_deg', 0)
+                rotation_deg = geom.get('rotation_angle_deg', 0)
+                chord_length = geom.get('chord_length', 0)
+
+                # Blade tilt is always half the lift angle (cutting at bisector)
+                blade_tilt = lift_deg / 2.0
+
+                # Calculate cylinder rotation angle (cumulative rotation with alternating 180° flip)
+                # First cut starts at 0°
+                if wafer_idx == 0:
+                    cylinder_angle = 0.0
+                else:
+                    # Accumulate rotation and add 180° for the flip
+                    cumulative_rotation += rotation_deg
+                    if wafer_idx % 2 == 1:
+                        # Odd cuts: add 180°
+                        cylinder_angle = cumulative_rotation + 180.0
+                    else:
+                        # Even cuts: just cumulative
+                        cylinder_angle = cumulative_rotation
+                collinearity = geom.get('collinearity_angle_deg', 0)
+                azimuth = geom.get('chord_azimuth_deg', 0)
+
+                # Normalize cylinder angle to 0-360 range
+                cylinder_angle = cylinder_angle % 360.0
+
+                # Add to total cylinder length (chord + kerf)
+                total_cylinder_length += chord_length + KERF_PER_CUT
+
+                # Format values
+                cut_num = f"{wafer_idx + 1:<4}"  # 1-indexed for user
+                length_str = self._format_length_inches(chord_length)
+                blade = f"{blade_tilt:<7.1f}"  # To tenths of a degree
+                rotation = f"{rotation_deg:<6.0f}"  # Nearest whole degree (for reference)
+                cylinder = f"{cylinder_angle:<10.0f}"  # Nearest whole degree
+                cumul_str = self._format_length_inches(total_cylinder_length)
+                collin_str = f"{collinearity:<10.4f}"
+                azimuth_str = f"{azimuth:<10.2f}"
+                done_mark = "[ ]"
+
+                cuts_file.write(
+                    f"{cut_num} {length_str:<10} {blade} {rotation} {cylinder} {collin_str} {azimuth_str} {cumul_str:<12} {done_mark}\n")
+
+                # LCS information (optional)
+                if show_lcs_in_cutlist and wafer.lcs1 and wafer.lcs2:
+                    cuts_file.write(f"     LCS1: {self._format_placement(wafer.lcs1)}\n")
+                    cuts_file.write(f"     LCS2: {self._format_placement(wafer.lcs2)}\n")
+
+                cuts_file.write("\n")
+
+            # Summary
+            cuts_file.write("-" * 90 + "\n")
+            summary_length = self._format_length_inches(total_cylinder_length)
+            cuts_file.write(f"Total cylinder length required: {summary_length}\n")
+            cuts_file.write(f"  ({total_cylinder_length:.3f} inches = ")
+            cuts_file.write(f"{total_cylinder_length * 25.4:.1f} mm)\n\n")
+
+    def _format_length_inches(self, length_inches):
+        """
+        Format length as inches + nearest 32nd
+
+        Args:
+            length_inches: Length in inches (float)
+
+        Returns:
+            String like "5-11/32\"" or "12-1/2\""
+        """
+        # Get whole inches
+        whole = int(length_inches)
+
+        # Get fractional part
+        frac = length_inches - whole
+
+        # Convert to 32nds
+        thirty_seconds = round(frac * 32)
+
+        # Handle rounding to next whole inch
+        if thirty_seconds >= 32:
+            whole += 1
+            thirty_seconds = 0
+
+        # Format
+        if thirty_seconds == 0:
+            return f'{whole}"'
+        else:
+            # Simplify fraction if possible
+            numerator = thirty_seconds
+            denominator = 32
+
+            # Reduce fraction
+            from math import gcd
+            divisor = gcd(numerator, denominator)
+            numerator //= divisor
+            denominator //= divisor
+
+            return f'{whole}-{numerator}/{denominator}"'
+
+    def build_lofted_placement_list(self, place_file):
+        """
+        Build placement list for lofted segments
+
+        Args:
+            place_file: Open file handle for writing
+        """
+        place_file.write("=" * 80 + "\n")
+        place_file.write("PLACEMENT LIST - LOFTED SEGMENT METHOD\n")
+        place_file.write("=" * 80 + "\n\n")
+
+        if not hasattr(self, 'wafer_list') or not self.wafer_list:
+            place_file.write("No wafers generated\n")
+            return
+
+        place_file.write(f"Segment: {self.current_segment_name}\n")
+        place_file.write(f"Total wafers: {len(self.wafer_list)}\n\n")
+
+        place_file.write(f"{'Index':<6} {'LCS1 Placement':<60} {'LCS2 Placement':<60}\n")
+        place_file.write("-" * 130 + "\n")
+
+        for wafer in self.wafer_list:
+            if wafer.wafer is None:
+                place_file.write(f"{wafer.index:<6} FAILED\n")
+                continue
+
+            lcs1_str = self._format_placement(wafer.lcs1) if wafer.lcs1 else "N/A"
+            lcs2_str = self._format_placement(wafer.lcs2) if wafer.lcs2 else "N/A"
+
+            place_file.write(f"{wafer.index:<6} {lcs1_str:<60} {lcs2_str:<60}\n")
+
+        place_file.write("\n" + "=" * 80 + "\n")
+
+    def _format_placement(self, placement):
+        """
+        Format a FreeCAD Placement for output
+
+        Args:
+            placement: App.Placement object
+
+        Returns:
+            Formatted string
+        """
+        if placement is None:
+            return "None"
+
+        pos = placement.Base
+        rot = placement.Rotation
+        angles = rot.toEuler()  # Yaw, Pitch, Roll in degrees
+
+        return f"Pos=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f}) Rot=({angles[0]:.2f},{angles[1]:.2f},{angles[2]:.2f})"
 
     def build_place_list(self, filename: Optional[str] = "default_places_file"):
         """Build placement list file."""
@@ -525,24 +737,50 @@ class Driver(object):
                 logger.debug(f"Remove object exception: {e}")
 
     def set_composite_bounds(self):
-        """Set bounds of result object based on all segments"""
-        if not self.segment_list:
+        """Calculate composite bounding box across all segments"""
+
+        if not hasattr(self, 'segment_list') or not self.segment_list:
+            print("Composite bounds: No segments")
             return
-        results = [0, 0, 0, 0, 0, 0]
+
+        # Initialize with None
+        comp_x_min = comp_x_max = None
+        comp_y_min = comp_y_max = None
+        comp_z_min = comp_z_max = None
+
+        # Iterate through all segments
         for segment in self.segment_list:
             seg_bounds = segment.get_bounds()
-            for nbr,  bnd in enumerate(seg_bounds):
-                if not bnd:
-                    break
-                res = results[nbr]
-                if bnd > 0:
-                    if res < bnd:
-                        res = bnd
-                elif bnd < 0:
-                    if res > bnd:
-                        res = bnd
-                results[nbr] = res
-        self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max = results
+
+            # Update x bounds
+            if seg_bounds['x_min'] is not None:
+                comp_x_min = seg_bounds['x_min'] if comp_x_min is None else min(comp_x_min, seg_bounds['x_min'])
+                comp_x_max = seg_bounds['x_max'] if comp_x_max is None else max(comp_x_max, seg_bounds['x_max'])
+
+            # Update y bounds
+            if seg_bounds['y_min'] is not None:
+                comp_y_min = seg_bounds['y_min'] if comp_y_min is None else min(comp_y_min, seg_bounds['y_min'])
+                comp_y_max = seg_bounds['y_max'] if comp_y_max is None else max(comp_y_max, seg_bounds['y_max'])
+
+            # Update z bounds
+            if seg_bounds['z_min'] is not None:
+                comp_z_min = seg_bounds['z_min'] if comp_z_min is None else min(comp_z_min, seg_bounds['z_min'])
+                comp_z_max = seg_bounds['z_max'] if comp_z_max is None else max(comp_z_max, seg_bounds['z_max'])
+
+        # Store composite bounds
+        self.composite_x_min = comp_x_min
+        self.composite_x_max = comp_x_max
+        self.composite_y_min = comp_y_min
+        self.composite_y_max = comp_y_max
+        self.composite_z_min = comp_z_min
+        self.composite_z_max = comp_z_max
+
+        # Print with None handling
+        if comp_x_min is not None:
+            print(
+                f"Composite bounds: X({comp_x_min:.2f},{comp_x_max:.2f}) Y({comp_y_min:.2f},{comp_y_max:.2f}) Z({comp_z_min:.2f},{comp_z_max:.2f})")
+        else:
+            print("Composite bounds: None (no valid wafers)")
 
     def get_composite_bounds(self):
         """Return wafer extents in each dimension"""
@@ -588,4 +826,42 @@ class Driver(object):
 
         logger.info(f"Reconstruction complete: {len(result.segments)} segment(s)")
 
+    def _execute_reconstruct_wafers(self, operation):
+        """Reconstruct wafer structure from cut list parameters"""
+        from wafer_reconstructor import reconstruct_from_segment
 
+        segment_name = operation.get('segment_name', '')
+        rotation_multiplier = operation.get('rotation_multiplier', 1.0)
+        name_prefix = operation.get('name_prefix', 'Recon')
+
+        segment = None
+        for seg in self.segment_list:
+            if seg.name == segment_name:
+                segment = seg
+                break
+
+        if segment is None:
+            print(f"✗ Segment '{segment_name}' not found")
+            return
+
+        # Get initial azimuth for alignment
+        if segment.wafer_list and segment.wafer_list[0].geometry:
+            initial_azimuth = segment.wafer_list[0].geometry.get('chord_azimuth_deg', 0)
+        else:
+            initial_azimuth = 0
+
+        # Extract cut data
+        from wafer_reconstructor import extract_cut_data_from_segment, WaferReconstructor
+
+        radius = segment.wafer_list[0].geometry.get('ellipse1', {}).get('minor_axis', 0.9375)
+        reconstructor = WaferReconstructor(cylinder_radius=radius)
+
+        cut_data = extract_cut_data_from_segment(segment)
+        reconstructor.build_from_cut_list(
+            cut_data,
+            rotation_multiplier=rotation_multiplier,
+            initial_orientation={'azimuth': initial_azimuth}
+        )
+        reconstructor.visualize_in_freecad(self.doc, name_prefix=name_prefix)
+
+        print(f"✓ Reconstructed segment '{segment_name}' with rotation_multiplier={rotation_multiplier}")

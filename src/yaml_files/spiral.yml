@@ -22,6 +22,7 @@ output_files:
   cuts_file: "cutting_list_spiral.txt"
   place_file: "placement_list_spiral.txt"
   trace_file: "build_trace.log"
+  show_lcs_in_cutlist: false
 
 # Workflow definition - operations executed in order
 workflow:
@@ -36,7 +37,9 @@ workflow:
       - "overh*"
       - "recon"
       - "close"
-      - "Cutting"
+      - "Plane_*"
+      - "Recon*"
+      - "Compound"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"
@@ -47,7 +50,7 @@ workflow:
     lofted_segment: true
     segment_type: "curve_follower"
     name: "spiral"
-    description: "Vertical base columnr"
+    description: "Vertical base column"
     curve_spec:
       type: "spiral"
       parameters:
@@ -56,15 +59,21 @@ workflow:
         turns: 1
         points: 300
     wafer_settings:
-      cylinder_diameter: 1.875
+      cylinder_diameter: 1.9375
       min_height: .1
       max_chord: 0.1
-      max_wafer_count: 5
+      max_wafer_count: 20
     segment_settings:
       show_lcs: true
       build_segment: true
       rotate_segment: 0.0
       add_curve_vertices: true      # This is displaying improperly (though calculations appear correct)
+
+  - operation: "reconstruct_wafers"
+    description: "Reconstruct wafer structure from cut list"
+    segment_name: "spiral"  # Which segment to reconstruct
+    rotation_multiplier: 1.0  # Adjust this to test different rotation factors
+    name_prefix: "Recon"  # Prefix for created objects
 
 
 #    segment_settings:

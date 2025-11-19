@@ -478,15 +478,17 @@ class CurveFollowerLoft:
         doc.recompute()
         print("✓ Curve visualization complete")
 
-    def visualize_wafers(self, doc):
+    def visualize_wafers(self, doc, show_lcs=True, show_cutting_planes=True):
         """
         Visualize the generated wafers in FreeCAD
 
         Args:
             doc: FreeCAD document
+            show_lcs: Show local coordinate systems
+            show_cutting_planes: Show cutting plane discs
         """
         if self.generator:
-            self.generator.visualize_in_freecad(doc)
+            self.generator.visualize_in_freecad(doc, show_lcs, show_cutting_planes)
 
 
 def create_sampler_function(method='chord_distance', target_distance=0.5, num_samples=None):
