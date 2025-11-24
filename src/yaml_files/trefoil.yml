@@ -41,6 +41,7 @@ workflow:
       - "Recon*"
       - "Compound"
       - "trefoil*"
+      - "LCS_s*"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"
@@ -108,7 +109,6 @@ workflow:
     segment_type: "curve_follower"
     name: "Trefoil"
     description: "Make a basic trefoil"
-    lofted_segment: true
     curve_spec:
       type: "trefoil"
       parameters:

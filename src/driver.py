@@ -19,8 +19,6 @@ import re
 import yaml
 from typing import Dict, Any, Optional
 import curves
-from loft_segment import LoftSegment
-from flex_segment import FlexSegment
 from reconstruction.reconstruction_workflow import ReconstructionWorkflow
 
 class Driver(object):
@@ -211,52 +209,38 @@ class Driver(object):
             raise ValueError(f"Unknown segment type: {segment_type}")
 
     def _build_curve_follower_segment(self, operation):
-        """Build a curve follower segment"""
+        """Build a loft-based curve follower segment"""
         segment_name = operation.get('name', 'segment')
-        segment_type = operation.get('segment_type', 'curve_follower')
         description = operation.get('description', '')
         curve_spec = operation.get('curve_spec', {})
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
-        lofted_segment = operation.get('lofted_segment', False)
 
         print(f"Executing: {description}")
         print(f"Building segment '{segment_name}' at placement: {self.current_placement}")
 
-        # Create appropriate segment type
-        if lofted_segment:
-            segment = LoftSegment(
-                name=segment_name,
-                doc=self.doc,
-                base_placement=self.current_placement,
-                curve_spec=curve_spec,
-                wafer_settings=wafer_settings,
-                segment_settings=segment_settings
-            )
-            print(f"Created LoftSegment: {segment_name}")
-        else:
-
-            segment = FlexSegment(
-                name=segment_name,
-                doc=self.doc,
-                base_placement=self.current_placement,
-                curve_spec=curve_spec,
-                wafer_settings=wafer_settings,
-                segment_settings=segment_settings
-            )
-            print(f"Created FlexSegment: {segment_name}")
+        # Create loft segment
+        from loft_segment import LoftSegment
+        segment = LoftSegment(
+            doc=self.doc,
+            name=segment_name,
+            curve_spec=curve_spec,
+            wafer_settings=wafer_settings,
+            segment_settings=segment_settings,
+            base_placement=self.current_placement
+        )
+        print(f"Created LoftSegment: {segment_name}")
 
         # Generate wafers
         segment.generate_wafers()
 
         # Visualize
-        segment.visualize(self.doc)  # Changed: removed show_lcs and show_cutting_planes arguments
+        segment.visualize(self.doc)
 
         # Store segment
         self.segment_list.append(segment)
 
-        print(
-            f"✓ Created {'loft' if lofted_segment else 'flex'} segment '{segment_name}' with {len(segment.wafer_list)} wafers")
+        print(f"✓ Created loft segment '{segment_name}' with {len(segment.wafer_list)} wafers")
 
     def _generate_output_files(self):
         """Generate output files"""

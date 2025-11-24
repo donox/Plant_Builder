@@ -41,6 +41,7 @@ workflow:
       - "Plane_*"
       - "Recon*"
       - "Compound"
+      - "LCS_s*"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"
@@ -48,7 +49,6 @@ workflow:
 #    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
 
   - operation: "build_segment"
-    lofted_segment: true
     segment_type: "curve_follower"
     name: "spiral"
     description: "Vertical base column"
