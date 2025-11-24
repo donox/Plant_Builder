@@ -233,35 +233,39 @@ class WaferReconstructor:
         return translated
 
     def visualize_in_freecad(self, doc, name_prefix="Recon"):
-        """
-        Create FreeCAD objects to visualize reconstructed wafers
-        """
+        """Create FreeCAD visualization of reconstructed wafers"""
         print(f"\nCreating FreeCAD visualization of reconstruction...")
 
         # Create group for reconstruction
-        recon_group = doc.addObject("App::DocumentObjectGroup", f"{name_prefix}_Wafers")
+        recon_group = doc.addObject("App::DocumentObjectGroup", f"{name_prefix}_Group")
+        wafer_group = doc.addObject("App::DocumentObjectGroup", f"{name_prefix}_Wafers")
+        recon_group.addObject(wafer_group)
 
+        # Add wafers
         for i, wafer in enumerate(self.wafers):
-            wafer_obj = doc.addObject("Part::Feature", f"{name_prefix}_Wafer_{i:03d}")
+            wafer_obj = doc.addObject("Part::Feature", f"{name_prefix}_Wafer_{i}")
             wafer_obj.Shape = wafer
 
             # Alternate colors
             if i % 2 == 0:
-                wafer_obj.ViewObject.ShapeColor = (0.4, 0.8, 0.4)  # Green
+                wafer_obj.ViewObject.ShapeColor = (1.0, 1.0, 0.5)  # Light yellow
             else:
-                wafer_obj.ViewObject.ShapeColor = (0.4, 0.4, 0.8)  # Blue
+                wafer_obj.ViewObject.ShapeColor = (0.8, 0.5, 1.0)  # Light purple
 
             wafer_obj.ViewObject.Transparency = 20
-            recon_group.addObject(wafer_obj)
+            wafer_group.addObject(wafer_obj)
 
-        # Add path line connecting centers
+        # Create path visualization (hidden by default)
         if len(self.positions) > 1:
-            path_points = [pos for pos in self.positions]
-            path_wire = Part.makePolygon(path_points)
+            import Part
+            edges = [Part.LineSegment(self.positions[i], self.positions[i + 1]).toShape()
+                     for i in range(len(self.positions) - 1)]
+            wire = Part.Wire(edges)
             path_obj = doc.addObject("Part::Feature", f"{name_prefix}_Path")
-            path_obj.Shape = path_wire
-            path_obj.ViewObject.LineColor = (1.0, 0.0, 0.0)
-            path_obj.ViewObject.LineWidth = 3
+            path_obj.Shape = wire
+            path_obj.ViewObject.LineColor = (1.0, 0.0, 1.0)
+            path_obj.ViewObject.LineWidth = 2.0
+            path_obj.ViewObject.Visibility = False  # Hidden by default
             recon_group.addObject(path_obj)
 
         doc.recompute()

@@ -197,32 +197,119 @@ class LoftSegment:
             # Fallback to base placement if LCS not available
             return self.base_placement
 
-    def visualize(self, show_lcs=True, show_cutting_planes=True, lcs_size=None):
-        """
-        Visualize this segment in FreeCAD
-
-        Args:
-            show_lcs: Show local coordinate systems
-            show_cutting_planes: Show cutting plane discs
-            lcs_size: Size of LCS display
-        """
-        if not self.follower:
-            print(f"Cannot visualize segment '{self.name}' - no wafers generated")
-            return
-
-        if not self.follower.generator:
-            print(f"Cannot visualize segment '{self.name}' - no generator available")
-            return
-
+    def visualize(self, doc):
+        """Create FreeCAD visualization of the segment"""
         print(f"Visualizing segment '{self.name}'...")
+        print(f"Creating FreeCAD visualization...")
 
-        # Use the generator's visualization (CurveFollowerLoft has a 'generator' attribute)
-        self.follower.generator.visualize_in_freecad(
-            self.doc,
-            show_lcs=show_lcs,
-            show_cutting_planes=show_cutting_planes,
-            lcs_size=lcs_size
-        )
+        # Create main group for this segment
+        segment_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Group")
+
+        # Create subgroups
+        wafer_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Wafers")
+        reference_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Reference")
+
+        segment_group.addObject(wafer_group)
+        segment_group.addObject(reference_group)
+
+        # Add loft to reference group (if it exists)
+        if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'loft'):
+            loft = self.follower.generator.loft
+            if loft:
+                loft_obj = doc.addObject("Part::Feature", f"Loft_{self.name}")
+                loft_obj.Shape = loft
+                loft_obj.ViewObject.Transparency = 70
+                loft_obj.ViewObject.ShapeColor = (0.8, 0.9, 1.0)
+                reference_group.addObject(loft_obj)
+
+        # Add spine to reference group (hidden by default)
+        if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'spine_curve'):
+            spine = self.follower.generator.spine_curve
+            if spine:
+                spine_obj = doc.addObject("Part::Feature", f"Loft_spine_{self.name}")
+                spine_obj.Shape = spine
+                spine_obj.ViewObject.LineColor = (1.0, 0.0, 0.0)
+                spine_obj.ViewObject.LineWidth = 2.0
+                spine_obj.ViewObject.Visibility = False  # Hidden by default
+                reference_group.addObject(spine_obj)
+
+        # Add reference curve to reference group (hidden by default)
+        if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'sample_points'):
+            points = self.follower.generator.sample_points
+            if points and len(points) > 1:
+                # Convert to App.Vector if needed
+                vec_points = []
+                for p in points:
+                    if isinstance(p, App.Vector):
+                        vec_points.append(p)
+                    elif isinstance(p, (tuple, list)) and len(p) >= 3:
+                        vec_points.append(App.Vector(p[0], p[1], p[2]))
+                    else:
+                        continue
+
+                if len(vec_points) > 1:
+                    edges = [Part.LineSegment(vec_points[i], vec_points[i + 1]).toShape()
+                             for i in range(len(vec_points) - 1)]
+                    wire = Part.Wire(edges)
+                    curve_obj = doc.addObject("Part::Feature", f"Loft_reference_{self.name}")
+                    curve_obj.Shape = wire
+                    curve_obj.ViewObject.LineColor = (0.0, 1.0, 0.0)
+                    curve_obj.ViewObject.LineWidth = 1.0
+                    curve_obj.ViewObject.Visibility = False  # Hidden by default
+                    reference_group.addObject(curve_obj)
+
+        # Create LCS group (unconditionally, so we have it when needed)
+        lcs_group = None
+        if self.segment_settings.get('show_lcs', False):
+            lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
+            reference_group.addObject(lcs_group)
+
+        # Add wafers to wafer group
+        for i, wafer_data in enumerate(self.wafer_list):
+            if wafer_data.wafer is None:
+                continue
+
+            wafer_obj = doc.addObject("Part::Feature", f"Wafer_{self.name}_{i}")
+            wafer_obj.Shape = wafer_data.wafer
+
+            # Alternate colors
+            if i % 2 == 0:
+                wafer_obj.ViewObject.ShapeColor = (0.5, 1.0, 0.5)  # Light green
+            else:
+                wafer_obj.ViewObject.ShapeColor = (0.7, 0.7, 1.0)  # Light blue
+
+            wafer_obj.ViewObject.Transparency = 20
+            wafer_group.addObject(wafer_obj)
+
+            # Add LCS if requested (in LCS group, hidden by default)
+            if lcs_group is not None:
+                if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
+                    lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_1")
+                    lcs_obj.Placement = wafer_data.lcs1
+                    lcs_obj.ViewObject.Visibility = False  # Hidden by default
+                    lcs_group.addObject(lcs_obj)
+
+                if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
+                    lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_2")
+                    lcs_obj.Placement = wafer_data.lcs2
+                    lcs_obj.ViewObject.Visibility = False  # Hidden by default
+                    lcs_group.addObject(lcs_obj)
+
+        # Add cutting planes to reference group (hidden by default)
+        if hasattr(self.follower, 'cutting_planes'):
+            cutting_planes = self.follower.cutting_planes
+            if cutting_planes:
+                for i, plane in enumerate(cutting_planes):
+                    if plane is not None:
+                        plane_obj = doc.addObject("Part::Feature", f"CuttingPlane_{self.name}_{i}")
+                        plane_obj.Shape = plane
+                        plane_obj.ViewObject.ShapeColor = (1.0, 0.8, 0.0)
+                        plane_obj.ViewObject.Transparency = 80
+                        plane_obj.ViewObject.Visibility = False  # Hidden by default
+                        reference_group.addObject(plane_obj)
+
+        doc.recompute()
+        print(f"✓ Visualization complete")
 
     def get_wafer_count(self):
         """Get number of wafers in this segment"""

@@ -50,6 +50,7 @@ class Driver(object):
         # Project configuration (loaded from YAML)
         self.project_config = None
         self.global_settings = None
+        self.current_placement = App.Placement()  # Add this line
         self.curve_templates = {}
         self.workflows = {}
 
@@ -216,96 +217,53 @@ class Driver(object):
             raise ValueError(f"Unknown segment type: {segment_type}")
 
     def _build_curve_follower_segment(self, operation):
-        """Build curve follower segment"""
-
-        segment_name = operation.get('name', 'unnamed_segment')
-
-        # Extract parameters from operation
+        """Build a curve follower segment"""
+        segment_name = operation.get('name', 'segment')
+        segment_type = operation.get('segment_type', 'curve_follower')
+        description = operation.get('description', '')
         curve_spec = operation.get('curve_spec', {})
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
+        lofted_segment = operation.get('lofted_segment', False)
 
-        # Get segment base placement
-        if not hasattr(self, 'segment_base_placement'):
-            self.segment_base_placement = self.App.Placement()
+        print(f"Executing: {description}")
+        print(f"Building segment '{segment_name}' at placement: {self.current_placement}")
 
-        segment_base_placement = self.segment_base_placement
+        # Create appropriate segment type
+        if lofted_segment:
+            from loft_segment import LoftSegment
+            segment = LoftSegment(
+                name=segment_name,
+                doc=self.doc,
+                base_placement=self.current_placement,
+                curve_spec=curve_spec,
+                wafer_settings=wafer_settings,
+                segment_settings=segment_settings
+            )
+            print(f"Created LoftSegment: {segment_name}")
+        else:
+            from flex_segment import FlexSegment
+            segment = FlexSegment(
+                name=segment_name,
+                doc=self.doc,
+                base_placement=self.current_placement,
+                curve_spec=curve_spec,
+                wafer_settings=wafer_settings,
+                segment_settings=segment_settings
+            )
+            print(f"Created FlexSegment: {segment_name}")
 
-        print(f"Building segment '{segment_name}' at placement: {segment_base_placement}")
+        # Generate wafers
+        segment.generate_wafers()
 
-        # Determine which approach to use
-        segment_loft = operation.get('lofted_segment', False)
+        # Visualize
+        segment.visualize(self.doc)  # Changed: removed show_lcs and show_cutting_planes arguments
 
-        try:
-            if segment_loft:
-                # ============================================
-                # NEW LOFT-BASED APPROACH
-                # ============================================
-                from loft_segment import LoftSegment
+        # Store segment
+        self.segment_list.append(segment)
 
-                # Create segment
-                segment = LoftSegment(
-                    doc=self.doc,
-                    name=segment_name,
-                    curve_spec=curve_spec,
-                    wafer_settings=wafer_settings,
-                    segment_settings=segment_settings,
-                    base_placement=segment_base_placement
-                )
-
-                # Generate wafers
-                segment.generate_wafers()
-
-                # Visualize if requested
-                if self.doc:
-                    show_lcs = segment_settings.get('show_lcs', True)
-                    show_cutting_planes = segment_settings.get('show_cutting_planes', True)
-                    segment.visualize(show_lcs, show_cutting_planes)
-
-                # Add to segment list
-                if not hasattr(self, 'segment_list'):
-                    self.segment_list = []
-                self.segment_list.append(segment)
-
-                # Update placement for next segment (if concatenating)
-                self.segment_base_placement = segment.get_end_placement()
-
-                print(f"✓ Created loft segment '{segment_name}' with {segment.get_wafer_count()} wafers")
-
-            else:
-                # ============================================
-                # OLD DIRECT APPROACH (using flex_segment)
-                # ============================================
-                from flex_segment import FlexSegment
-
-                # Create segment using old approach
-                segment = FlexSegment(
-                    doc=self.doc,
-                    name=segment_name,
-                    curve_spec=curve_spec,
-                    wafer_settings=wafer_settings,
-                    segment_settings=segment_settings,
-                    base_placement=segment_base_placement
-                )
-
-                # Generate wafers (uses old CurveFollower internally)
-                segment.generate_wafers()
-
-                # Add to segment list
-                if not hasattr(self, 'segment_list'):
-                    self.segment_list = []
-                self.segment_list.append(segment)
-
-                # Update placement for next segment
-                self.segment_base_placement = segment.get_end_placement()
-
-                print(f"✓ Created flex segment '{segment_name}' with {segment.get_wafer_count()} wafers")
-
-        except Exception as e:
-            print(f"✗ Error creating segment '{segment_name}': {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+        print(
+            f"✓ Created {'loft' if lofted_segment else 'flex'} segment '{segment_name}' with {len(segment.wafer_list)} wafers")
 
     def _generate_output_files(self):
         """Generate output files"""
