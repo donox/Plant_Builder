@@ -324,9 +324,10 @@ class Driver(object):
             print(f"CUTS: {cuts_file_path}")
             with open(cuts_file_path, 'w') as cuts_file:
                 if has_lofted:
-                    self.build_lofted_cut_list(cuts_file)
+                    for segment in self.segment_list:
+                        self.build_lofted_cut_list(segment, cuts_file)
                 else:
-                    self.build_cut_list(cuts_file)
+                        self.build_cut_list(cuts_file)
 
     # Utility methods (mostly unchanged)
     def _gobj(self):
@@ -479,123 +480,162 @@ class Driver(object):
 
                 cuts_file.write(f"{wafer.index:<6} {wafer.volume:<10.4f}\n")
 
-    def build_lofted_cut_list(self, cuts_file):
-        """Build cut list for all segments (new loft method)"""
+    def build_lofted_cut_list(self, segment, cuts_file):
+        """Build cutting list for lofted segments"""
 
+        # Header
         cuts_file.write("=" * 90 + "\n")
         cuts_file.write("CUTTING LIST - LOFTED METHOD\n")
         cuts_file.write("=" * 90 + "\n\n")
 
-        if not hasattr(self, 'segment_list') or not self.segment_list:
-            cuts_file.write("No segments generated\n")
-            return
+        segment_num = 0
 
-        # Get settings for what to include
-        show_lcs_in_cutlist = self.output_settings.get('show_lcs_in_cutlist', False)  # Default: don't show
+        cuts_file.write("\n" + "=" * 90 + "\n")
+        cuts_file.write(f"SEGMENT {segment_num}: {segment.name}\n")
+        cuts_file.write("=" * 90 + "\n\n")
 
-        # Constants
-        KERF_PER_CUT = 0.125  # 1/8 inch per cut
+        # Segment stats
+        total_volume = sum(w.wafer.Volume for w in segment.wafer_list if w.wafer is not None)
+        cuts_file.write(f"Wafer count: {len(segment.wafer_list)}\n")
+        cuts_file.write(f"Total volume: {total_volume:.4f}\n")
 
-        # Iterate through segments
-        for seg_idx, segment in enumerate(self.segment_list):
-            cuts_file.write(f"\n{'=' * 90}\n")
-            cuts_file.write(f"SEGMENT {seg_idx}: {segment.name}\n")
-            cuts_file.write(f"{'=' * 90}\n\n")
+        if segment.wafer_list:
+            first_wafer = segment.wafer_list[0]
+            last_wafer = segment.wafer_list[-1]
 
-            # Segment info
-            cuts_file.write(f"Wafer count: {segment.get_wafer_count()}\n")
-            cuts_file.write(f"Total volume: {segment.get_total_volume():.4f}\n")
+            if hasattr(first_wafer, 'geometry') and hasattr(last_wafer, 'geometry'):
+                f_geom = first_wafer.geometry
+                l_geom = last_wafer.geometry
 
-            bounds = segment.get_bounds()
-            if bounds['x_min'] is not None:
-                cuts_file.write(f"X-range: {bounds['x_min']:.2f} to {bounds['x_max']:.2f}\n")
-                cuts_file.write(f"Y-range: {bounds['y_min']:.2f} to {bounds['y_max']:.2f}\n")
-                cuts_file.write(f"Z-range: {bounds['z_min']:.2f} to {bounds['z_max']:.2f}\n")
+                x_vals = [f_geom.get('center1', self.App.Vector()).x, f_geom.get('center2', self.App.Vector()).x,
+                          l_geom.get('center1', self.App.Vector()).x, l_geom.get('center2', self.App.Vector()).x]
+                y_vals = [f_geom.get('center1', self.App.Vector()).y, f_geom.get('center2', self.App.Vector()).y,
+                          l_geom.get('center1', self.App.Vector()).y, l_geom.get('center2', self.App.Vector()).y]
+                z_vals = [f_geom.get('center1', self.App.Vector()).z, f_geom.get('center2', self.App.Vector()).z,
+                          l_geom.get('center1', self.App.Vector()).z, l_geom.get('center2', self.App.Vector()).z]
 
-            cuts_file.write("\n" + "-" * 90 + "\n\n")
+                cuts_file.write(f"X-range: {min(x_vals):.2f} to {max(x_vals):.2f}\n")
+                cuts_file.write(f"Y-range: {min(y_vals):.2f} to {max(y_vals):.2f}\n")
+                cuts_file.write(f"Z-range: {min(z_vals):.2f} to {max(z_vals):.2f}\n")
 
-            # Instructions
-            cuts_file.write("CUTTING INSTRUCTIONS:\n")
-            cuts_file.write("  Blade° = Tilt saw blade from vertical\n")
-            cuts_file.write("  Cylinder° = Rotate cylinder to this angle before cutting\n")
-            cuts_file.write("  Cumulative = Total cylinder length used (mark and cut at this point)\n")
-            cuts_file.write("\n")
+        cuts_file.write("\n" + "-" * 90 + "\n\n")
 
-            # Column headers
-            cuts_file.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<7} {'Rot°':<6} {'Cylinder°':<10} ")
-            cuts_file.write(f"{'Collin°':<10} {'Azimuth°':<10} {'Cumulative':<12} {'Done':<6}\n")
+        # Instructions
+        cuts_file.write("CUTTING INSTRUCTIONS:\n")
+        cuts_file.write("  Blade° = Tilt saw blade from vertical\n")
+        cuts_file.write("  Cylinder° = Rotate cylinder to this angle before cutting\n")
+        cuts_file.write("  Cumulative = Total cylinder length used (mark and cut at this point)\n\n")
 
-            cuts_file.write("-" * 90 + "\n")
+        # Column headers
+        cuts_file.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<7} {'Rot°':<6} {'Cylinder°':<10} ")
+        cuts_file.write(f"{'Collin°':<10} {'Azimuth°':<10} {'Cumulative':<12} {'Done':<6}\n")
+        cuts_file.write("-" * 90 + "\n")
 
-            # Track cumulative values
-            cumulative_rotation = 0.0  # Cumulative rotation in degrees
-            total_cylinder_length = 0.0  # Total length in inches
+        # Wafer data
+        cumulative_length = 0.0
+        cumulative_rotation = 0.0
 
-            # Wafer details
-            for wafer_idx, wafer in enumerate(segment.wafer_list):
-                if wafer.wafer is None:
-                    cuts_file.write(f"{wafer_idx + 1:<4} FAILED\n")
-                    continue
+        for i, wafer in enumerate(segment.wafer_list):
+            if wafer.wafer is None:
+                continue
 
-                geom = wafer.geometry
+            geom = wafer.geometry
 
-                # Get values
-                lift_deg = geom.get('lift_angle_deg', 0)
-                rotation_deg = geom.get('rotation_angle_deg', 0)
-                chord_length = geom.get('chord_length', 0)
+            # Extract data
+            chord_length = geom.get('chord_length', 0)
+            lift_angle = geom.get('lift_angle_deg', 0)
+            blade_angle = lift_angle / 2.0
+            rotation = geom.get('rotation_angle_deg', 0)
+            collinearity = geom.get('collinearity_angle_deg', 0)
+            azimuth = geom.get('chord_azimuth_deg', 0)
 
-                # Blade tilt is always half the lift angle (cutting at bisector)
-                blade_tilt = lift_deg / 2.0
-
-                # Calculate cylinder rotation angle (cumulative rotation with alternating 180° flip)
-                # First cut starts at 0°
-                if wafer_idx == 0:
-                    cylinder_angle = 0.0
+            # Calculate cylinder angle
+            if i == 0:
+                cylinder_angle = 0.0
+            else:
+                cumulative_rotation += rotation
+                if i % 2 == 1:
+                    cylinder_angle = (cumulative_rotation + 180.0) % 360.0
                 else:
-                    # Accumulate rotation and add 180° for the flip
-                    cumulative_rotation += rotation_deg
-                    if wafer_idx % 2 == 1:
-                        # Odd cuts: add 180°
-                        cylinder_angle = cumulative_rotation + 180.0
-                    else:
-                        # Even cuts: just cumulative
-                        cylinder_angle = cumulative_rotation
-                collinearity = geom.get('collinearity_angle_deg', 0)
-                azimuth = geom.get('chord_azimuth_deg', 0)
+                    cylinder_angle = cumulative_rotation % 360.0
 
-                # Normalize cylinder angle to 0-360 range
-                cylinder_angle = cylinder_angle % 360.0
+            cumulative_length += chord_length
 
-                # Add to total cylinder length (chord + kerf)
-                total_cylinder_length += chord_length + KERF_PER_CUT
+            # Format output
+            cut_num = f"{i + 1:<4}"
+            length_str = self._format_length_inches(chord_length)
+            blade = f"{blade_angle:<7.1f}"
+            rotation_str = f"{rotation:<6.0f}"
+            cylinder = f"{cylinder_angle:<10.0f}"
+            collin_str = f"{collinearity:<10.4f}"
+            azimuth_str = f"{azimuth:<10.2f}"
+            cumul_str = self._format_length_inches(cumulative_length)
+            done_mark = "[ ]"
 
-                # Format values
-                cut_num = f"{wafer_idx + 1:<4}"  # 1-indexed for user
-                length_str = self._format_length_inches(chord_length)
-                blade = f"{blade_tilt:<7.1f}"  # To tenths of a degree
-                rotation = f"{rotation_deg:<6.0f}"  # Nearest whole degree (for reference)
-                cylinder = f"{cylinder_angle:<10.0f}"  # Nearest whole degree
-                cumul_str = self._format_length_inches(total_cylinder_length)
-                collin_str = f"{collinearity:<10.4f}"
-                azimuth_str = f"{azimuth:<10.2f}"
-                done_mark = "[ ]"
+            cuts_file.write(f"{cut_num} {length_str:<10} {blade} {rotation_str} {cylinder} ")
+            cuts_file.write(f"{collin_str} {azimuth_str} {cumul_str:<12} {done_mark}\n")
 
-                cuts_file.write(
-                    f"{cut_num} {length_str:<10} {blade} {rotation} {cylinder} {collin_str} {azimuth_str} {cumul_str:<12} {done_mark}\n")
+        # Summary
+        cuts_file.write("\n" + "-" * 90 + "\n")
+        cuts_file.write(f"Total cylinder length required: {self._format_length_inches(cumulative_length)}\n")
+        cuts_file.write(f"  ({cumulative_length:.3f} inches = {cumulative_length * 25.4:.1f} mm)\n\n")
 
-                # LCS information (optional)
-                if show_lcs_in_cutlist and wafer.lcs1 and wafer.lcs2:
-                    cuts_file.write(f"     LCS1: {self._format_placement(wafer.lcs1)}\n")
-                    cuts_file.write(f"     LCS2: {self._format_placement(wafer.lcs2)}\n")
+        # Column definitions (optional based on global setting)
+        include_definitions = self.global_settings.get('include_cut_list_definitions', True)
 
-                cuts_file.write("\n")
+        if include_definitions:
+            cuts_file.write("=" * 90 + "\n")
+            cuts_file.write("COLUMN DEFINITIONS\n")
+            cuts_file.write("=" * 90 + "\n\n")
 
-            # Summary
-            cuts_file.write("-" * 90 + "\n")
-            summary_length = self._format_length_inches(total_cylinder_length)
-            cuts_file.write(f"Total cylinder length required: {summary_length}\n")
-            cuts_file.write(f"  ({total_cylinder_length:.3f} inches = ")
-            cuts_file.write(f"{total_cylinder_length * 25.4:.1f} mm)\n\n")
+            cuts_file.write("Cut:        Wafer number in sequence\n\n")
+
+            cuts_file.write("Length:     Length of wafer measured along the chord (longest outside edge)\n")
+            cuts_file.write("            This is the distance to mark on the cylinder for cutting\n\n")
+
+            cuts_file.write("Blade°:     Blade tilt angle from vertical (half of lift angle)\n")
+            cuts_file.write("            Set your saw blade to this angle for the cut\n\n")
+
+            cuts_file.write("Rot°:       Rotation angle - the incremental twist of the curve at this wafer\n")
+            cuts_file.write("            This controls the Z-rise and torsion of the structure\n\n")
+
+            cuts_file.write("Cylinder°:  Absolute rotational position of cylinder for this cut\n")
+            cuts_file.write("            Includes 180° flip between wafers plus accumulated rotation\n")
+            cuts_file.write("            Rotate cylinder to this angle before making the cut\n\n")
+
+            cuts_file.write("Collin°:    Collinearity angle - exterior angle between consecutive chord vectors\n")
+            cuts_file.write("            Measures how much the chord direction changes from previous wafer\n")
+            cuts_file.write("            Interior angle = 180° - Collin°\n")
+            cuts_file.write("            Larger values indicate sharper curves\n\n")
+
+            cuts_file.write("Azimuth°:   Compass direction of chord in XY plane, measured from +Y axis\n")
+            cuts_file.write("            Negative = clockwise from North, Positive = counterclockwise\n")
+            cuts_file.write("            Shows how the structure curves in the horizontal plane\n\n")
+
+            cuts_file.write("Cumulative: Running total of cylinder length used\n")
+            cuts_file.write("            Mark this distance from the start and cut at this point\n\n")
+
+            cuts_file.write("Done:       Checkbox to mark completion of each cut\n\n")
+
+            cuts_file.write("=" * 90 + "\n")
+            cuts_file.write("NOTES\n")
+            cuts_file.write("=" * 90 + "\n\n")
+
+            cuts_file.write("Physical Construction Process:\n")
+            cuts_file.write("1. Mark cumulative length on cylinder\n")
+            cuts_file.write("2. Set blade angle (Blade°)\n")
+            cuts_file.write("3. Rotate cylinder to specified angle (Cylinder°)\n")
+            cuts_file.write("4. Make cut\n")
+            cuts_file.write("5. Wafer is removed with one angled face\n")
+            cuts_file.write("6. Flip wafer 180° and repeat for next cut\n\n")
+
+            cuts_file.write("Geometry:\n")
+            cuts_file.write("- Length, Blade°, and Rot° are the primary geometric parameters\n")
+            cuts_file.write("- Cylinder° is derived from Rot° for cutting convenience\n")
+            cuts_file.write("- Collin° and Azimuth° are calculated values for reference\n\n")
+
+        cuts_file.close()
+
 
     def _format_length_inches(self, length_inches):
         """
