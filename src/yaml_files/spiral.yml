@@ -70,13 +70,6 @@ workflow:
       rotate_segment: 0.0
       add_curve_vertices: true      # This is displaying improperly (though calculations appear correct)
 
-  - operation: "reconstruct_wafers"
-    description: "Reconstruct wafer structure from cut list"
-    segment_name: "spiral"  # Which segment to reconstruct
-    rotation_multiplier: 1.0  # Adjust this to test different rotation factors
-    name_prefix: "Recon"  # Prefix for created objects
-
-
 #    segment_settings:
 #      show_lcs: false
 #      build_segment: true

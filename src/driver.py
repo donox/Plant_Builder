@@ -14,18 +14,14 @@ import Part
 import FreeCAD
 import FreeCADGui
 import numpy as np
+from math import gcd
 import re
 import yaml
 from typing import Dict, Any, Optional
-from curve_follower import CurveFollower
-from flex_segment import FlexSegment
 import curves
 from loft_segment import LoftSegment
-from curve_follower_loft import CurveFollowerLoft
-from curve_follower_loft import get_curve_points_from_curves_module as get_curve_points
-from curve_follower_loft import create_sampler_function
-from wafer_loft import LoftWaferGenerator
-
+from flex_segment import FlexSegment
+from reconstruction.reconstruction_workflow import ReconstructionWorkflow
 
 class Driver(object):
     """Plant Builder Driver supporting YA    level = "DEBUG"ML-based project configuration."""
@@ -173,8 +169,6 @@ class Driver(object):
             self._execute_build_segment(operation)
         elif op_type == 'validate_reconstruction':
             self._execute_validate_reconstruction(operation)
-        elif op_type == 'reconstruct_wafers':
-            self._execute_reconstruct_wafers(operation)
         else:
             logger.error(f"Unknown operation type: {op_type}")
 
@@ -231,7 +225,6 @@ class Driver(object):
 
         # Create appropriate segment type
         if lofted_segment:
-            from loft_segment import LoftSegment
             segment = LoftSegment(
                 name=segment_name,
                 doc=self.doc,
@@ -242,7 +235,7 @@ class Driver(object):
             )
             print(f"Created LoftSegment: {segment_name}")
         else:
-            from flex_segment import FlexSegment
+
             segment = FlexSegment(
                 name=segment_name,
                 doc=self.doc,
@@ -628,7 +621,7 @@ class Driver(object):
             denominator = 32
 
             # Reduce fraction
-            from math import gcd
+
             divisor = gcd(numerator, denominator)
             numerator //= divisor
             denominator //= divisor
@@ -786,7 +779,6 @@ class Driver(object):
 
     def _execute_validate_reconstruction(self, operation: Dict[str, Any]):
         """Execute reconstruction validation operation."""
-        from reconstruction.reconstruction_workflow import ReconstructionWorkflow
 
         segment_name = operation.get('segment_name')
         cutlist_file = operation.get('cutlist_file')
@@ -824,42 +816,3 @@ class Driver(object):
 
         logger.info(f"Reconstruction complete: {len(result.segments)} segment(s)")
 
-    def _execute_reconstruct_wafers(self, operation):
-        """Reconstruct wafer structure from cut list parameters"""
-        from wafer_reconstructor import reconstruct_from_segment
-
-        segment_name = operation.get('segment_name', '')
-        rotation_multiplier = operation.get('rotation_multiplier', 1.0)
-        name_prefix = operation.get('name_prefix', 'Recon')
-
-        segment = None
-        for seg in self.segment_list:
-            if seg.name == segment_name:
-                segment = seg
-                break
-
-        if segment is None:
-            print(f"✗ Segment '{segment_name}' not found")
-            return
-
-        # Get initial azimuth for alignment
-        if segment.wafer_list and segment.wafer_list[0].geometry:
-            initial_azimuth = segment.wafer_list[0].geometry.get('chord_azimuth_deg', 0)
-        else:
-            initial_azimuth = 0
-
-        # Extract cut data
-        from wafer_reconstructor import extract_cut_data_from_segment, WaferReconstructor
-
-        radius = segment.wafer_list[0].geometry.get('ellipse1', {}).get('minor_axis', 0.9375)
-        reconstructor = WaferReconstructor(cylinder_radius=radius)
-
-        cut_data = extract_cut_data_from_segment(segment)
-        reconstructor.build_from_cut_list(
-            cut_data,
-            rotation_multiplier=rotation_multiplier,
-            initial_orientation={'azimuth': initial_azimuth}
-        )
-        reconstructor.visualize_in_freecad(self.doc, name_prefix=name_prefix)
-
-        print(f"✓ Reconstructed segment '{segment_name}' with rotation_multiplier={rotation_multiplier}")
