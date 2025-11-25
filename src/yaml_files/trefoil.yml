@@ -112,7 +112,7 @@ workflow:
     curve_spec:
       type: "trefoil"
       parameters:
-        major_radius: 6.0        # Increased from 5.0 for more clearance
+        major_radius: 5.0        # Increased from 5.0 for more clearance
         tube_radius: 4.0         # Increased from 3.0 to avoid self-intersection
         points: 200
       transformations: []
@@ -120,9 +120,9 @@ workflow:
         start_fraction: 0.0
         end_fraction: 1.0
     wafer_settings:
-      cylinder_diameter: 1.75    # Reduced from 2.25 (radius 0.875 vs tube 4.0)
-      min_height: 0.8            # Increased from 0.5 for more stable wafers
-      max_chord: 0.5             # Increased from 0.2 for fewer profiles
+      cylinder_diameter: 1.75   # Reduced from 2.25 (radius 0.875 vs tube 4.0)
+      min_height: 0.3           # Increased from 0.5 for more stable wafers
+      max_chord: 0.2           # Increased from 0.2 for fewer profiles
       max_wafer_count: 50        # Limit total wafers to avoid too many profiles
     segment_settings:
       show_lcs: false

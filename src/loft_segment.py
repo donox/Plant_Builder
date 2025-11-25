@@ -9,6 +9,9 @@ and concatenated with other segments.
 import FreeCAD as App
 import Part
 from curve_follower_loft import CurveFollowerLoft
+from core.logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 class LoftSegment:
@@ -53,7 +56,7 @@ class LoftSegment:
         self.z_min = None
         self.z_max = None
 
-        print(f"Created LoftSegment: {name}")
+        logger.debug(f"Created LoftSegment: {name}")
 
     def generate_wafers(self):
         """
@@ -62,11 +65,12 @@ class LoftSegment:
         Returns:
             List of Wafer objects
         """
-        print(f"\nGenerating wafers for segment '{self.name}'...")
+        logger.info(f"Generating wafers for segment '{self.name}'")
 
         try:
             # Create follower with wafer settings
             self.follower = CurveFollowerLoft(wafer_settings=self.wafer_settings)
+            logger.debug(f"Created CurveFollowerLoft for '{self.name}'")
 
             # Generate loft and wafers
             self.follower.generate_loft_wafers(self.curve_spec, self.wafer_settings)
@@ -79,14 +83,15 @@ class LoftSegment:
 
             # Apply base placement transformation if needed
             if not self._is_identity_placement(self.base_placement):
+                logger.debug(f"Applying placement transformation to segment '{self.name}'")
                 self._apply_placement_to_wafers()
 
-            print(f"✓ Generated {len(self.wafer_list)} wafers for segment '{self.name}'")
+            logger.info(f"Generated {len(self.wafer_list)} wafers for segment '{self.name}'")
 
             return self.wafer_list
 
         except Exception as e:
-            print(f"✗ Error generating wafers for segment '{self.name}': {e}")
+            logger.error(f"Failed to generate wafers for segment '{self.name}': {e}", exc_info=True)
             raise
 
     def _is_identity_placement(self, placement):
@@ -106,8 +111,6 @@ class LoftSegment:
         This transforms the entire segment (all wafers and their LCS)
         by the base placement.
         """
-        print(f"  Applying placement transformation to segment '{self.name}'...")
-
         for wafer in self.wafer_list:
             if wafer.wafer is not None:
                 # Transform the wafer solid
@@ -127,6 +130,7 @@ class LoftSegment:
 
         # Recalculate bounds after transformation
         self._calculate_bounds()
+        logger.debug(f"Placement transformation applied to {len(self.wafer_list)} wafers")
 
     def _calculate_bounds(self):
         """Calculate bounding box for all wafers in segment"""
@@ -154,6 +158,9 @@ class LoftSegment:
             self.y_max = max(y_coords)
             self.z_min = min(z_coords)
             self.z_max = max(z_coords)
+            logger.coord(f"Bounds: X({self.x_min:.2f},{self.x_max:.2f}) "
+                        f"Y({self.y_min:.2f},{self.y_max:.2f}) "
+                        f"Z({self.z_min:.2f},{self.z_max:.2f})")
         else:
             self.x_min = self.x_max = None
             self.y_min = self.y_max = None
@@ -199,11 +206,11 @@ class LoftSegment:
 
     def visualize(self, doc):
         """Create FreeCAD visualization of the segment"""
-        print(f"Visualizing segment '{self.name}'...")
-        print(f"Creating FreeCAD visualization...")
+        logger.info(f"Visualizing segment '{self.name}'")
 
         # Create main group for this segment
         segment_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Group")
+        logger.debug(f"Created segment group: {self.name}_Group")
 
         # Create subgroups
         wafer_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Wafers")
@@ -211,6 +218,7 @@ class LoftSegment:
 
         segment_group.addObject(wafer_group)
         segment_group.addObject(reference_group)
+        logger.debug(f"Created subgroups: Wafers and Reference")
 
         # Add loft to reference group (if it exists)
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'loft'):
@@ -221,6 +229,7 @@ class LoftSegment:
                 loft_obj.ViewObject.Transparency = 70
                 loft_obj.ViewObject.ShapeColor = (0.8, 0.9, 1.0)
                 reference_group.addObject(loft_obj)
+                logger.debug("Added loft to reference group")
 
         # Add spine to reference group (hidden by default)
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'spine_curve'):
@@ -230,8 +239,9 @@ class LoftSegment:
                 spine_obj.Shape = spine
                 spine_obj.ViewObject.LineColor = (1.0, 0.0, 0.0)
                 spine_obj.ViewObject.LineWidth = 2.0
-                spine_obj.ViewObject.Visibility = False  # Hidden by default
+                spine_obj.ViewObject.Visibility = False
                 reference_group.addObject(spine_obj)
+                logger.debug("Added spine to reference group (hidden)")
 
         # Add reference curve to reference group (hidden by default)
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'sample_points'):
@@ -255,16 +265,19 @@ class LoftSegment:
                     curve_obj.Shape = wire
                     curve_obj.ViewObject.LineColor = (0.0, 1.0, 0.0)
                     curve_obj.ViewObject.LineWidth = 1.0
-                    curve_obj.ViewObject.Visibility = False  # Hidden by default
+                    curve_obj.ViewObject.Visibility = False
                     reference_group.addObject(curve_obj)
+                    logger.debug(f"Added reference curve ({len(vec_points)} points, hidden)")
 
-        # Create LCS group (unconditionally, so we have it when needed)
+        # Create LCS group if needed
         lcs_group = None
         if self.segment_settings.get('show_lcs', False):
             lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
             reference_group.addObject(lcs_group)
+            logger.debug("Created LCS group")
 
         # Add wafers to wafer group
+        wafer_count = 0
         for i, wafer_data in enumerate(self.wafer_list):
             if wafer_data.wafer is None:
                 continue
@@ -274,42 +287,48 @@ class LoftSegment:
 
             # Alternate colors
             if i % 2 == 0:
-                wafer_obj.ViewObject.ShapeColor = (0.5, 1.0, 0.5)  # Light green
+                wafer_obj.ViewObject.ShapeColor = (0.5, 1.0, 0.5)
             else:
-                wafer_obj.ViewObject.ShapeColor = (0.7, 0.7, 1.0)  # Light blue
+                wafer_obj.ViewObject.ShapeColor = (0.7, 0.7, 1.0)
 
             wafer_obj.ViewObject.Transparency = 20
             wafer_group.addObject(wafer_obj)
+            wafer_count += 1
 
             # Add LCS if requested (in LCS group, hidden by default)
             if lcs_group is not None:
                 if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
                     lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_1")
                     lcs_obj.Placement = wafer_data.lcs1
-                    lcs_obj.ViewObject.Visibility = False  # Hidden by default
+                    lcs_obj.ViewObject.Visibility = False
                     lcs_group.addObject(lcs_obj)
 
                 if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
                     lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_2")
                     lcs_obj.Placement = wafer_data.lcs2
-                    lcs_obj.ViewObject.Visibility = False  # Hidden by default
+                    lcs_obj.ViewObject.Visibility = False
                     lcs_group.addObject(lcs_obj)
+
+        logger.debug(f"Added {wafer_count} wafers to visualization")
 
         # Add cutting planes to reference group (hidden by default)
         if hasattr(self.follower, 'cutting_planes'):
             cutting_planes = self.follower.cutting_planes
             if cutting_planes:
+                plane_count = 0
                 for i, plane in enumerate(cutting_planes):
                     if plane is not None:
                         plane_obj = doc.addObject("Part::Feature", f"CuttingPlane_{self.name}_{i}")
                         plane_obj.Shape = plane
                         plane_obj.ViewObject.ShapeColor = (1.0, 0.8, 0.0)
                         plane_obj.ViewObject.Transparency = 80
-                        plane_obj.ViewObject.Visibility = False  # Hidden by default
+                        plane_obj.ViewObject.Visibility = False
                         reference_group.addObject(plane_obj)
+                        plane_count += 1
+                logger.debug(f"Added {plane_count} cutting planes (hidden)")
 
         doc.recompute()
-        print(f"✓ Visualization complete")
+        logger.info(f"Visualization complete for '{self.name}'")
 
     def get_wafer_count(self):
         """Get number of wafers in this segment"""

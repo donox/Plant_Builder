@@ -1,220 +1,195 @@
 # core/logging_setup.py
+"""
+Logging setup for PlantBuilder with custom COORD level.
+
+Usage in modules:
+    from core.logging_setup import get_logger
+    logger = get_logger(__name__)
+
+    logger.error("Error message")
+    logger.warning("Warning message")
+    logger.info("Progress message")
+    logger.coord("Coordinate/geometry detail")
+    logger.debug("Debug detail")
+
+Default display levels: ERROR, WARNING, INFO
+To include coordinate spam: set_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
+To see everything: set_display_levels(["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+"""
 from __future__ import annotations
 import logging
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import List, Union, Optional
 
-# Prevent double configuration across reloads
-_CONFIGURED = False
-
-# Define custom logging level
-COORD_LEVEL = 25  # Between INFO (20) and WARNING (30)
+# Custom COORD level between INFO (20) and WARNING (30)
+COORD_LEVEL = 25
 logging.addLevelName(COORD_LEVEL, "COORD")
 
-DISPLAY_LEVELS = ["COORD", "ERROR", "WARNING", "INFO","DEBUG"]
+# Default levels to display (console and file)
+DEFAULT_DISPLAY_LEVELS = ["ERROR", "WARNING", "INFO"]
 
-CLEAR_LOG = True
+# Global to track if we've configured the root logger
+_root_configured = False
 
 
 def coord(self, message, *args, **kwargs):
-    """Log with COORD level"""
+    """Log with COORD level for coordinate/geometry details"""
     if self.isEnabledFor(COORD_LEVEL):
         self._log(COORD_LEVEL, message, args, **kwargs)
 
 
-# Add the coord method to Logger class
+# Add coord method to Logger class
 logging.Logger.coord = coord
 
 
 class LevelFilter(logging.Filter):
-    """Filter that only allows specific log levels"""
+    """
+    Filter that only allows specific log levels.
+    Unlike setLevel(), this can skip intermediate levels.
+    Example: Allow ERROR, WARNING, INFO but skip DEBUG and COORD
+    """
 
     def __init__(self, allowed_levels: List[Union[int, str]]):
         super().__init__()
         self.allowed_levels = set()
         for level in allowed_levels:
             if isinstance(level, str):
-                if level.upper() == "COORD":
+                level_upper = level.upper()
+                if level_upper == "COORD":
                     level_num = COORD_LEVEL
                 else:
-                    level_num = logging.getLevelName(level.upper())
-                    if isinstance(level_num, str):  # Unknown level
+                    level_num = logging.getLevelName(level_upper)
+                    if isinstance(level_num, str):  # Unknown level name
                         continue
             else:
-                level_num = level
+                level_num = int(level)
             self.allowed_levels.add(level_num)
-        # print(f"DEBUG: Filter will allow levels: {self.allowed_levels}")
 
     def filter(self, record):
-        allowed = record.levelno in self.allowed_levels
-        # print(f"DEBUG: Record level {record.levelno} ({record.levelname}) -> {'ALLOWED' if allowed else 'BLOCKED'}")
-        return allowed
+        return record.levelno in self.allowed_levels
 
 
-def force_reset_logging():
-    """Aggressively reset all logging configuration"""
-    # Get all existing loggers
-    loggers = [logging.getLogger(name) for name in logging.Logger.manager.loggerDict]
-    loggers.append(logging.getLogger())  # Include root logger
-
-    # Remove all handlers from all loggers
-    for logger in loggers:
-        logger.handlers.clear()
-        logger.setLevel(logging.NOTSET)
-        logger.propagate = True
-
-    # Clear the root logger specifically
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.setLevel(logging.NOTSET)
-
-    print("DEBUG: All loggers reset")
+def _get_log_directory() -> Path:
+    """Get or create the log directory"""
+    log_dir = Path.home() / ".plantbuilder"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
 
 
-def setup_root_logger(
-        level: int = logging.WARNING,
-        log_dir: Optional[Union[str, Path]] = None,
-        console_level: Optional[int] = None,
-        allowed_levels: Optional[List[Union[int, str]]] = None,
+def _clear_log_file(log_path: Path):
+    """Clear the log file by writing empty content"""
+    log_path.write_text("", encoding="utf-8")
+
+
+def setup_logging(
+        display_levels: Optional[List[str]] = None,
+        log_dir: Optional[Path] = None,
+        clear_log: bool = True
 ) -> Path:
     """
-    Configure root logger once, idempotently.
+    Configure root logger with file and console handlers.
+
+    Args:
+        display_levels: List of level names to display (e.g., ["ERROR", "WARNING", "INFO"])
+                       If None, uses DEFAULT_DISPLAY_LEVELS
+        log_dir: Directory for log file (default: ~/.plantbuilder)
+        clear_log: If True, clear log file on startup
+
+    Returns:
+        Path to log file
     """
-    global _CONFIGURED
-    if _CONFIGURED:
-        return Path(log_dir or Path.home() / ".plantbuilder") / "plantbuilder.log"
+    global _root_configured
 
-    print("DEBUG: Setting up root logger...")
+    # Use defaults if not specified
+    if display_levels is None:
+        display_levels = DEFAULT_DISPLAY_LEVELS
 
-    # Force reset everything
-    force_reset_logging()
+    if log_dir is None:
+        log_dir = _get_log_directory()
 
-    if isinstance(log_dir, int) and isinstance(level, int):
-        level, log_dir = log_dir, None
-
-    log_dir = Path(log_dir or Path.home() / ".plantbuilder")
-    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "plantbuilder.log"
-    print(f"LOGS: dir - {log_dir.absolute()}")
-    if CLEAR_LOG:
-        clear_log_file(log_path)
 
+    # Only configure once (idempotent)
+    if _root_configured:
+        return log_path
+
+    # Clear log file if requested
+    if clear_log:
+        _clear_log_file(log_path)
+
+    # Get root logger
     root = logging.getLogger()
+    root.setLevel(1)  # Pass everything to handlers, let filter decide
 
-    # Set root logger level
-    if allowed_levels is not None:
-        # Set to the lowest possible level to let everything through to handlers
-        root.setLevel(1)  # Lower than DEBUG (10)
-        print(f"DEBUG: Root level set to 1, filtering with: {allowed_levels}")
-    else:
-        root.setLevel(logging.DEBUG)
-        print("DEBUG: Root level set to DEBUG")
+    # Remove any existing handlers (in case of reload)
+    root.handlers.clear()
 
-    # File handler
-    fh = logging.FileHandler(log_path, encoding="utf-8")
-    fh.setLevel(1)  # Let filter handle it
-    fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s:%(name)s:%(message)s"))
+    # Create level filter
+    level_filter = LevelFilter(display_levels)
 
-    # Console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(1)  # Let filter handle it
-    ch.setFormatter(logging.Formatter("%(message)s"))
+    # File handler - detailed format
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(1)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+    )
+    file_handler.addFilter(level_filter)
+    root.addHandler(file_handler)
 
-    # Add level filter if specified
-    if allowed_levels is not None:
-        level_filter = LevelFilter(allowed_levels)
-        fh.addFilter(level_filter)
-        ch.addFilter(level_filter)
-        print("DEBUG: Filters applied to both handlers")
-    else:
-        fh.setLevel(level)
-        ch.setLevel(console_level if console_level is not None else level)
+    # Console handler - simple format
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(1)
+    console_handler.setFormatter(logging.Formatter("%(message)s"))
+    console_handler.addFilter(level_filter)
+    root.addHandler(console_handler)
 
-    root.addHandler(fh)
-    root.addHandler(ch)
+    _root_configured = True
 
-    print(f"DEBUG: Root logger has {len(root.handlers)} handlers")
-    print(f"DEBUG: Root logger level: {root.level}")
-
-    _CONFIGURED = True
     return log_path
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a logger; configure root once on first use."""
-    global _CONFIGURED
-    if not _CONFIGURED:
-        try:
-            setup_root_logger(allowed_levels=DISPLAY_LEVELS)
-        except Exception as e:
-            # print(f"DEBUG: Exception during setup: {e}")
-            logging.basicConfig(level=logging.INFO, format="%(message)s")
-            _CONFIGURED = True
-
-    logger = logging.getLogger(name)
-    # print(f"DEBUG: Created logger '{name}', level={logger.level}, handlers={len(logger.handlers)}")
-    return logger
-
-
-def log_coord(logger_name: str, message: str, *args, **kwargs):
-    """Helper function to log COORD messages"""
-    logger = get_logger(logger_name)
-    if logger.isEnabledFor(COORD_LEVEL):
-        logger._log(COORD_LEVEL, message, args, **kwargs)
-
-# at top
-import os
-# ... existing imports ...
-
-# --- NEW: level normalization ---
-def _normalize_levels(levels):
-    out = []
-    for lv in levels or []:
-        if isinstance(lv, str):
-            s = lv.upper()
-            if s == "COORD":
-                out.append(COORD_LEVEL)
-            else:
-                n = logging.getLevelName(s)
-                if isinstance(n, int):
-                    out.append(n)
-        else:
-            out.append(int(lv))
-    return out
-
-# --- NEW: change DISPLAY_LEVELS at runtime and reapply filters ---
-def apply_display_levels(levels):
     """
-    Update DISPLAY_LEVELS and (if already configured) reapply LevelFilter
-    on all root handlers so only these levels show up.
+    Get a logger for the given module name.
+    Configures root logger on first call.
+
+    Usage:
+        logger = get_logger(__name__)
     """
-    global DISPLAY_LEVELS
-    DISPLAY_LEVELS = list(levels)
-    if not _CONFIGURED:
-        return  # get_logger() will configure with the new list on first use
+    global _root_configured
 
-    root = logging.getLogger()
-    # remove any prior LevelFilter and add a fresh one
-    for h in root.handlers:
-        h.filters = [f for f in h.filters if not isinstance(f, LevelFilter)]
-        h.addFilter(LevelFilter(DISPLAY_LEVELS))
-    # make sure root passes everything to handlers (filter will do the gating)
-    root.setLevel(1)
+    if not _root_configured:
+        log_path = setup_logging()
+        # Only print this once on first logger creation
+        print(f"Logging to: {log_path}")
+
+    return logging.getLogger(name)
 
 
-def clear_log_file(log_path):
+def set_display_levels(levels: List[str]):
     """
-    Replace a log file with an empty file.
+    Change which log levels are displayed at runtime.
 
     Args:
-        log_path: Path to the log file (can be string or Path object)
+        levels: List of level names (e.g., ["ERROR", "WARNING", "INFO", "COORD", "DEBUG"])
+
+    Example:
+        # Show only errors and warnings
+        set_display_levels(["ERROR", "WARNING"])
+
+        # Include coordinate details
+        set_display_levels(["ERROR", "WARNING", "INFO", "COORD"])
     """
-    path = Path(log_path)
+    if not _root_configured:
+        # Will be applied when setup_logging() is called
+        return
 
-    # Create an empty file (overwrites existing content)
-    path.write_text("")
+    # Update filter on all root handlers
+    root = logging.getLogger()
+    new_filter = LevelFilter(levels)
 
-# --- NEW: optional env override at import time ---
-_env = os.getenv("PB_DISPLAY_LEVELS")  # e.g. "ERROR,WARNING,COORD"
-if _env:
-    apply_display_levels([p.strip() for p in _env.split(",") if p.strip()])
+    for handler in root.handlers:
+        # Remove old LevelFilter instances
+        handler.filters = [f for f in handler.filters if not isinstance(f, LevelFilter)]
+        # Add new filter
+        handler.addFilter(new_filter)
