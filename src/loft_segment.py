@@ -61,6 +61,7 @@ class LoftSegment:
     def generate_wafers(self):
         """
         Generate wafers for this segment using loft-based approach
+        All geometry generated at ORIGIN in local coordinates.
 
         Returns:
             List of Wafer objects
@@ -68,31 +69,58 @@ class LoftSegment:
         logger.info(f"Generating wafers for segment '{self.name}'")
 
         try:
-            # Create follower with wafer settings
             self.follower = CurveFollowerLoft(wafer_settings=self.wafer_settings)
-            logger.debug(f"Created CurveFollowerLoft for '{self.name}'")
 
-            # Generate loft and wafers
-            self.follower.generate_loft_wafers(self.curve_spec, self.wafer_settings)
+            # Generate everything at ORIGIN (no base_placement)
+            self.follower.generate_loft_wafers(
+                self.curve_spec,
+                self.wafer_settings,
+                base_placement=None
+            )
 
-            # Get wafer list
             self.wafer_list = self.follower.get_wafer_list()
-
-            # Calculate bounding box
             self._calculate_bounds()
 
-            # Apply base placement transformation if needed
-            if not self._is_identity_placement(self.base_placement):
-                logger.debug(f"Applying placement transformation to segment '{self.name}'")
-                self._apply_placement_to_wafers()
-
             logger.info(f"Generated {len(self.wafer_list)} wafers for segment '{self.name}'")
-
+            if self.wafer_list and self.wafer_list[0].wafer:
+                first_wafer_bbox = self.wafer_list[0].wafer.BoundBox
+                logger.debug(f"First wafer bounding box (local): {first_wafer_bbox}")
+                logger.debug(f"First wafer placement (local): {self.wafer_list[0].wafer.Placement}")
             return self.wafer_list
 
         except Exception as e:
             logger.error(f"Failed to generate wafers for segment '{self.name}': {e}", exc_info=True)
             raise
+
+    def _transform_curve_points(self, points):
+        """
+        Transform curve points by base_placement
+
+        Args:
+            points: List or numpy array of curve points
+
+        Returns:
+            List of App.Vector transformed points
+        """
+        import numpy as np
+
+        # Convert to numpy array if needed
+        if not isinstance(points, np.ndarray):
+            points = np.array(points)
+
+        transformed_points = []
+        for point in points:
+            # Create App.Vector
+            if isinstance(point, App.Vector):
+                vec = point
+            else:
+                vec = App.Vector(float(point[0]), float(point[1]), float(point[2]))
+
+            # Transform by base_placement
+            transformed_vec = self.base_placement.multVec(vec)
+            transformed_points.append(transformed_vec)
+
+        return transformed_points
 
     def _is_identity_placement(self, placement):
         """Check if placement is identity (no transformation)"""
@@ -104,33 +132,6 @@ class LoftSegment:
 
         return pos_close and rot_close
 
-    def _apply_placement_to_wafers(self):
-        """
-        Apply base placement transformation to all wafers
-
-        This transforms the entire segment (all wafers and their LCS)
-        by the base placement.
-        """
-        for wafer in self.wafer_list:
-            if wafer.wafer is not None:
-                # Transform the wafer solid
-                wafer.wafer.Placement = self.base_placement.multiply(wafer.wafer.Placement)
-
-                # Transform LCS
-                if wafer.lcs1:
-                    wafer.lcs1 = self.base_placement.multiply(wafer.lcs1)
-                if wafer.lcs2:
-                    wafer.lcs2 = self.base_placement.multiply(wafer.lcs2)
-
-                # Transform geometry centers
-                if 'center1' in wafer.geometry:
-                    wafer.geometry['center1'] = self.base_placement.multVec(wafer.geometry['center1'])
-                if 'center2' in wafer.geometry:
-                    wafer.geometry['center2'] = self.base_placement.multVec(wafer.geometry['center2'])
-
-        # Recalculate bounds after transformation
-        self._calculate_bounds()
-        logger.debug(f"Placement transformation applied to {len(self.wafer_list)} wafers")
 
     def _calculate_bounds(self):
         """Calculate bounding box for all wafers in segment"""
@@ -166,6 +167,57 @@ class LoftSegment:
             self.y_min = self.y_max = None
             self.z_min = self.z_max = None
 
+    def get_start_placement(self):
+        """
+        Get the placement at the START of this segment in WORLD coordinates
+
+        For aligning segments:
+        - Inverse transform by start placement to bring back to origin
+        - Then transform by previous segment's end placement
+
+        Returns:
+            App.Placement in world coordinates where this segment starts
+        """
+        if not self.wafer_list or len(self.wafer_list) == 0:
+            # No wafers - segment starts at base_placement
+            return self.base_placement
+
+        # Get first wafer's entry LCS (in local coordinates)
+        first_wafer = self.wafer_list[0]
+
+        if first_wafer.lcs1:
+            # Transform local LCS to world coordinates
+            local_start_lcs = first_wafer.lcs1
+            world_start_lcs = self.base_placement.multiply(local_start_lcs)
+            return world_start_lcs
+        else:
+            # No LCS available - return base_placement
+            return self.base_placement
+
+    def get_end_placement(self):
+        """
+        Get the placement at the END of this segment in WORLD coordinates
+        This is where the next segment should start.
+
+        Returns:
+            App.Placement in world coordinates
+        """
+        if not self.wafer_list or len(self.wafer_list) == 0:
+            # No wafers - return base_placement unchanged
+            return self.base_placement
+
+        # Get last wafer's exit LCS (in local coordinates)
+        last_wafer = self.wafer_list[-1]
+
+        if last_wafer.lcs2:
+            # Transform local LCS to world coordinates
+            local_end_lcs = last_wafer.lcs2
+            world_end_lcs = self.base_placement.multiply(local_end_lcs)
+            return world_end_lcs
+        else:
+            # No LCS available - return base_placement
+            return self.base_placement
+
     def get_bounds(self):
         """
         Get bounding box as a dictionary
@@ -184,43 +236,43 @@ class LoftSegment:
 
     def get_end_placement(self):
         """
-        Get the placement at the end of this segment
+        Get the placement at the end of this segment in WORLD coordinates
 
         This is used for concatenating segments - the next segment
         starts where this one ends.
 
         Returns:
-            App.Placement at the end of the segment
+            App.Placement at the end of the segment in world coordinates
         """
         if not self.wafer_list or len(self.wafer_list) == 0:
             return self.base_placement
 
-        # Get the last wafer's second LCS (the exit face)
+        # Get the last wafer's second LCS (the exit face) in LOCAL coordinates
         last_wafer = self.wafer_list[-1]
 
         if last_wafer.lcs2:
-            return last_wafer.lcs2
+            # Transform local LCS to world coordinates
+            local_lcs = last_wafer.lcs2
+            world_lcs = self.base_placement.multiply(local_lcs)
+            return world_lcs
         else:
             # Fallback to base placement if LCS not available
             return self.base_placement
 
     def visualize(self, doc):
-        """Create FreeCAD visualization of the segment"""
+        """Create FreeCAD visualization of the segment as a Part container"""
         logger.info(f"Visualizing segment '{self.name}'")
 
-        # Create main group for this segment
-        segment_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Group")
-        logger.debug(f"Created segment group: {self.name}_Group")
+        # Create Part container
+        segment_part = doc.addObject("App::Part", f"{self.name}_Part")
+        segment_part.Placement = self.base_placement
+        logger.debug(f"Created Part with placement: {self.base_placement}")
 
-        # Create subgroups
+        # Create groups (NOT added to Part yet)
         wafer_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Wafers")
         reference_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Reference")
 
-        segment_group.addObject(wafer_group)
-        segment_group.addObject(reference_group)
-        logger.debug(f"Created subgroups: Wafers and Reference")
-
-        # Add loft to reference group (if it exists)
+        # Add loft to reference_group ONLY
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'loft'):
             loft = self.follower.generator.loft
             if loft:
@@ -228,55 +280,28 @@ class LoftSegment:
                 loft_obj.Shape = loft
                 loft_obj.ViewObject.Transparency = 70
                 loft_obj.ViewObject.ShapeColor = (0.8, 0.9, 1.0)
-                reference_group.addObject(loft_obj)
-                logger.debug("Added loft to reference group")
+                reference_group.addObject(loft_obj)  # Only add to group
+                logger.debug("Added loft")
 
-        # Add spine to reference group (hidden by default)
+        # Add spine to reference_group ONLY
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'spine_curve'):
             spine = self.follower.generator.spine_curve
             if spine:
-                spine_obj = doc.addObject("Part::Feature", f"Loft_spine_{self.name}")
+                spine_obj = doc.addObject("Part::Feature", f"Spine_{self.name}")
                 spine_obj.Shape = spine
                 spine_obj.ViewObject.LineColor = (1.0, 0.0, 0.0)
                 spine_obj.ViewObject.LineWidth = 2.0
                 spine_obj.ViewObject.Visibility = False
-                reference_group.addObject(spine_obj)
-                logger.debug("Added spine to reference group (hidden)")
-
-        # Add reference curve to reference group (hidden by default)
-        if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'sample_points'):
-            points = self.follower.generator.sample_points
-            if points and len(points) > 1:
-                # Convert to App.Vector if needed
-                vec_points = []
-                for p in points:
-                    if isinstance(p, App.Vector):
-                        vec_points.append(p)
-                    elif isinstance(p, (tuple, list)) and len(p) >= 3:
-                        vec_points.append(App.Vector(p[0], p[1], p[2]))
-                    else:
-                        continue
-
-                if len(vec_points) > 1:
-                    edges = [Part.LineSegment(vec_points[i], vec_points[i + 1]).toShape()
-                             for i in range(len(vec_points) - 1)]
-                    wire = Part.Wire(edges)
-                    curve_obj = doc.addObject("Part::Feature", f"Loft_reference_{self.name}")
-                    curve_obj.Shape = wire
-                    curve_obj.ViewObject.LineColor = (0.0, 1.0, 0.0)
-                    curve_obj.ViewObject.LineWidth = 1.0
-                    curve_obj.ViewObject.Visibility = False
-                    reference_group.addObject(curve_obj)
-                    logger.debug(f"Added reference curve ({len(vec_points)} points, hidden)")
+                reference_group.addObject(spine_obj)  # Only add to group
+                logger.debug("Added spine")
 
         # Create LCS group if needed
         lcs_group = None
         if self.segment_settings.get('show_lcs', False):
             lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
-            reference_group.addObject(lcs_group)
             logger.debug("Created LCS group")
 
-        # Add wafers to wafer group
+        # Add wafers to wafer_group ONLY
         wafer_count = 0
         for i, wafer_data in enumerate(self.wafer_list):
             if wafer_data.wafer is None:
@@ -285,47 +310,34 @@ class LoftSegment:
             wafer_obj = doc.addObject("Part::Feature", f"Wafer_{self.name}_{i}")
             wafer_obj.Shape = wafer_data.wafer
 
-            # Alternate colors
             if i % 2 == 0:
                 wafer_obj.ViewObject.ShapeColor = (0.5, 1.0, 0.5)
             else:
                 wafer_obj.ViewObject.ShapeColor = (0.7, 0.7, 1.0)
 
             wafer_obj.ViewObject.Transparency = 20
-            wafer_group.addObject(wafer_obj)
+            wafer_group.addObject(wafer_obj)  # Only add to group
             wafer_count += 1
 
-            # Add LCS if requested (in LCS group, hidden by default)
+            # Add LCS to lcs_group ONLY
             if lcs_group is not None:
                 if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
-                    lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_1")
+                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i}_1")
                     lcs_obj.Placement = wafer_data.lcs1
-                    lcs_obj.ViewObject.Visibility = False
-                    lcs_group.addObject(lcs_obj)
+                    lcs_group.addObject(lcs_obj)  # Only add to group
 
                 if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
-                    lcs_obj = doc.addObject("App::Placement", f"LCS_{self.name}_{i}_2")
+                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i}_2")
                     lcs_obj.Placement = wafer_data.lcs2
-                    lcs_obj.ViewObject.Visibility = False
-                    lcs_group.addObject(lcs_obj)
+                    lcs_group.addObject(lcs_obj)  # Only add to group
 
-        logger.debug(f"Added {wafer_count} wafers to visualization")
+        logger.debug(f"Added {wafer_count} wafers")
 
-        # Add cutting planes to reference group (hidden by default)
-        if hasattr(self.follower, 'cutting_planes'):
-            cutting_planes = self.follower.cutting_planes
-            if cutting_planes:
-                plane_count = 0
-                for i, plane in enumerate(cutting_planes):
-                    if plane is not None:
-                        plane_obj = doc.addObject("Part::Feature", f"CuttingPlane_{self.name}_{i}")
-                        plane_obj.Shape = plane
-                        plane_obj.ViewObject.ShapeColor = (1.0, 0.8, 0.0)
-                        plane_obj.ViewObject.Transparency = 80
-                        plane_obj.ViewObject.Visibility = False
-                        reference_group.addObject(plane_obj)
-                        plane_count += 1
-                logger.debug(f"Added {plane_count} cutting planes (hidden)")
+        # NOW add the groups to the Part (only once, at the end)
+        segment_part.addObject(wafer_group)
+        segment_part.addObject(reference_group)
+        if lcs_group is not None:
+            segment_part.addObject(lcs_group)
 
         doc.recompute()
         logger.info(f"Visualization complete for '{self.name}'")

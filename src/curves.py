@@ -5,7 +5,7 @@ apply transformations, and prepare them for use in wafer generation systems.
 """
 
 from core.logging_setup import get_logger, set_display_levels
-set_display_levels(["ERROR", "WARNING", "INFO"])
+# set_display_levels(["ERROR", "WARNING", "INFO"])
 logger = get_logger(__name__)
 
 import math
@@ -68,6 +68,15 @@ class Curves:
     def _apply_transformations(self) -> None:
         """Apply all specified transformations to the base curve."""
         self.transformed_curve = self.base_curve.copy()
+
+        #DEBUG
+        logger.info((f"Curve spec: {self.curve_spec}"))
+        segment_spec = self.curve_spec.get('segment')
+        logger.info(f"Segment spec: {segment_spec}")
+        if segment_spec:
+            logger.info(f"Applying segment selection: {segment_spec}")
+            self.transformed_curve = self._select_segment(self.transformed_curve, segment_spec)
+            logger.info(f"Points after segment selection: {len(self.transformed_curve)}")
 
         segment_spec = self.curve_spec.get('segment')
         if segment_spec:
@@ -372,15 +381,27 @@ class Curves:
     def _generate_spiral(self, max_radius: float = 10.0, min_radius: float = 5.0,
                          max_height: float = 10.0, turns: float = 2.0,
                          points: int = 100, plane: str = 'xy') -> List[List[float]]:
-        """Generate a spiral curve."""
-        logger.debug(f"Generating spiral: max_r={max_radius}, turns={turns}, height={max_height}")
+        """Generate a spiral curve with radius changing based on angle, not height.
+
+        Creates an Archimedean spiral that rises in Z as it spirals outward.
+        The radius grows uniformly with angle (each turn adds constant width).
+        """
+        logger.debug(f"Generating spiral: min_r={min_radius}, max_r={max_radius}, turns={turns}, height={max_height}")
 
         curve_points = []
+        total_angle = turns * 2 * math.pi
+
         for i in range(points):
             t = i / (points - 1)
+            angle = t * total_angle
+
+            # Radius grows linearly with angle (Archimedean spiral)
+            angle_fraction = angle / total_angle
+            radius = min_radius + angle_fraction * (max_radius - min_radius)
+
+            # Height grows linearly with progress
             h = max_height * t
-            angle = t * turns * 2 * math.pi
-            radius = t * (max_radius - min_radius) + min_radius
+
             cos_a, sin_a = math.cos(angle), math.sin(angle)
 
             if plane.lower() == 'xy':

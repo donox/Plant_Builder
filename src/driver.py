@@ -16,6 +16,7 @@ import FreeCAD as App
 import Part
 
 from core.logging_setup import get_logger
+from test_transform import run_transform_test
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -83,6 +84,12 @@ class Driver:
         """Execute the complete workflow"""
         logger.info("Running: workflow()")
 
+        # RUN TEST AND EXIT
+
+        run_transform_test()
+        logger.info("Test complete - exiting")
+        return
+
         # Setup document
         self.setup_document()
 
@@ -131,22 +138,39 @@ class Driver:
         patterns = operation.get('patterns', [])
 
         if not patterns:
-            logger.debug("No patterns specified for remove_objects")
+            logger.warning("No patterns specified for remove_objects operation")
             return
 
-        removed_count = 0
-        for obj in self.doc.Objects[:]:  # Copy list since we're modifying
-            for pattern in patterns:
-                if self._matches_pattern(obj.Name, pattern):
-                    logger.debug(f"Removing: {obj.Name}")
-                    self.doc.removeObject(obj.Name)
-                    removed_count += 1
-                    break
+        logger.debug(f"Operation details: remove_objects")
 
-        if removed_count > 0:
-            logger.info(f"Removed {removed_count} objects")
-        else:
-            logger.debug("No objects matched removal patterns")
+        # Build list of objects to remove FIRST (before deleting anything)
+        objects_to_remove = []
+        for obj in self.doc.Objects:
+            try:
+                obj_name = obj.Name  # Access Name before any deletions
+                for pattern in patterns:
+                    if self._matches_pattern(obj_name, pattern):
+                        objects_to_remove.append(obj)
+                        break  # Don't check other patterns for this object
+            except ReferenceError:
+                # Object already deleted (e.g., child of a Part)
+                continue
+
+        # Now remove all objects
+        removed_count = 0
+        for obj in objects_to_remove:
+            try:
+                logger.debug(f"Removing: {obj.Name}")
+                self.doc.removeObject(obj.Name)
+                removed_count += 1
+            except ReferenceError:
+                # Object already deleted as part of removing a parent
+                logger.debug(f"Object already removed (was child of parent)")
+                pass
+            except Exception as e:
+                logger.warning(f"Could not remove object: {e}")
+
+        logger.info(f"Removed {removed_count} objects")
 
     def _matches_pattern(self, name, pattern):
         """Check if name matches pattern (supports wildcards)"""
@@ -172,7 +196,16 @@ class Driver:
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
 
-        logger.debug(f"Building segment '{segment_name}' at {self.current_placement}")
+        # Determine base_placement for this segment
+        # For now, just use identity - we'll adjust after generation
+        if len(self.segment_list) == 0:
+            # First segment - use current_placement
+            base_placement = self.current_placement
+        else:
+            # Subsequent segments - start at identity, will adjust after
+            base_placement = App.Placement()
+
+        logger.debug(f"Building segment '{segment_name}' with initial placement {base_placement}")
 
         # Create loft segment
         from loft_segment import LoftSegment
@@ -182,25 +215,99 @@ class Driver:
             curve_spec=curve_spec,
             wafer_settings=wafer_settings,
             segment_settings=segment_settings,
-            base_placement=self.current_placement
+            base_placement=base_placement
         )
 
         logger.debug(f"Created LoftSegment: {segment_name}")
 
-        # Generate wafers
+        # Generate wafers (at origin for non-first segments)
         segment.generate_wafers()
 
-        # Visualize
+        # Visualize (creates Part and adds objects)
         segment.visualize(self.doc)
+
+        # Adjust Part placement for segment alignment (segments 2+)
+        if len(self.segment_list) > 0:
+            # Get the world coordinates of the two LCS we need to align
+
+            # 1. Previous segment's EXIT (lcs2 of last wafer) in WORLD coordinates
+            prev_segment = self.segment_list[-1]
+            if prev_segment.wafer_list and prev_segment.wafer_list[-1].lcs2:
+                # Local lcs2 from previous segment
+                prev_local_exit = prev_segment.wafer_list[-1].lcs2
+                # Transform to world coordinates
+                prev_world_exit = prev_segment.base_placement.multiply(prev_local_exit)
+                logger.debug(f"Previous segment EXIT (world): {prev_world_exit}")
+            else:
+                logger.warning("Previous segment has no exit LCS")
+                prev_world_exit = prev_segment.base_placement
+
+            # 2. Current segment's ENTRY (lcs1 of first wafer) in WORLD coordinates (before adjustment)
+            if segment.wafer_list and segment.wafer_list[0].lcs1:
+                # Local lcs1 from current segment
+                curr_local_entry = segment.wafer_list[0].lcs1
+                # Current segment Part is at identity, so world = local
+                curr_world_entry = segment.base_placement.multiply(curr_local_entry)
+                logger.debug(f"Current segment ENTRY (world, before): {curr_world_entry}")
+                logger.debug(f"Current segment ENTRY (local): {curr_local_entry}")
+            else:
+                logger.warning("Current segment has no entry LCS")
+                curr_local_entry = App.Placement()
+
+            # 3. Calculate Part placement adjustment
+            # We want: prev_world_exit = adjusted_part_placement * curr_local_entry
+            # So: adjusted_part_placement = prev_world_exit * curr_local_entry.inverse()
+
+            adjusted_placement = prev_world_exit.multiply(curr_local_entry.inverse())
+            logger.debug(f"Adjusted Part placement: {adjusted_placement}")
+
+            logger.debug(f"Verification - multiplying back:")
+            test_result = adjusted_placement.multiply(curr_local_entry)
+            logger.debug(f"adjusted_placement * curr_local_entry = {test_result}")
+            logger.debug(f"Should equal prev_world_exit = {prev_world_exit}")
+
+            # 4. Find and update the Part object
+            part_name_variations = [
+                f"{segment_name.replace(' ', '_')}_Part",
+                f"{segment_name}_Part",
+            ]
+
+            part_obj = None
+            for name_variant in part_name_variations:
+                part_obj = self.doc.getObject(name_variant)
+                if part_obj:
+                    logger.debug(f"Found Part object: {name_variant}")
+                    break
+
+            if part_obj:
+                logger.debug(f"Part placement BEFORE: {part_obj.Placement}")
+                part_obj.Placement = adjusted_placement
+                segment.base_placement = adjusted_placement
+                logger.debug(f"Part placement AFTER: {part_obj.Placement}")
+
+                # Verify: compute where entry is NOW in world coordinates
+                new_world_entry = adjusted_placement.multiply(curr_local_entry)
+                logger.debug(f"Current segment ENTRY (world, after): {new_world_entry}")
+                logger.debug(f"Should match previous EXIT: {prev_world_exit}")
+
+                prev_local_exit = prev_segment.wafer_list[-1].lcs2
+                logger.debug(f"Previous segment EXIT (local): {prev_local_exit}")
+            else:
+                logger.warning(f"Could not find Part object. Tried: {part_name_variations}")
 
         # Store segment
         self.segment_list.append(segment)
+
+        # Update current_placement for next segment
+        self.current_placement = segment.get_end_placement()
+        logger.debug(f"Updated current_placement to {self.current_placement}")
 
         logger.info(f"✓ Created segment '{segment_name}' with {len(segment.wafer_list)} wafers")
 
         # Generate cutting list if requested
         if self.global_settings.get('print_cuts', False):
             self._generate_cutting_list(segment)
+
 
     def _execute_set_position(self, operation):
         """Set current position and orientation"""

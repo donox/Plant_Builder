@@ -26,7 +26,8 @@ COORD_LEVEL = 25
 logging.addLevelName(COORD_LEVEL, "COORD")
 
 # Default levels to display (console and file)
-DEFAULT_DISPLAY_LEVELS = ["ERROR", "WARNING", "INFO"]
+DEFAULT_DISPLAY_LEVELS = ["ERROR", "WARNING", "INFO", "DEBUG"]
+_root_configured = False
 
 # Global to track if we've configured the root logger
 _root_configured = False

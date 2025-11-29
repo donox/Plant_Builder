@@ -516,21 +516,38 @@ class LoftWaferGenerator:
         return wafer_data_list
 
     def _create_lcs(self, center, z_axis, major_axis_vector):
-        """Create Local Coordinate System at ellipse center"""
-        z = z_axis.normalize()
-        x = major_axis_vector.normalize()
+        """Create Local Coordinate System with CONSISTENT orientation."""
+        # Z-axis along cylinder axis
+        z = App.Vector(major_axis_vector.x, major_axis_vector.y, major_axis_vector.z)
+        z.normalize()
 
-        y = z.cross(x)
-        if y.Length < 1e-9:
-            if abs(z.z) < 0.9:
-                y = App.Vector(0, 0, 1).cross(z)
-            else:
-                y = App.Vector(1, 0, 0).cross(z)
-        y.normalize()
+        logger.debug(f"Creating LCS: center={center}, z={z}")
 
-        x = y.cross(z)
+        # Create CONSISTENT X-axis using a fixed reference direction
+        if abs(abs(z.z) - 1.0) < 0.01:
+            reference = App.Vector(1, 0, 0)
+            logger.debug("Z is vertical, using X reference")
+        else:
+            reference = App.Vector(0, 0, 1)
+            logger.debug(f"Z not vertical, using Z reference")
+
+        # X = reference × Z
+        x = reference.cross(z)
+        logger.debug(f"X (before normalization): {x}, length={x.Length}")
+
+        if x.Length < 1e-9:
+            reference = App.Vector(1, 0, 0) if abs(z.x) < 0.9 else App.Vector(0, 1, 0)
+            x = reference.cross(z)
+            logger.debug(f"X parallel, using alternate reference, new X: {x}")
         x.normalize()
 
+        # Y = Z × X
+        y = z.cross(x)
+        y.normalize()
+
+        logger.debug(f"Final LCS axes: X={x}, Y={y}, Z={z}")
+
+        # Create rotation matrix
         rotation = App.Rotation(
             App.Matrix(
                 x.x, y.x, z.x, 0,
@@ -541,6 +558,8 @@ class LoftWaferGenerator:
         )
 
         placement = App.Placement(center, rotation)
+        logger.debug(f"Created LCS placement: {placement}")
+
         return placement
 
     def generate_wafers(self):

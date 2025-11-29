@@ -312,13 +312,14 @@ class CurveFollowerLoft:
 
         return params
 
-    def generate_loft_wafers(self, curve_spec, wafer_settings):
+    def generate_loft_wafers(self, curve_spec, wafer_settings, base_placement=None):
         """
         Generate wafers using loft-based approach
 
         Args:
             curve_spec: Dictionary with curve type and parameters
             wafer_settings: Dictionary with wafer configuration
+            base_placement: Optional placement to transform curve points
         """
         self.wafer_settings = wafer_settings
 
@@ -328,14 +329,25 @@ class CurveFollowerLoft:
         self.generator = LoftWaferGenerator(cylinder_radius=cylinder_radius)
         logger.debug(f"Created LoftWaferGenerator with radius {cylinder_radius:.3f}")
 
-        curve_type = curve_spec.get('type')
-        curve_params = curve_spec.get('parameters', {})
-
         doc = App.ActiveDocument
         if doc is None:
             doc = App.newDocument("CurveGen")
 
-        points = self.load_curve_from_curves_module(curve_type, **curve_params)
+        # Use Curves class to handle full curve_spec with transformations and segments
+        from curves import Curves
+        curves_instance = Curves(doc, curve_spec)
+        points_array = curves_instance.get_curve_points()
+        logger.debug(f"Points from Curves class: {len(points_array)}")
+
+        # Convert numpy array to list of App.Vector
+        points = [App.Vector(float(p[0]), float(p[1]), float(p[2])) for p in points_array]
+
+        # Transform points by base_placement if provided
+        if base_placement is not None and not self._is_identity_placement(base_placement):
+            logger.debug(f"Transforming {len(points)} curve points by base_placement")
+            points = [base_placement.multVec(p) for p in points]
+
+        logger.debug(f"Generated {len(points)} curve points with transformations and segments applied")
 
         self.generator.create_spine_from_points(points)
         self.generator.create_loft_along_spine()
@@ -447,6 +459,19 @@ class CurveFollowerLoft:
 
         doc.recompute()
         logger.info("Curve visualization complete")
+
+    def _is_identity_placement(self, placement):
+        """Check if placement is identity (no transformation)"""
+        if placement is None:
+            return True
+
+        identity_pos = App.Vector(0, 0, 0)
+        identity_rot = App.Rotation(0, 0, 0, 1)
+
+        pos_close = (placement.Base - identity_pos).Length < 1e-6
+        rot_close = placement.Rotation.isSame(identity_rot, 1e-6)
+
+        return pos_close and rot_close
 
     def visualize_wafers(self, doc, show_lcs=True, show_cutting_planes=True):
         """
