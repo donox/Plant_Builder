@@ -72,13 +72,11 @@ workflow:
       parameters:
         radius: 8.0        # Match the traditional helix
         points: 100
-#      transformations:
-#        - operation: "rotate"
-#          axis: "z"
-#          angle: 0
       segment:
         start_fraction: 0.0
         end_fraction: 0.25
+    connection:
+      rotation_angle: 180
     wafer_settings:
       cylinder_diameter: 2.25
       min_height: 0.5          # Much smaller
@@ -98,13 +96,11 @@ workflow:
       parameters:
         radius: 8.0
         points: 35
-#      transformations:
-#        - operation: "rotate"
-#          axis: "z"
-#          angle: 0
       segment:
         start_fraction: 0.0
         end_fraction: 0.48
+    connection:
+      rotation_angle: 180
     wafer_settings:
       cylinder_diameter: 2.25
       min_height: 0.5          # Much smaller

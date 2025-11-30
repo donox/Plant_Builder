@@ -69,20 +69,14 @@ class Curves:
         """Apply all specified transformations to the base curve."""
         self.transformed_curve = self.base_curve.copy()
 
-        #DEBUG
-        logger.info((f"Curve spec: {self.curve_spec}"))
+        # Apply segment selection if specified
         segment_spec = self.curve_spec.get('segment')
-        logger.info(f"Segment spec: {segment_spec}")
         if segment_spec:
             logger.info(f"Applying segment selection: {segment_spec}")
             self.transformed_curve = self._select_segment(self.transformed_curve, segment_spec)
-            logger.info(f"Points after segment selection: {len(self.transformed_curve)}")
-
-        segment_spec = self.curve_spec.get('segment')
-        if segment_spec:
-            self.transformed_curve = self._select_segment(self.transformed_curve, segment_spec)
             logger.debug(f"Applied segment selection: {len(self.transformed_curve)} points")
 
+        # Apply other transformations
         transformations = self.curve_spec.get('transformations', [])
         for transform in transformations:
             operation = transform['operation']

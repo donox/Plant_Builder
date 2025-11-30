@@ -195,6 +195,7 @@ class Driver:
         curve_spec = operation.get('curve_spec', {})
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
+        connection_spec = operation.get('connection', {})
 
         # Determine base_placement for this segment
         if len(self.segment_list) == 0:
@@ -214,7 +215,8 @@ class Driver:
             curve_spec=curve_spec,
             wafer_settings=wafer_settings,
             segment_settings=segment_settings,
-            base_placement=base_placement
+            base_placement=base_placement,
+            connection_spec=connection_spec
         )
 
         logger.debug(f"Created LoftSegment: {segment_name}")
@@ -280,6 +282,11 @@ class Driver:
         """
         logger.debug(f"Aligning segment '{segment.name}' to '{prev_segment.name}'")
 
+        # DEBUG: Check what's in connection_spec
+        logger.debug(f"Type of connection_spec: {type(segment.connection_spec)}")
+        logger.debug(f"Full connection_spec contents: {segment.connection_spec}")
+        logger.debug(f"connection_spec repr: {repr(segment.connection_spec)}")
+
         # 1. Get previous segment's EXIT LCS in world coordinates
         if not prev_segment.wafer_list or not prev_segment.wafer_list[-1].lcs2:
             logger.warning("Previous segment has no exit LCS")
@@ -301,6 +308,34 @@ class Driver:
         adjusted_placement = prev_world_exit.multiply(curr_local_entry.inverse())
         logger.debug(f"Calculated adjusted placement: {adjusted_placement}")
 
+        # Apply additional Z-axis rotation if specified in connection_spec
+        rotation_angle = segment.connection_spec.get('rotation_angle', 0)
+        logger.debug(f"Connection spec: {segment.connection_spec}")
+        logger.debug(f"Rotation angle from connection_spec: {rotation_angle}")
+
+        if rotation_angle != 0:
+            logger.info(f"Applying Z-axis rotation: {rotation_angle}°")
+
+            # Get the Z-axis from the PREVIOUS segment's exit LCS (the connection axis)
+            connection_z_axis = prev_world_exit.Rotation.multVec(App.Vector(0, 0, 1))
+            connection_point = prev_world_exit.Base
+
+            # Create rotation around this Z-axis
+            additional_rotation = App.Rotation(connection_z_axis, rotation_angle)
+
+            # Apply rotation to the adjusted placement
+            # First, rotate the position around the connection point
+            offset = adjusted_placement.Base - connection_point
+            rotated_offset = additional_rotation.multVec(offset)
+            adjusted_placement.Base = connection_point + rotated_offset
+
+            # Then apply rotation to the orientation
+            adjusted_placement.Rotation = additional_rotation.multiply(adjusted_placement.Rotation)
+
+            logger.info(f"Applied additional Z-axis rotation: {rotation_angle}°")
+            logger.debug(f"Adjusted placement after rotation: {adjusted_placement}")
+        else:
+            logger.debug("No additional rotation specified (rotation_angle is 0 or not specified)")
         # 4. Verify alignment (for debugging)
 
         curr_world_entry = adjusted_placement.multiply(curr_local_entry)

@@ -25,7 +25,8 @@ class LoftSegment:
     - Visualization control
     """
 
-    def __init__(self, doc, name, curve_spec, wafer_settings, segment_settings, base_placement=None):
+    def __init__(self, doc, name, curve_spec, wafer_settings, segment_settings, base_placement=None,
+                 connection_spec=None):
         """
         Initialize loft segment
 
@@ -36,6 +37,7 @@ class LoftSegment:
             wafer_settings: Dictionary with wafer configuration
             segment_settings: Dictionary with segment settings
             base_placement: App.Placement for segment positioning (default: origin)
+            connection_spec: Dictionary with connection parameters (rotation_angle, etc.)
         """
         self.doc = doc
         self.name = name
@@ -43,6 +45,7 @@ class LoftSegment:
         self.wafer_settings = wafer_settings
         self.segment_settings = segment_settings
         self.base_placement = base_placement if base_placement else App.Placement()
+        self.connection_spec = connection_spec if connection_spec else {}
 
         # Internal state
         self.follower = None
