@@ -83,12 +83,12 @@ class Driver:
     def workflow(self):
         """Execute the complete workflow"""
         logger.info("Running: workflow()")
-
-        # RUN TEST AND EXIT
-
-        run_transform_test()
-        logger.info("Test complete - exiting")
-        return
+        #
+        # # RUN TEST AND EXIT
+        #
+        # run_transform_test()
+        # logger.info("Test complete - exiting")
+        # return
 
         # Setup document
         self.setup_document()
@@ -197,12 +197,11 @@ class Driver:
         segment_settings = operation.get('segment_settings', {})
 
         # Determine base_placement for this segment
-        # For now, just use identity - we'll adjust after generation
         if len(self.segment_list) == 0:
             # First segment - use current_placement
             base_placement = self.current_placement
         else:
-            # Subsequent segments - start at identity, will adjust after
+            # Subsequent segments - start at origin, will adjust after generation
             base_placement = App.Placement()
 
         logger.debug(f"Building segment '{segment_name}' with initial placement {base_placement}")
@@ -226,47 +225,12 @@ class Driver:
         # Visualize (creates Part and adds objects)
         segment.visualize(self.doc)
 
-        # Adjust Part placement for segment alignment (segments 2+)
+        # Align to previous segment if not the first
         if len(self.segment_list) > 0:
-            # Get the world coordinates of the two LCS we need to align
+            # Calculate adjusted placement
+            adjusted_placement = self._align_segment_to_previous(segment, self.segment_list[-1])
 
-            # 1. Previous segment's EXIT (lcs2 of last wafer) in WORLD coordinates
-            prev_segment = self.segment_list[-1]
-            if prev_segment.wafer_list and prev_segment.wafer_list[-1].lcs2:
-                # Local lcs2 from previous segment
-                prev_local_exit = prev_segment.wafer_list[-1].lcs2
-                # Transform to world coordinates
-                prev_world_exit = prev_segment.base_placement.multiply(prev_local_exit)
-                logger.debug(f"Previous segment EXIT (world): {prev_world_exit}")
-            else:
-                logger.warning("Previous segment has no exit LCS")
-                prev_world_exit = prev_segment.base_placement
-
-            # 2. Current segment's ENTRY (lcs1 of first wafer) in WORLD coordinates (before adjustment)
-            if segment.wafer_list and segment.wafer_list[0].lcs1:
-                # Local lcs1 from current segment
-                curr_local_entry = segment.wafer_list[0].lcs1
-                # Current segment Part is at identity, so world = local
-                curr_world_entry = segment.base_placement.multiply(curr_local_entry)
-                logger.debug(f"Current segment ENTRY (world, before): {curr_world_entry}")
-                logger.debug(f"Current segment ENTRY (local): {curr_local_entry}")
-            else:
-                logger.warning("Current segment has no entry LCS")
-                curr_local_entry = App.Placement()
-
-            # 3. Calculate Part placement adjustment
-            # We want: prev_world_exit = adjusted_part_placement * curr_local_entry
-            # So: adjusted_part_placement = prev_world_exit * curr_local_entry.inverse()
-
-            adjusted_placement = prev_world_exit.multiply(curr_local_entry.inverse())
-            logger.debug(f"Adjusted Part placement: {adjusted_placement}")
-
-            logger.debug(f"Verification - multiplying back:")
-            test_result = adjusted_placement.multiply(curr_local_entry)
-            logger.debug(f"adjusted_placement * curr_local_entry = {test_result}")
-            logger.debug(f"Should equal prev_world_exit = {prev_world_exit}")
-
-            # 4. Find and update the Part object
+            # Find and update the Part object
             part_name_variations = [
                 f"{segment_name.replace(' ', '_')}_Part",
                 f"{segment_name}_Part",
@@ -284,14 +248,6 @@ class Driver:
                 part_obj.Placement = adjusted_placement
                 segment.base_placement = adjusted_placement
                 logger.debug(f"Part placement AFTER: {part_obj.Placement}")
-
-                # Verify: compute where entry is NOW in world coordinates
-                new_world_entry = adjusted_placement.multiply(curr_local_entry)
-                logger.debug(f"Current segment ENTRY (world, after): {new_world_entry}")
-                logger.debug(f"Should match previous EXIT: {prev_world_exit}")
-
-                prev_local_exit = prev_segment.wafer_list[-1].lcs2
-                logger.debug(f"Previous segment EXIT (local): {prev_local_exit}")
             else:
                 logger.warning(f"Could not find Part object. Tried: {part_name_variations}")
 
@@ -307,6 +263,72 @@ class Driver:
         # Generate cutting list if requested
         if self.global_settings.get('print_cuts', False):
             self._generate_cutting_list(segment)
+
+    def _align_segment_to_previous(self, segment, prev_segment):
+        """
+        Align a segment to connect with the previous segment.
+
+        Uses LCS-based alignment: aligns the current segment's entry LCS (lcs1)
+        with the previous segment's exit LCS (lcs2).
+
+        Args:
+            segment: LoftSegment to be aligned
+            prev_segment: LoftSegment to align to
+
+        Returns:
+            App.Placement: The adjusted placement for segment's Part
+        """
+        logger.debug(f"Aligning segment '{segment.name}' to '{prev_segment.name}'")
+
+        # 1. Get previous segment's EXIT LCS in world coordinates
+        if not prev_segment.wafer_list or not prev_segment.wafer_list[-1].lcs2:
+            logger.warning("Previous segment has no exit LCS")
+            return segment.base_placement
+
+        prev_local_exit = prev_segment.wafer_list[-1].lcs2
+        prev_world_exit = prev_segment.base_placement.multiply(prev_local_exit)
+        logger.debug(f"Previous segment EXIT (world): {prev_world_exit}")
+
+        # 2. Get current segment's ENTRY LCS in local coordinates
+        if not segment.wafer_list or not segment.wafer_list[0].lcs1:
+            logger.warning("Current segment has no entry LCS")
+            return segment.base_placement
+
+        curr_local_entry = segment.wafer_list[0].lcs1
+        logger.debug(f"Current segment ENTRY (local): {curr_local_entry}")
+
+        # 3. Calculate adjusted placement: prev_exit * curr_entry.inverse()
+        adjusted_placement = prev_world_exit.multiply(curr_local_entry.inverse())
+        logger.debug(f"Calculated adjusted placement: {adjusted_placement}")
+
+        # 4. Verify alignment (for debugging)
+
+        curr_world_entry = adjusted_placement.multiply(curr_local_entry)
+        pos_match = (curr_world_entry.Base - prev_world_exit.Base).Length
+        rot_match = curr_world_entry.Rotation.isSame(prev_world_exit.Rotation, 1e-6)
+
+        logger.debug(f"Position difference: {pos_match}")
+        logger.debug(f"Rotation match: {rot_match}")
+
+        # Check individual axes
+        prev_x = prev_world_exit.Rotation.multVec(App.Vector(1, 0, 0))
+        prev_y = prev_world_exit.Rotation.multVec(App.Vector(0, 1, 0))
+        prev_z = prev_world_exit.Rotation.multVec(App.Vector(0, 0, 1))
+
+        curr_x = curr_world_entry.Rotation.multVec(App.Vector(1, 0, 0))
+        curr_y = curr_world_entry.Rotation.multVec(App.Vector(0, 1, 0))
+        curr_z = curr_world_entry.Rotation.multVec(App.Vector(0, 0, 1))
+
+        logger.debug(f"Prev X={prev_x}, Curr X={curr_x}, dot={prev_x.dot(curr_x):.6f}")
+        logger.debug(f"Prev Y={prev_y}, Curr Y={curr_y}, dot={prev_y.dot(curr_y):.6f}")
+        logger.debug(f"Prev Z={prev_z}, Curr Z={curr_z}, dot={prev_z.dot(curr_z):.6f}")
+
+        if pos_match < 1e-6 and rot_match:
+            logger.debug("✓ LCS alignment verified")
+        else:
+            logger.warning(f"✗ LCS alignment verification failed: pos={pos_match}, rot={rot_match}")
+
+        return adjusted_placement
 
 
     def _execute_set_position(self, operation):

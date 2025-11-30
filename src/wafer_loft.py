@@ -333,6 +333,7 @@ class LoftWaferGenerator:
             try:
                 center1 = plane1['point']
                 center2 = plane2['point']
+                logger.debug(f"Wafer {i}: center1={center1}, center2={center2}")
                 chord_vector = center2 - center1
                 chord_length = chord_vector.Length
 
@@ -597,13 +598,14 @@ class LoftWaferGenerator:
                 lcs1 = self._create_lcs(
                     ellipse1['center'],
                     ellipse1['normal'],
-                    ellipse1['major_axis_vector']
+                    geometry['chord_vector']
                 )
+
 
                 lcs2 = self._create_lcs(
                     ellipse2['center'],
                     ellipse2['normal'],
-                    ellipse2['major_axis_vector']
+                    geometry['chord_vector']
                 )
 
                 wafer_obj = Wafer(
