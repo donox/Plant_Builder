@@ -324,6 +324,104 @@ class LoftWaferGenerator:
         min_chord_threshold = self.cylinder_radius * 0.01
         min_volume_threshold = 0.001
 
+        def get_face_at_position(solid, target_point, tolerance=0.5):
+            """Find face whose center is closest to target_point"""
+            best_face = None
+            min_dist = float('inf')
+            for face in solid.Faces:
+                face_center = face.CenterOfMass
+                dist = (face_center - target_point).Length
+                if dist < min_dist:
+                    min_dist = dist
+                    best_face = face
+            if min_dist < tolerance:
+                return best_face
+            else:
+                logger.warning(f"No face found near {target_point}, closest was {min_dist:.4f} away")
+                return None
+
+        def get_ellipse_from_face(face, target_center):
+            """Extract ellipse parameters from actual face geometry"""
+            if face is None:
+                return None
+
+            # Get face normal (actual, from geometry)
+            normal = face.normalAt(0, 0)
+            center = face.CenterOfMass
+            logger.debug(
+                f"Face CenterOfMass={center}, target was {target_center}, distance={(center - target_center).Length:.6f}")
+
+            # Find the ellipse or circle edge
+            for edge in face.Edges:
+                curve = edge.Curve
+                # Check if it's an ellipse or circle
+                if hasattr(curve, 'Radius'):
+                    # It's a circle
+                    radius = curve.Radius
+                    major_radius = radius
+                    minor_radius = radius
+
+                    # For circles, choose a consistent major axis direction
+                    # Use the face normal to pick perpendicular direction
+                    axis = curve.Axis if hasattr(curve, 'Axis') else normal
+                    if abs(axis.z) < 0.9:
+                        major_axis_dir = App.Vector(0, 0, 1).cross(axis)
+                    else:
+                        major_axis_dir = App.Vector(1, 0, 0).cross(axis)
+                    major_axis_dir.normalize()
+
+                    # Ensure major_axis_dir is in the plane
+                    major_axis_dir = major_axis_dir - normal * (major_axis_dir.dot(normal))
+                    if major_axis_dir.Length > 1e-9:
+                        major_axis_dir.normalize()
+
+                    logger.debug(f"Extracted circle: center={center}, normal={normal}, radius={radius}")
+
+                elif hasattr(curve, 'MajorRadius'):
+                    # It's an ellipse
+                    major_radius = curve.MajorRadius
+                    minor_radius = curve.MinorRadius
+
+                    # Get major axis direction from the curve
+                    if hasattr(curve, 'XAxis'):
+                        major_axis_dir = curve.XAxis
+                    else:
+                        # Fallback
+                        if abs(normal.z) < 0.9:
+                            major_axis_dir = App.Vector(0, 0, 1).cross(normal)
+                        else:
+                            major_axis_dir = App.Vector(1, 0, 0).cross(normal)
+                        major_axis_dir.normalize()
+
+                    # Ensure major_axis_dir is in the plane (perpendicular to normal)
+                    major_axis_dir = major_axis_dir - normal * (major_axis_dir.dot(normal))
+                    if major_axis_dir.Length > 1e-9:
+                        major_axis_dir.normalize()
+                    else:
+                        # Fallback if parallel
+                        if abs(normal.z) < 0.9:
+                            major_axis_dir = App.Vector(0, 0, 1).cross(normal)
+                        else:
+                            major_axis_dir = App.Vector(1, 0, 0).cross(normal)
+                        major_axis_dir.normalize()
+
+                    logger.debug(
+                        f"Extracted ellipse: center={center}, normal={normal}, major_axis_dir={major_axis_dir}")
+                else:
+                    continue
+
+                return {
+                    'center': center,
+                    'normal': normal,
+                    'major_radius': major_radius,
+                    'minor_radius': minor_radius,
+                    'major_axis_vector': major_axis_dir
+                }
+
+            # No ellipse or circle found
+            logger.warning(f"No ellipse/circle edge found on face at {center}")
+            return None
+
         for i in range(len(self.cutting_planes) - 1):
             plane1 = self.cutting_planes[i]
             plane2 = self.cutting_planes[i + 1]
@@ -333,7 +431,6 @@ class LoftWaferGenerator:
             try:
                 center1 = plane1['point']
                 center2 = plane2['point']
-                logger.debug(f"Wafer {i}: center1={center1}, center2={center2}")
                 chord_vector = center2 - center1
                 chord_length = chord_vector.Length
 
@@ -375,7 +472,27 @@ class LoftWaferGenerator:
 
                     chord_vectors.append(chord_vector)
 
-                    geometry = self._calculate_basic_geometry(plane1, plane2, chord_vector)
+                    # Extract ACTUAL ellipse geometry from the wafer faces
+                    actual_face1 = get_face_at_position(wafer, center1)
+                    actual_face2 = get_face_at_position(wafer, center2)
+
+                    actual_ellipse1 = get_ellipse_from_face(actual_face1, center1)
+                    actual_ellipse2 = get_ellipse_from_face(actual_face2, center2)
+
+                    if actual_ellipse1 is None or actual_ellipse2 is None:
+                        logger.error(f"Wafer {i} failed to extract ellipse geometry")
+                        wafer_data_list.append(None)
+                        continue
+
+                    # Use actual geometry for the wafer data
+                    geometry = {
+                        'chord_vector': chord_vector,
+                        'chord_length': chord_length,
+                        'ellipse1': actual_ellipse1,
+                        'ellipse2': actual_ellipse2,
+                        'rotation_angle_rad': 0.0,
+                        'rotation_angle_deg': 0.0,
+                    }
 
                     wafer_data_list.append({
                         'solid': wafer,
@@ -392,6 +509,7 @@ class LoftWaferGenerator:
                 logger.error(f"Wafer {i} error: {e}", exc_info=True)
                 wafer_data_list.append(None)
 
+        # Rotation angle calculation remains the same...
         logger.debug("Calculating rotation angles")
 
         chord_0a = None
@@ -504,7 +622,7 @@ class LoftWaferGenerator:
             wafer_data['geometry']['chord_azimuth_deg'] = chord_azimuth
 
             logger.coord(f"Wafer {i}: rotation = {rotation_angle_deg:.2f}°, "
-                        f"collinearity = {collinearity_angle:.4f}°, azimuth = {chord_azimuth:.2f}°")
+                         f"collinearity = {collinearity_angle:.4f}°, azimuth = {chord_azimuth:.2f}°")
 
         successful = sum(1 for w in wafer_data_list if w is not None)
         total_volume = sum(w['solid'].Volume for w in wafer_data_list if w is not None)
@@ -516,50 +634,110 @@ class LoftWaferGenerator:
 
         return wafer_data_list
 
-    def _create_lcs(self, center, z_axis, major_axis_vector):
-        """Create Local Coordinate System with CONSISTENT orientation."""
-        # Z-axis along cylinder axis
-        z = App.Vector(major_axis_vector.x, major_axis_vector.y, major_axis_vector.z)
-        z.normalize()
+    def _create_lcs(self, center, normal, major_axis_dir):
+        """
+        Create LCS placement from actual ellipse geometry
 
-        logger.debug(f"Creating LCS: center={center}, z={z}")
+        Args:
+            center: Center point of the ellipse
+            normal: Ellipse normal vector (becomes Z-axis direction)
+            major_axis_dir: Ellipse major axis vector (becomes X-axis direction)
 
-        # Create CONSISTENT X-axis using a fixed reference direction
-        if abs(abs(z.z) - 1.0) < 0.01:
-            reference = App.Vector(1, 0, 0)
-            logger.debug("Z is vertical, using X reference")
+        Returns:
+            App.Placement: LCS with X along major axis, Z along normal, Y completing right-hand rule
+        """
+        logger.debug(f"_create_lcs called:")
+        logger.debug(f"  center={center}")
+        logger.debug(f"  normal (target Z)={normal}")
+        logger.debug(f"  major_axis_dir (target X)={major_axis_dir}")
+
+        # Normalize Z-axis (normal)
+        z_axis = App.Vector(normal.x, normal.y, normal.z)
+        z_axis_length = z_axis.Length
+        logger.debug(f"  Z-axis length before normalization: {z_axis_length:.6f}")
+
+        if z_axis_length < 1e-9:
+            logger.error(f"  Z-axis has zero length! Using fallback (0,0,1)")
+            z_axis = App.Vector(0, 0, 1)
         else:
-            reference = App.Vector(0, 0, 1)
-            logger.debug(f"Z not vertical, using Z reference")
+            z_axis.normalize()
 
-        # X = reference × Z
-        x = reference.cross(z)
-        logger.debug(f"X (before normalization): {x}, length={x.Length}")
+        # Normalize X-axis (major axis)
+        x_axis = App.Vector(major_axis_dir.x, major_axis_dir.y, major_axis_dir.z)
+        x_axis_length = x_axis.Length
+        logger.debug(f"  X-axis length before normalization: {x_axis_length:.6f}")
 
-        if x.Length < 1e-9:
-            reference = App.Vector(1, 0, 0) if abs(z.x) < 0.9 else App.Vector(0, 1, 0)
-            x = reference.cross(z)
-            logger.debug(f"X parallel, using alternate reference, new X: {x}")
-        x.normalize()
+        if x_axis_length < 1e-9:
+            logger.error(f"  X-axis has zero length! Using fallback")
+            if abs(z_axis.z) < 0.9:
+                x_axis = App.Vector(0, 0, 1).cross(z_axis)
+            else:
+                x_axis = App.Vector(1, 0, 0).cross(z_axis)
+            x_axis.normalize()
+        else:
+            x_axis.normalize()
 
-        # Y = Z × X
-        y = z.cross(x)
-        y.normalize()
+        # Ensure X is perpendicular to Z (project X onto plane perpendicular to Z)
+        dot_product = x_axis.dot(z_axis)
+        logger.debug(f"  X·Z dot product: {dot_product:.9f}")
 
-        logger.debug(f"Final LCS axes: X={x}, Y={y}, Z={z}")
+        if abs(dot_product) > 1e-6:
+            logger.debug(f"  X and Z are not perpendicular, projecting X onto Z's perpendicular plane")
+            x_axis = x_axis - z_axis * dot_product
+            x_axis_length_after_projection = x_axis.Length
+            logger.debug(f"  X-axis length after projection: {x_axis_length_after_projection:.6f}")
 
-        # Create rotation matrix
-        rotation = App.Rotation(
-            App.Matrix(
-                x.x, y.x, z.x, 0,
-                x.y, y.y, z.y, 0,
-                x.z, y.z, z.z, 0,
-                0, 0, 0, 1
-            )
-        )
+            if x_axis_length_after_projection > 1e-9:
+                x_axis.normalize()
+            else:
+                logger.warning(f"  X-axis became zero after projection! Using fallback")
+                if abs(z_axis.z) < 0.9:
+                    x_axis = App.Vector(0, 0, 1).cross(z_axis)
+                else:
+                    x_axis = App.Vector(1, 0, 0).cross(z_axis)
+                x_axis.normalize()
+        else:
+            logger.debug(f"  X and Z are already perpendicular")
 
-        placement = App.Placement(center, rotation)
-        logger.debug(f"Created LCS placement: {placement}")
+        # Calculate Y = Z × X (right-hand rule)
+        y_axis = z_axis.cross(x_axis)
+        y_axis_length = y_axis.Length
+        logger.debug(f"  Y-axis (Z×X) length: {y_axis_length:.6f}")
+
+        if y_axis_length < 1e-9:
+            logger.error(f"  Y-axis has zero length! X and Z might be parallel")
+            # Emergency fallback
+            y_axis = App.Vector(0, 1, 0)
+        else:
+            y_axis.normalize()
+
+        # Verify orthogonality
+        xy_dot = x_axis.dot(y_axis)
+        yz_dot = y_axis.dot(z_axis)
+        zx_dot = z_axis.dot(x_axis)
+        logger.debug(f"  Orthogonality check: X·Y={xy_dot:.9f}, Y·Z={yz_dot:.9f}, Z·X={zx_dot:.9f}")
+
+        if abs(xy_dot) > 1e-6 or abs(yz_dot) > 1e-6 or abs(zx_dot) > 1e-6:
+            logger.warning(f"  Axes are not orthogonal!")
+
+        logger.debug(f"  Final LCS axes:")
+        logger.debug(f"    X={x_axis} (length={x_axis.Length:.6f})")
+        logger.debug(f"    Y={y_axis} (length={y_axis.Length:.6f})")
+        logger.debug(f"    Z={z_axis} (length={z_axis.Length:.6f})")
+
+        # Create placement from axes
+        placement = App.Placement()
+        placement.Base = center
+
+        # Build rotation matrix: columns are X, Y, Z axes
+        rotation_matrix = App.Matrix()
+        rotation_matrix.A11, rotation_matrix.A12, rotation_matrix.A13 = x_axis.x, y_axis.x, z_axis.x
+        rotation_matrix.A21, rotation_matrix.A22, rotation_matrix.A23 = x_axis.y, y_axis.y, z_axis.y
+        rotation_matrix.A31, rotation_matrix.A32, rotation_matrix.A33 = x_axis.z, y_axis.z, z_axis.z
+
+        placement.Rotation = App.Rotation(rotation_matrix)
+
+        logger.debug(f"  Created LCS placement: {placement}")
 
         return placement
 
@@ -595,17 +773,60 @@ class LoftWaferGenerator:
                 ellipse1 = geometry['ellipse1']
                 ellipse2 = geometry['ellipse2']
 
-                lcs1 = self._create_lcs(
-                    ellipse1['center'],
-                    ellipse1['normal'],
-                    geometry['chord_vector']
+                # Get chord direction for consistent orientation
+                chord_direction = App.Vector(
+                    geometry['chord_vector'].x,
+                    geometry['chord_vector'].y,
+                    geometry['chord_vector'].z
+                )
+                chord_direction.normalize()
+
+                # For lcs1 (entry): ensure Z-axis points along the chord direction
+                normal1 = App.Vector(
+                    ellipse1['normal'].x,
+                    ellipse1['normal'].y,
+                    ellipse1['normal'].z
+                )
+                major_axis1 = App.Vector(
+                    ellipse1['major_axis_vector'].x,
+                    ellipse1['major_axis_vector'].y,
+                    ellipse1['major_axis_vector'].z
                 )
 
+                # Check if normal points opposite to chord direction
+                if normal1.dot(chord_direction) < 0:
+                    logger.debug(f"Wafer {i} lcs1: Flipping normal to align with chord direction")
+                    normal1 = -normal1
+                    major_axis1 = -major_axis1  # Flip major axis to maintain right-hand rule
+
+                lcs1 = self._create_lcs(
+                    ellipse1['center'],
+                    normal1,
+                    major_axis1
+                )
+
+                # For lcs2 (exit): ensure Z-axis points along the chord direction
+                normal2 = App.Vector(
+                    ellipse2['normal'].x,
+                    ellipse2['normal'].y,
+                    ellipse2['normal'].z
+                )
+                major_axis2 = App.Vector(
+                    ellipse2['major_axis_vector'].x,
+                    ellipse2['major_axis_vector'].y,
+                    ellipse2['major_axis_vector'].z
+                )
+
+                # Check if normal points opposite to chord direction
+                if normal2.dot(chord_direction) < 0:
+                    logger.debug(f"Wafer {i} lcs2: Flipping normal to align with chord direction")
+                    normal2 = -normal2
+                    major_axis2 = -major_axis2  # Flip major axis to maintain right-hand rule
 
                 lcs2 = self._create_lcs(
                     ellipse2['center'],
-                    ellipse2['normal'],
-                    geometry['chord_vector']
+                    normal2,
+                    major_axis2
                 )
 
                 wafer_obj = Wafer(
