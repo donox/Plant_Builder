@@ -27,13 +27,9 @@ output_files:
 workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
-    patterns:
-      - "helix.*"
-      - "Curve.*"
-      - "temp.*"
-      - "close"
-      - "comp"
-      - "base*"
+    keep_patterns:
+      - "helixxx.*"
+
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"

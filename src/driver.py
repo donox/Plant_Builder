@@ -11,6 +11,7 @@ Orchestrates the build workflow by:
 import sys
 import os
 import yaml
+import math
 from pathlib import Path
 import FreeCAD as App
 import Part
@@ -43,6 +44,9 @@ class Driver:
         self.segment_list = []
         self.global_settings = {}
         self.current_placement = app.Placement()
+        self.output_files = {}
+        self.metadata = {}
+
 
     def load_configuration(self, config_file):
         """
@@ -60,6 +64,8 @@ class Driver:
 
             # Extract global settings
             self.global_settings = self.config.get('global_settings', {})
+            self.output_files = self.config.get('output_files', {})
+            self.metadata = self.config.get('metadata', {})
 
             logger.info("✅ Config loaded")
 
@@ -108,6 +114,10 @@ class Driver:
                 logger.error(f"Operation failed: {e}", exc_info=True)
                 raise
 
+        # Generate cutting list for ALL segments at the end
+        if self.global_settings.get('print_cuts', False):
+            self._generate_cutting_list()
+
         logger.info("✅ Workflow complete")
 
     def _execute_operation(self, operation):
@@ -125,7 +135,7 @@ class Driver:
 
         # Route to appropriate handler
         if operation_type == 'remove_objects':
-            self._execute_remove_objects(operation)
+            self._remove_objects(operation)
         elif operation_type == 'build_segment':
             self._execute_build_segment(operation)
         elif operation_type == 'set_position':
@@ -133,44 +143,137 @@ class Driver:
         else:
             logger.warning(f"Unknown operation type: {operation_type}")
 
-    def _execute_remove_objects(self, operation):
-        """Remove objects matching patterns"""
-        patterns = operation.get('patterns', [])
+    def _remove_objects(self, operation):
+        """Remove objects from the FreeCAD document except those specified to keep"""
+        # Check if keep_patterns key exists (even if empty)
+        if 'keep_patterns' not in operation:
+            logger.info("No keep_patterns specified - will remove all objects")
+            keep_patterns = []
+        else:
+            keep_patterns = operation.get('keep_patterns', [])
+            if not keep_patterns:
+                logger.info("Empty keep_patterns list - will remove all objects")
+            else:
+                logger.info(f"Keeping objects matching patterns: {keep_patterns}")
 
-        if not patterns:
-            logger.warning("No patterns specified for remove_objects operation")
+        # Get all objects in the document
+        all_objects = App.ActiveDocument.Objects
+        logger.info(f"Total objects in document: {len(all_objects)}")
+
+        # Build set of objects to keep (including their children)
+        objects_to_keep = set()
+
+        # Only process keep patterns if they exist
+        if keep_patterns:
+            for obj in all_objects:
+                # Check if this object matches any keep pattern
+                should_keep = False
+                matched_pattern = None
+
+                for pattern in keep_patterns:
+                    # Exact match
+                    if obj.Label == pattern or obj.Name == pattern:
+                        should_keep = True
+                        matched_pattern = pattern
+                        break
+                    # Wildcard at end: "Right*" matches "Right_Part", "Right_Loft"
+                    elif pattern.endswith('*') and (
+                            obj.Label.startswith(pattern[:-1]) or obj.Name.startswith(pattern[:-1])):
+                        should_keep = True
+                        matched_pattern = pattern
+                        break
+                    # Wildcard at start: "*Loft" matches "base_Loft", "Curve_Left_Loft"
+                    elif pattern.startswith('*') and (
+                            obj.Label.endswith(pattern[1:]) or obj.Name.endswith(pattern[1:])):
+                        should_keep = True
+                        matched_pattern = pattern
+                        break
+                    # Substring match: "Right" matches "Curve_Right_Part"
+                    elif pattern in obj.Label or pattern in obj.Name:
+                        should_keep = True
+                        matched_pattern = pattern
+                        break
+
+                if should_keep:
+                    logger.info(f"✓ MATCHED: {obj.Label} (pattern: '{matched_pattern}')")
+                    objects_to_keep.add(obj)
+
+                    # Add all children recursively
+                    self._add_children_to_set(obj, objects_to_keep)
+
+        logger.info(f"Objects to keep: {len(objects_to_keep)}")
+        if objects_to_keep:
+            logger.debug("Complete list of objects to keep:")
+            for obj in objects_to_keep:
+                logger.debug(f"  KEEP: {obj.Label}")
+
+        # CRITICAL: Break parent-child links for kept objects whose parents will be removed
+        for obj in objects_to_keep:
+            # Check if this object has a parent that will be removed
+            parent = self._get_parent(obj)
+            if parent and parent not in objects_to_keep:
+                logger.info(f"Breaking link: removing {obj.Label} from parent {parent.Label}")
+                self._remove_from_parent(obj, parent)
+
+        # Build removal list with names captured before deletion
+        objects_to_remove = []
+        for obj in all_objects:
+            if obj not in objects_to_keep:
+                objects_to_remove.append((obj.Name, obj.Label))
+
+        logger.info(f"Objects marked for removal: {len(objects_to_remove)}")
+
+        if len(objects_to_remove) == 0:
+            logger.info("No objects to remove")
             return
 
-        logger.debug(f"Operation details: remove_objects")
-
-        # Build list of objects to remove FIRST (before deleting anything)
-        objects_to_remove = []
-        for obj in self.doc.Objects:
-            try:
-                obj_name = obj.Name  # Access Name before any deletions
-                for pattern in patterns:
-                    if self._matches_pattern(obj_name, pattern):
-                        objects_to_remove.append(obj)
-                        break  # Don't check other patterns for this object
-            except ReferenceError:
-                # Object already deleted (e.g., child of a Part)
-                continue
-
-        # Now remove all objects
+        # Now remove them
         removed_count = 0
-        for obj in objects_to_remove:
+        for obj_name, obj_label in objects_to_remove:
             try:
-                logger.debug(f"Removing: {obj.Name}")
-                self.doc.removeObject(obj.Name)
-                removed_count += 1
-            except ReferenceError:
-                # Object already deleted as part of removing a parent
-                logger.debug(f"Object already removed (was child of parent)")
-                pass
+                # Check if object still exists
+                obj = App.ActiveDocument.getObject(obj_name)
+                if obj:
+                    logger.debug(f"Removing: {obj_label}")
+                    App.ActiveDocument.removeObject(obj_name)
+                    removed_count += 1
+                else:
+                    logger.debug(f"Already removed: {obj_label}")
             except Exception as e:
-                logger.warning(f"Could not remove object: {e}")
+                logger.warning(f"Could not remove {obj_label}: {e}")
 
-        logger.info(f"Removed {removed_count} objects")
+        logger.info(f"✓ Removed {removed_count} objects, kept {len(objects_to_keep)} objects")
+        App.ActiveDocument.recompute()
+
+    def _get_parent(self, obj):
+        """Find the parent object that contains this object in its Group"""
+        for potential_parent in App.ActiveDocument.Objects:
+            if hasattr(potential_parent, 'Group') and obj in potential_parent.Group:
+                return potential_parent
+        return None
+
+    def _remove_from_parent(self, obj, parent):
+        """Remove an object from its parent's Group without deleting it"""
+        if hasattr(parent, 'Group'):
+            new_group = [child for child in parent.Group if child != obj]
+            parent.Group = new_group
+            logger.debug(f"  Removed {obj.Label} from {parent.Label}'s Group")
+
+    def _add_children_to_set(self, obj, object_set):
+        """Recursively add all children of an object to the set"""
+        if hasattr(obj, 'Group'):
+            for child in obj.Group:
+                if child not in object_set:
+                    logger.debug(f"  Keeping child: {child.Label}")
+                    object_set.add(child)
+                    self._add_children_to_set(child, object_set)
+
+        if hasattr(obj, 'OutList'):
+            for child in obj.OutList:
+                if child not in object_set:
+                    logger.debug(f"  Keeping dependency: {child.Label}")
+                    object_set.add(child)
+                    self._add_children_to_set(child, object_set)
 
     def _matches_pattern(self, name, pattern):
         """Check if name matches pattern (supports wildcards)"""
@@ -261,10 +364,6 @@ class Driver:
         logger.debug(f"Updated current_placement to {self.current_placement}")
 
         logger.info(f"✓ Created segment '{segment_name}' with {len(segment.wafer_list)} wafers")
-
-        # Generate cutting list if requested
-        if self.global_settings.get('print_cuts', False):
-            self._generate_cutting_list(segment)
 
     def _align_segment_to_previous(self, segment, prev_segment):
         """
@@ -378,21 +477,158 @@ class Driver:
 
         logger.debug(f"Position set to: {self.current_placement}")
 
-    def _generate_cutting_list(self, segment):
-        """Generate cutting list for a segment"""
-        output_files = self.config.get('output_files', {})
-        working_dir = output_files.get('working_directory', '/tmp')
-        cuts_filename = output_files.get('cuts_file', 'cutting_list.txt')
+    def _generate_cutting_list(self):
+        """Generate cutting list for all segments"""
+        output_file = self.output_files.get('cuts_file')
+        if not os.path.isabs(output_file):
+            base_dir = self.output_files.get('working_directory', '')
+            output_file = os.path.join(base_dir, output_file)
+            logger.debug(f"Generating cutting list with file: {output_file}")
 
-        output_file = os.path.join(working_dir, cuts_filename)
+        if not output_file:
+            logger.warning("No cutting list file specified")
+            return
 
         logger.debug(f"Generating cutting list: {output_file}")
 
-        try:
-            self.build_lofted_cut_list(segment, output_file)
-            logger.info(f"✓ Cutting list written: {output_file}")
-        except Exception as e:
-            logger.error(f"Failed to generate cutting list: {e}")
+        with open(output_file, 'w') as f:
+            # Header
+            f.write("=" * 90 + "\n")
+            f.write("CUTTING LIST - LOFTED METHOD\n")
+            f.write("=" * 90 + "\n\n")
+
+            f.write(f"PROJECT: {self.metadata.get('project_name', 'Unnamed Project')}\n")
+            f.write(f"Total Segments: {len(self.segment_list)}\n")
+            f.write("=" * 90 + "\n\n")
+
+            for seg in self.segment_list:
+                wafer_count = len(seg.wafer_list)
+
+                # Calculate total volume for segment
+                total_volume = sum(w.wafer.Volume for w in seg.wafer_list if w.wafer and hasattr(w.wafer, 'Volume'))
+
+                # Calculate bounding box
+                all_x, all_y, all_z = [], [], []
+                for w in seg.wafer_list:
+                    if w.wafer and hasattr(w.wafer, 'BoundBox'):
+                        bb = w.wafer.BoundBox
+                        all_x.extend([bb.XMin, bb.XMax])
+                        all_y.extend([bb.YMin, bb.YMax])
+                        all_z.extend([bb.ZMin, bb.ZMax])
+
+                f.write(f"SEGMENT: {seg.name}\n")
+                f.write("=" * 90 + "\n\n")
+                f.write(f"Wafer count: {wafer_count}\n")
+                f.write(f"Total volume: {total_volume:.4f}\n")
+                if all_x:
+                    f.write(f"X-range: {min(all_x):.2f} to {max(all_x):.2f}\n")
+                    f.write(f"Y-range: {min(all_y):.2f} to {max(all_y):.2f}\n")
+                    f.write(f"Z-range: {min(all_z):.2f} to {max(all_z):.2f}\n")
+                f.write("\n" + "-" * 90 + "\n\n")
+
+                # Cutting instructions header
+                f.write("CUTTING INSTRUCTIONS:\n")
+                f.write("  Blade° = Tilt saw blade from vertical\n")
+                f.write("  Cylinder° = Rotate cylinder to this angle before cutting\n")
+                f.write("  Cumulative = Total cylinder length used (mark and cut at this point)\n\n")
+
+                # Table header
+                f.write(f"{'Cut':<5} {'Length':<12} {'Blade°':<8} {'Cylinder°':<12} {'Cumulative':<13} {'Done':<6}\n")
+                f.write("-" * 90 + "\n")
+
+                # Calculate cumulative length
+                cumulative = 0
+
+                for i, wafer in enumerate(seg.wafer_list, 1):
+                    if wafer.wafer:
+                        geometry = wafer.geometry
+                        if geometry:
+                            # Get chord length (thickness of wafer)
+                            chord_length = geometry.get('chord_length', 0)
+                            cumulative += chord_length
+
+                            # Calculate blade angle from normal
+                            # Use the first face's normal to determine blade tilt
+                            if 'ellipse1' in geometry:
+                                normal1 = geometry['ellipse1'].get('normal', App.Vector(0, 0, 1))
+                                blade_angle = math.degrees(math.acos(abs(normal1.z)))
+                            else:
+                                blade_angle = 0
+
+                            # Get cylinder rotation angle from LCS
+                            # This is the rotation around the spine axis
+                            lcs1 = wafer.lcs1
+                            if lcs1:
+                                # Get the yaw angle (rotation around Z in the placement)
+                                ypr = lcs1.Rotation.toEuler()  # Returns (yaw, pitch, roll)
+                                cylinder_angle = ypr[0]  # Yaw
+                            else:
+                                cylinder_angle = 0
+
+                            # Format length as fractional inches
+                            length_str = self._format_fractional_inches(chord_length)
+                            cumulative_str = self._format_fractional_inches(cumulative)
+
+                            # Write row
+                            f.write(
+                                f"{i:<5} {length_str:<12} {blade_angle:<8.1f} {cylinder_angle:<12.1f} {cumulative_str:<13} {'[ ]':<6}\n")
+
+                f.write("\n" + "-" * 90 + "\n")
+                f.write(f"Total cylinder length required: {self._format_fractional_inches(cumulative)}\n")
+                f.write(f"  ({cumulative:.3f} inches = {cumulative * 25.4:.1f} mm)\n\n")
+
+            # Column definitions
+            f.write("=" * 90 + "\n")
+            f.write("COLUMN DEFINITIONS\n")
+            f.write("=" * 90 + "\n\n")
+            f.write("Cut:        Wafer number in sequence\n\n")
+            f.write("Length:     Length of wafer measured along the chord (longest outside edge)\n")
+            f.write("            This is the distance to mark on the cylinder for cutting\n\n")
+            f.write("Blade°:     Blade tilt angle from vertical (half of lift angle)\n")
+            f.write("            Set your saw blade to this angle for the cut\n\n")
+            f.write("Cylinder°:  Rotational position of cylinder for this cut\n")
+            f.write("            Rotate cylinder to this angle before making the cut\n\n")
+            f.write("Cumulative: Running total of cylinder length used\n")
+            f.write("            Mark this distance from the start and cut at this point\n\n")
+            f.write("Done:       Checkbox to mark completion of each cut\n\n")
+
+            f.write("=" * 90 + "\n")
+            f.write("NOTES\n")
+            f.write("=" * 90 + "\n\n")
+            f.write("Physical Construction Process:\n")
+            f.write("1. Mark cumulative length on cylinder\n")
+            f.write("2. Set blade angle (Blade°)\n")
+            f.write("3. Rotate cylinder to specified angle (Cylinder°)\n")
+            f.write("4. Make cut\n")
+            f.write("5. Wafer is removed with one angled face\n")
+            f.write("6. Flip wafer 180° and repeat for next cut\n\n")
+
+        logger.info(f"✓ Cutting list written: {output_file}")
+
+    def _format_fractional_inches(self, decimal_inches):
+        """Convert decimal inches to fractional format like '1 3/16\"'"""
+        whole = int(decimal_inches)
+        frac = decimal_inches - whole
+
+        # Find closest 1/16th
+        sixteenths = round(frac * 16)
+
+        if sixteenths == 0:
+            return f"{whole}\"" if whole > 0 else "0\""
+        elif sixteenths == 16:
+            return f"{whole + 1}\""
+        else:
+            # Simplify fraction
+            num = sixteenths
+            den = 16
+            while num % 2 == 0 and den % 2 == 0:
+                num //= 2
+                den //= 2
+
+            if whole > 0:
+                return f"{whole} {num}/{den}\""
+            else:
+                return f"{num}/{den}\""
 
     def build_lofted_cut_list(self, segment, output_file):
         """Build cutting list for lofted segments"""

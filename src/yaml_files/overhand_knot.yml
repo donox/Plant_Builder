@@ -27,10 +27,8 @@ output_files:
 workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
-    patterns:
+    keep_patterns:
       - "helix.*"
-      - "temp.*"
-      - "base*"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"
@@ -62,7 +60,7 @@ workflow:
     curve_spec:
       type: "overhand_knot"
       parameters:
-        scale: 3.5
+        scale: 1.5
         points: 300
         increment: 1.0
       transformations:
@@ -70,9 +68,9 @@ workflow:
           axis: "x"
           angle: 0
     wafer_settings:
-      cylinder_diameter: 2.5
+      cylinder_diameter: 2.0
       min_height: 0.5
-      max_chord: 0.2
+      max_chord: 0.3
 #    segment_settings:
 #      show_lcs: false
 #      build_segment: true

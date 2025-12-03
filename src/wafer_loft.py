@@ -53,13 +53,14 @@ class LoftWaferGenerator:
         Args:
             cylinder_radius: Radius of the cylindrical wafers
         """
-        self.cylinder_radius = cylinder_radius
         self.spine_curve = None
         self.loft = None
         self.sample_points = []
         self.cutting_planes = []
         self.wafers = []
-        logger.debug(f"LoftWaferGenerator initialized with radius {cylinder_radius:.3f}")
+        self.spine = None
+        self.radius = cylinder_radius
+        logger.debug(f"LoftWaferGenerator initialized with radius {self.radius:.3f}")
 
     def create_spine_from_points(self, points):
         """
@@ -76,90 +77,222 @@ class LoftWaferGenerator:
         if len(points) < 2:
             raise ValueError("Need at least 2 points to create a spine")
 
-        spline = Part.BSplineCurve()
-        spline.interpolate(points)
-        self.spine_curve = spline.toShape()
+        self.spine = Part.BSplineCurve()
+        self.spine.interpolate(points)
+        self.spine_curve = self.spine.toShape()
 
         logger.info(f"Spine created, length: {self.spine_curve.Length:.3f}")
         return self.spine_curve
 
-    def create_loft_along_spine(self, num_profiles=None, profiles_per_unit=None):
-        """
-        Create a cylindrical loft along the spine (for reference visualization)
-
-        Args:
-            num_profiles: Number of circular profiles (if None, calculated automatically)
-            profiles_per_unit: Profiles per unit length (default: ~2 per cylinder diameter)
-
-        Returns:
-            Part.Shape representing the loft
-        """
-        logger.info("Creating loft along spine")
-
-        if self.spine_curve is None:
-            raise ValueError("Must create spine first")
-
-        curve = self.spine_curve.Curve
-        first_param = curve.FirstParameter
-        last_param = curve.LastParameter
-        spine_length = self.spine_curve.Length
-
-        logger.debug(f"Spine length: {spine_length:.3f}")
-
-        if num_profiles is None:
-            if profiles_per_unit is None:
-                profiles_per_unit = 2.0 / (2 * self.cylinder_radius)
-
-            num_profiles = max(10, int(spine_length * profiles_per_unit))
-            num_profiles = min(num_profiles, 200)
-            logger.debug(f"Auto-calculated {num_profiles} profiles ({profiles_per_unit:.2f} per unit)")
-        else:
-            logger.debug(f"Using specified {num_profiles} profiles")
-
+    def _create_profiles(self, num_profiles):
+        """Create circular profiles perpendicular to spine at evenly spaced parameters"""
         profiles = []
+        spine_edge = Part.Edge(self.spine)
 
         for i in range(num_profiles):
-            t = first_param + (last_param - first_param) * i / (num_profiles - 1)
+            # Calculate parameter along spine (0.0 to 1.0)
+            u = i / (num_profiles - 1) if num_profiles > 1 else 0.0
 
-            point = curve.value(t)
-            tangent = curve.tangent(t)[0]
+            # Get point and tangent at this parameter
+            point = self.spine.value(u)
+            tangent = self.spine.tangent(u)[0]  # Returns tuple (tangent, )
             tangent.normalize()
 
+            # Create a plane perpendicular to the tangent
+            # Use arbitrary perpendicular vector for the plane's normal direction
             if abs(tangent.z) < 0.9:
-                perp1 = App.Vector(0, 0, 1).cross(tangent)
+                perp = App.Vector(0, 0, 1).cross(tangent)
             else:
-                perp1 = App.Vector(1, 0, 0).cross(tangent)
-            perp1.normalize()
+                perp = App.Vector(1, 0, 0).cross(tangent)
+            perp.normalize()
 
-            circle = Part.Circle()
-            circle.Center = point
-            circle.Axis = tangent
-            circle.Radius = self.cylinder_radius
+            # Create circle in the plane
+            circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), self.radius)
+            circle_edge = Part.Edge(circle)
+            circle_wire = Part.Wire(circle_edge)
 
-            wire = Part.Wire([circle.toShape()])
-            profiles.append(wire)
+            # Create placement: translate to point, rotate to align with tangent
+            # Z-axis should align with tangent
+            rotation = App.Rotation(App.Vector(0, 0, 1), tangent)
+            placement = App.Placement(point, rotation)
 
-        logger.debug(f"Created {len(profiles)} profiles")
+            # Transform the circle
+            profile = circle_wire.transformGeometry(placement.toMatrix())
+            profiles.append(profile)
 
+        return profiles
+
+    def create_loft_along_spine(self, curve_follower):
+        """Generate loft along spine and sample wafers"""
         try:
-            self.loft = Part.makeLoft(profiles, True, True)
-            logger.info(f"Loft created as solid, volume: {self.loft.Volume:.4f}")
-        except Exception as e:
-            logger.warning(f"Could not create solid loft: {e}")
-            logger.info("Attempting to create shell loft")
+            logger.info(f"Creating loft along spine")
+
+            # Get spine length - self.spine is a BSplineCurve, we need to convert to Edge to get Length
+            if hasattr(self, 'spine') and self.spine:
+                spine_edge = Part.Edge(self.spine)
+                spine_length = spine_edge.Length
+            else:
+                spine_length = 0
+
+            logger.debug(f"Spine length: {spine_length:.3f}")
+
+            # Calculate number of profiles based on spine length
+            profiles_per_unit = 0.89  # Empirical value
+            num_profiles = max(10, int(spine_length * profiles_per_unit))
+
+            logger.debug(f"Auto-calculated {num_profiles} profiles ({profiles_per_unit:.2f} per unit)")
+
+            # Create profiles
+            profiles = self._create_profiles(num_profiles)
+            logger.debug(f"Created {len(profiles)} profiles")
+
+            # Check for potential issues before lofting
+            self._diagnose_profiles(profiles, spine_length)
+
+            # Try to create solid loft
             try:
+                self.loft = Part.makeLoft(profiles, True, True)
+                logger.info(f"Loft created as solid, volume: {self.loft.Volume:.4f}")
+            except Part.OCCError as e:
+                logger.warning(f"Could not create solid loft: {e}")
+                logger.info("Attempting to create shell loft")
                 self.loft = Part.makeLoft(profiles, False, True)
-                logger.info("Loft created as shell")
-            except Exception as e2:
-                raise ValueError(f"Failed to create loft: {e2}")
+                logger.info(f"Loft created as shell")
 
-        if self.loft is None:
-            raise ValueError("Loft creation returned None")
+        except Part.OCCError as e:
+            # Provide diagnostic guidance
+            error_msg = f"Failed to create loft: {e}"
+            logger.error(error_msg)
 
-        if not self.loft.isValid():
-            raise ValueError("Created loft is not valid")
+            # Add helpful suggestions
+            try:
+                suggestions = self._get_loft_failure_suggestions(curve_follower, num_profiles)
+            except:
+                suggestions = ["Could not generate detailed diagnostics"]
 
-        return self.loft
+            logger.error("LOFT FAILURE DIAGNOSTICS:")
+            for i, suggestion in enumerate(suggestions, 1):
+                logger.error(f"  {i}. {suggestion}")
+
+            raise RuntimeError(error_msg)
+
+        def _create_profiles(self, num_profiles):
+            """Create circular profiles perpendicular to spine at evenly spaced parameters"""
+            profiles = []
+            spine_edge = Part.Edge(self.spine)
+
+            for i in range(num_profiles):
+                # Calculate parameter along spine (0.0 to 1.0)
+                u = i / (num_profiles - 1) if num_profiles > 1 else 0.0
+
+                # Get point and tangent at this parameter
+                point = self.spine.value(u)
+                tangent = self.spine.tangent(u)[0]  # Returns tuple (tangent, )
+                tangent.normalize()
+
+                # Create a plane perpendicular to the tangent
+                # Use arbitrary perpendicular vector for the plane's normal direction
+                if abs(tangent.z) < 0.9:
+                    perp = App.Vector(0, 0, 1).cross(tangent)
+                else:
+                    perp = App.Vector(1, 0, 0).cross(tangent)
+                perp.normalize()
+
+                # Create circle in the plane
+                circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), self.radius)
+                circle_edge = Part.Edge(circle)
+                circle_wire = Part.Wire(circle_edge)
+
+                # Create placement: translate to point, rotate to align with tangent
+                # Z-axis should align with tangent
+                rotation = App.Rotation(App.Vector(0, 0, 1), tangent)
+                placement = App.Placement(point, rotation)
+
+                # Transform the circle
+                profile = circle_wire.transformGeometry(placement.toMatrix())
+                profiles.append(profile)
+
+            return profiles
+
+    def _diagnose_profiles(self, profiles, spine_length):
+        """Check profiles for potential loft issues"""
+        issues = []
+
+        # Check for profile intersections
+        for i in range(len(profiles) - 1):
+            # Use BoundBox center instead of CenterOfMass
+            center1 = profiles[i].BoundBox.Center
+            center2 = profiles[i + 1].BoundBox.Center
+            dist = center1.distanceToPoint(center2)
+            if dist < 0.01:
+                issues.append(f"Profiles {i} and {i + 1} are very close (dist={dist:.4f})")
+
+        # Check profile sizes
+        radii = [p.BoundBox.DiagonalLength / 2 for p in profiles]
+        max_radius = max(radii)
+        min_spacing = spine_length / len(profiles)
+
+        if max_radius > min_spacing:
+            issues.append(
+                f"Profile diameter ({max_radius * 2:.3f}) larger than spacing ({min_spacing:.3f}) - profiles may intersect")
+
+        # Check for degenerate profiles
+        for i, profile in enumerate(profiles):
+            if profile.Length < 0.01:
+                issues.append(f"Profile {i} is degenerate (length={profile.Length:.4f})")
+
+        if issues:
+            logger.warning("Profile diagnostic warnings:")
+            for issue in issues:
+                logger.warning(f"  ⚠ {issue}")
+
+    def _get_loft_failure_suggestions(self, curve_follower, num_profiles):
+        """Generate helpful suggestions when loft fails"""
+        suggestions = []
+
+        # Get current settings
+        diameter = self.radius * 2
+        spine_length = curve_follower.spine.Length if curve_follower.spine else 0
+
+        # Suggestion 1: Reduce cylinder diameter
+        suggested_diameter = diameter * 0.6
+        suggestions.append(
+            f"Reduce cylinder_diameter from {diameter:.2f} to {suggested_diameter:.2f} "
+            f"(smaller diameter reduces self-intersection risk)"
+        )
+
+        # Suggestion 2: Increase max_chord
+        current_chord = self.max_chord if hasattr(self, 'max_chord') else 0.2
+        suggested_chord = min(current_chord * 1.5, 0.5)
+        suggestions.append(
+            f"Increase max_chord from {current_chord:.2f} to {suggested_chord:.2f} "
+            f"(fewer, larger wafers = simpler geometry)"
+        )
+
+        # Suggestion 3: Reduce point count
+        if num_profiles > 50:
+            suggested_points = int(num_profiles * 0.5)
+            suggestions.append(
+                f"Reduce curve points from {num_profiles} to ~{suggested_points} "
+                f"(fewer profiles = less complex loft)"
+            )
+
+        # Suggestion 4: Check for tight curves
+        suggestions.append(
+            "Check if curve has very tight bends or self-intersections - "
+            "increase scale parameter or simplify curve geometry"
+        )
+
+        # Suggestion 5: Profile density
+        if spine_length > 0:
+            density = num_profiles / spine_length
+            if density > 1.0:
+                suggestions.append(
+                    f"Profile density is high ({density:.2f} per unit) - "
+                    f"this can cause profile overlap in tight curves"
+                )
+
+        return suggestions
 
     def sample_points_along_loft(self, chord_distance_algorithm):
         """
@@ -239,12 +372,12 @@ class LoftWaferGenerator:
             else:
                 major1_dir = App.Vector(1, 0, 0).cross(n1)
             major1_dir.normalize()
-            major1_length = self.cylinder_radius
+            major1_length = self.radius
         else:
             major1_dir.normalize()
             cos_angle = abs(n1.dot(chord_dir))
             cos_angle = max(1e-9, min(1.0, cos_angle))
-            major1_length = self.cylinder_radius / cos_angle
+            major1_length = self.radius / cos_angle
 
         major2_dir = chord_dir - n2 * (chord_dir.dot(n2))
         if major2_dir.Length < 1e-9:
@@ -253,12 +386,12 @@ class LoftWaferGenerator:
             else:
                 major2_dir = App.Vector(1, 0, 0).cross(n2)
             major2_dir.normalize()
-            major2_length = self.cylinder_radius
+            major2_length = self.radius
         else:
             major2_dir.normalize()
             cos_angle = abs(n2.dot(chord_dir))
             cos_angle = max(1e-9, min(1.0, cos_angle))
-            major2_length = self.cylinder_radius / cos_angle
+            major2_length = self.radius / cos_angle
 
         bisector_normal = (n1 + n2)
         if bisector_normal.Length > 0:
@@ -295,7 +428,7 @@ class LoftWaferGenerator:
                 'center': plane1['point'],
                 'normal': n1,
                 'major_axis': major1_length,
-                'minor_axis': self.cylinder_radius,
+                'minor_axis': self.radius,
                 'major_axis_vector': major1_dir,
                 'minor_axis_vector': minor1_dir
             },
@@ -303,7 +436,7 @@ class LoftWaferGenerator:
                 'center': plane2['point'],
                 'normal': n2,
                 'major_axis': major2_length,
-                'minor_axis': self.cylinder_radius,
+                'minor_axis': self.radius,
                 'major_axis_vector': major2_dir,
                 'minor_axis_vector': minor2_dir
             }
@@ -321,7 +454,7 @@ class LoftWaferGenerator:
         wafer_data_list = []
         chord_vectors = []
 
-        min_chord_threshold = self.cylinder_radius * 0.01
+        min_chord_threshold = self.radius * 0.01
         min_volume_threshold = 0.001
 
         def get_face_at_position(solid, target_point, tolerance=0.5):
@@ -375,7 +508,7 @@ class LoftWaferGenerator:
                     if major_axis_dir.Length > 1e-9:
                         major_axis_dir.normalize()
 
-                    logger.debug(f"Extracted circle: center={center}, normal={normal}, radius={radius}")
+                    logger.debug(f"Extracted circle: center={center}, normal={normal}, radius={self.radius}")
 
                 elif hasattr(curve, 'MajorRadius'):
                     # It's an ellipse
@@ -442,13 +575,13 @@ class LoftWaferGenerator:
                 chord_direction.normalize()
 
                 cylinder = Part.makeCylinder(
-                    self.cylinder_radius,
+                    self.radius,
                     chord_length * 1.5,
                     center1 - chord_direction * chord_length * 0.25,
                     chord_direction
                 )
 
-                plane_size = self.cylinder_radius * 100
+                plane_size = self.radius * 100
 
                 circle1 = Part.Circle(plane1['point'], plane1['normal'], plane_size)
                 wire1 = Part.Wire([circle1.toShape()])
@@ -851,7 +984,7 @@ class LoftWaferGenerator:
         logger.info("Creating FreeCAD visualization")
 
         if lcs_size is None:
-            lcs_size = self.cylinder_radius * 2
+            lcs_size = self.radius * 2
 
         if self.spine_curve:
             spine_obj = doc.addObject("Part::Feature", "Loft_Spine")
@@ -871,7 +1004,7 @@ class LoftWaferGenerator:
             cutting_planes_group = doc.addObject("App::DocumentObjectGroup", "CuttingPlanes")
 
             for i, plane in enumerate(self.cutting_planes):
-                plane_radius = self.cylinder_radius * 2
+                plane_radius = self.radius * 2
                 circle = Part.Circle(plane['point'], plane['normal'], plane_radius)
                 wire = Part.Wire([circle.toShape()])
                 face = Part.Face(wire)

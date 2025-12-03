@@ -27,48 +27,48 @@ output_files:
 workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
-    patterns:
+    keep_patterns:
       - "test_.*"
       - "temp.*"
 
-#  - operation: "set_position"
-#    description: "Set starting position and orientation"
-#    position: [0, 0, 0]          # x, y, z coordinates
-#    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+  - operation: "set_position"
+    description: "Set starting position and orientation"
+    position: [0, 0, 0]          # x, y, z coordinates
+    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
 
-#  - operation: "build_segment"
-#    segment_type: "curve_follower"
-#    name: "test_circle"
-#    description: "Build circular structure using curve follower"
-#
-#    # Curve specification using new Curves class
-#    curve_spec:
-#      type: "circle"
-#      parameters:
-#        radius: 8.0
-#        points: 100
-#      transformations:
-#        - operation: "scale"
-#          factor: 1.0
-#        - operation: "rotate"
-#          axis: "z"
-#          angle: 0
-#      segment:
-#        start_fraction: 0.0
-#        end_fraction: 0.75
-#
-#    # Wafer construction parameters
-#    wafer_settings:
-#      cylinder_diameter: 2.0
-#      min_height: 0.8
-#      max_chord: .3         # Need to relate to # points
-#
-#    # Segment control settings
-#    segment_settings:
-#      show_lcs: false
-#      build_segment: true
-#      rotate_segment: 0.0
-#      add_curve_vertices: true
+  - operation: "build_segment"
+    segment_type: "curve_follower"
+    name: "test_circle"
+    description: "Build circular structure using curve follower"
+
+    # Curve specification using new Curves class
+    curve_spec:
+      type: "circle"
+      parameters:
+        radius: 8.0
+        points: 100
+      transformations:
+        - operation: "scale"
+          factor: 1.0
+        - operation: "rotate"
+          axis: "z"
+          angle: 0
+      segment:
+        start_fraction: 0.0
+        end_fraction: 0.75
+
+    # Wafer construction parameters
+    wafer_settings:
+      cylinder_diameter: 2.0
+      min_height: 0.8
+      max_chord: .3         # Need to relate to # points
+
+    # Segment control settings
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
+      add_curve_vertices: true
 
   - operation: "build_segment"
     segment_type: "curve_follower"
@@ -96,22 +96,22 @@ workflow:
       add_curve_vertices: true
 
 
-#  - operation: "build_segment"
-#    segment_type: "helix"
-#    name: "comparison_helix"
-#    description: "Traditional helix for comparison"
-#
-#    helix_settings:
-#      lift_angle: 9.0
-#      rotate_angle: 0.0
-#      wafer_count: 16
-#      outside_height: 1.0
-#      cylinder_diameter: 1.5
-#
-#    segment_settings:
-#      show_lcs: false
-#      build_segment: true
-#      rotate_segment: 0.0
+  - operation: "build_segment"
+    segment_type: "helical"
+    name: "comparison_helix"
+    description: "Traditional helix for comparison"
+
+    helix_settings:
+      lift_angle: 9.0
+      rotate_angle: 0.0
+      wafer_count: 16
+      outside_height: 1.0
+      cylinder_diameter: 1.5
+
+    segment_settings:
+      show_lcs: false
+      build_segment: true
+      rotate_segment: 0.0
 
 
 # Alternative workflow configurations (can be selected)

@@ -350,7 +350,7 @@ class CurveFollowerLoft:
         logger.debug(f"Generated {len(points)} curve points with transformations and segments applied")
 
         self.generator.create_spine_from_points(points)
-        self.generator.create_loft_along_spine()
+        self.generator.create_loft_along_spine(self)
 
         if self.generator.loft is None:
             raise ValueError("Loft creation returned None")

@@ -29,21 +29,8 @@ output_files:
 workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
-    patterns:
-      - "Loft.*"
-      - 'Wafer_*'
-      - 'CuttingPlane_*'
-      - "temp.*"
-      - "base*"
-      - "overh*"
-      - "recon"
-      - "close"
-      - "Plane_*"
-      - "Recon*"
-      - "Compound"
-      - "LCS_s*"
-      - "spiral_*"
-      - "trefoil_*"
+    keep_patterns:
+      - "foo"
 
 #  - operation: "set_position"
 #    description: "Set starting position and orientation"
