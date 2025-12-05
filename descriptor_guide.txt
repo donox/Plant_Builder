@@ -56,6 +56,7 @@ Settings that affect the entire build process:
 Specify paths for generated files:
 
   output_files:
+    working_directory: "/home/don/Documents/Temp/FreeCAD/"
     cuts_file: "cutting_list.txt"     # Cutting instructions
     place_file: "placement_list.txt"  # Wafer placement coordinates
     trace_file: "build_trace.log"     # Build process log
@@ -65,14 +66,14 @@ Specify paths for generated files:
 
 REMOVE OBJECTS
 --------------
-Remove existing FreeCAD objects by pattern matching:
+Remove existing FreeCAD objects by pattern matching.  Objects to be kept are
+indicated in the patterns. Any identified object also keeps its children.  Otherwise, a object is deleted:
 
   - operation: "remove_objects"
     description: "Clean up any existing objects"
-    patterns:
+    keep_patterns:
       - "test_helix.*"        # Regular expression patterns
       - "Curve.*"             # .* means "anything after"
-      - "temp.*"
 
 SET POSITION
 ------------
@@ -105,7 +106,7 @@ Build a segment that follows a mathematical curve:
           axis: "z"
           angle: 45
         # ... more transformations
-      segment:                  # Optional curve segment selection
+      segment:                  # Optional curve portion selection
         start_fraction: 0.0     # 0.0 = curve start, 1.0 = curve end
         end_fraction: 1.0
     

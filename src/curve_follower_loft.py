@@ -34,7 +34,7 @@ class CurveFollowerLoft:
         self.spine_curve = None
         self.generator = None
         self.wafer_settings = wafer_settings or {}
-        logger.debug("CurveFollowerLoft initialized")
+        # logger.debug("CurveFollowerLoft initialized")
 
     def load_curve_from_file(self, filename):
         """
@@ -87,12 +87,12 @@ class CurveFollowerLoft:
             List of App.Vector points
         """
         logger.info(f"Generating {curve_type} curve using curves module")
-        logger.debug(f"Curve parameters: {params}")
+        # logger.debug(f"Curve parameters: {params}")
 
         doc = App.ActiveDocument
         if doc is None:
             doc = App.newDocument("CurveGen")
-            logger.debug("Created new document for curve generation")
+            # logger.debug("Created new document for curve generation")
 
         points = curves.generate_curve(curve_type, doc=doc, **params)
 
@@ -108,7 +108,7 @@ class CurveFollowerLoft:
             points: List of App.Vector points
         """
         self.curve_points = points
-        logger.debug(f"Set {len(points)} curve points")
+        # logger.debug(f"Set {len(points)} curve points")
 
     def create_spine_curve(self, points=None):
         """
@@ -126,7 +126,7 @@ class CurveFollowerLoft:
         if len(points) < 2:
             raise ValueError("Need at least 2 points to create a curve")
 
-        logger.debug(f"Creating spine curve from {len(points)} points")
+        # logger.debug(f"Creating spine curve from {len(points)} points")
 
         spline = Part.BSplineCurve()
         spline.interpolate(points)
@@ -154,7 +154,7 @@ class CurveFollowerLoft:
         first_param = curve.FirstParameter
         last_param = curve.LastParameter
 
-        logger.debug(f"Chord deviation sampling: max_deviation={max_chord_deviation:.3f}")
+        # logger.debug(f"Chord deviation sampling: max_deviation={max_chord_deviation:.3f}")
 
         params = [first_param]
         current_param = first_param
@@ -196,7 +196,7 @@ class CurveFollowerLoft:
         if params[-1] < last_param:
             params[-1] = last_param
 
-        logger.debug(f"Sampled {len(params)} points")
+        # logger.debug(f"Sampled {len(params)} points")
         return params
 
     def _calculate_max_chord_deviation(self, curve, param_start, param_end, num_samples=20):
@@ -258,7 +258,7 @@ class CurveFollowerLoft:
         first_param = curve.FirstParameter
         last_param = curve.LastParameter
 
-        logger.debug(f"Uniform sampling: {num_samples} samples")
+        # logger.debug(f"Uniform sampling: {num_samples} samples")
 
         params = []
         for i in range(num_samples):
@@ -281,7 +281,7 @@ class CurveFollowerLoft:
         total_length = spine_edge.Length
         num_samples = max(2, int(total_length / target_arc_distance) + 1)
 
-        logger.debug(f"Arc-length sampling: target={target_arc_distance:.3f}, {num_samples} samples")
+        # logger.debug(f"Arc-length sampling: target={target_arc_distance:.3f}, {num_samples} samples")
 
         curve = spine_edge.Curve
         first_param = curve.FirstParameter
@@ -327,7 +327,7 @@ class CurveFollowerLoft:
         cylinder_radius = cylinder_diameter / 2.0
 
         self.generator = LoftWaferGenerator(cylinder_radius=cylinder_radius)
-        logger.debug(f"Created LoftWaferGenerator with radius {cylinder_radius:.3f}")
+        # logger.debug(f"Created LoftWaferGenerator with radius {cylinder_radius:.3f}")
 
         doc = App.ActiveDocument
         if doc is None:
@@ -337,17 +337,17 @@ class CurveFollowerLoft:
         from curves import Curves
         curves_instance = Curves(doc, curve_spec)
         points_array = curves_instance.get_curve_points()
-        logger.debug(f"Points from Curves class: {len(points_array)}")
+        # logger.debug(f"Points from Curves class: {len(points_array)}")
 
         # Convert numpy array to list of App.Vector
         points = [App.Vector(float(p[0]), float(p[1]), float(p[2])) for p in points_array]
 
         # Transform points by base_placement if provided
         if base_placement is not None and not self._is_identity_placement(base_placement):
-            logger.debug(f"Transforming {len(points)} curve points by base_placement")
+            # logger.debug(f"Transforming {len(points)} curve points by base_placement")
             points = [base_placement.multVec(p) for p in points]
 
-        logger.debug(f"Generated {len(points)} curve points with transformations and segments applied")
+        # logger.debug(f"Generated {len(points)} curve points with transformations and segments applied")
 
         self.generator.create_spine_from_points(points)
         self.generator.create_loft_along_spine(self)
@@ -364,14 +364,14 @@ class CurveFollowerLoft:
             params = self.chord_distance_sampler(spine, target_chord)
 
             if max_wafer_count and len(params) > max_wafer_count + 1:
-                logger.debug(f"Limiting to {max_wafer_count} wafers (from {len(params) - 1} total samples)")
+                # logger.debug(f"Limiting to {max_wafer_count} wafers (from {len(params) - 1} total samples)")
                 params = params[:max_wafer_count + 1]
 
             return params
 
         self.generator.sample_points_along_loft(limited_sampler)
 
-        logger.debug(f"Creating {len(self.generator.sample_points) - 1} wafers")
+        # logger.debug(f"Creating {len(self.generator.sample_points) - 1} wafers")
 
         self.generator.calculate_cutting_planes()
 
@@ -448,14 +448,14 @@ class CurveFollowerLoft:
                 point_obj = doc.addObject("Part::Feature", f"CurvePoint_{i:03d}")
                 point_obj.Shape = sphere
                 point_obj.ViewObject.ShapeColor = (1.0, 0.0, 0.0)
-            logger.debug(f"Added {len(self.curve_points)} curve points")
+            # logger.debug(f"Added {len(self.curve_points)} curve points")
 
         if show_curve and self.spine_curve:
             curve_obj = doc.addObject("Part::Feature", "Spine_Curve")
             curve_obj.Shape = self.spine_curve
             curve_obj.ViewObject.LineColor = (0.0, 0.5, 1.0)
             curve_obj.ViewObject.LineWidth = 3
-            logger.debug("Added spine curve")
+            # logger.debug("Added spine curve")
 
         doc.recompute()
         logger.info("Curve visualization complete")

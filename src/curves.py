@@ -13,7 +13,7 @@ import sys
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import FreeCAD
-import Part
+# import Part
 
 
 class Curves:
@@ -50,17 +50,17 @@ class Curves:
         curve_type = self.curve_spec.get('type')
         parameters = self.curve_spec.get('parameters', {})
 
-        logger.debug(f"Generating base curve: {curve_type}")
+        # logger.debug(f"Generating base curve: {curve_type}")
 
         if curve_type == 'custom':
             custom_func = self.curve_spec.get('custom_function')
             if custom_func is None:
                 raise ValueError("Custom curve type requires 'custom_function' parameter")
             self.base_curve = np.array(custom_func(**parameters))
-            logger.debug(f"Generated custom curve with {len(self.base_curve)} points")
+            # logger.debug(f"Generated custom curve with {len(self.base_curve)} points")
         elif curve_type in self.available_curves:
             self.base_curve = np.array(self.available_curves[curve_type](**parameters))
-            logger.debug(f"Generated {curve_type} curve with {len(self.base_curve)} points")
+            # logger.debug(f"Generated {curve_type} curve with {len(self.base_curve)} points")
         else:
             raise ValueError(f"Unknown curve type: {curve_type}. "
                              f"Available: {list(self.available_curves.keys())} or 'custom'")
@@ -74,7 +74,7 @@ class Curves:
         if segment_spec:
             logger.info(f"Applying segment selection: {segment_spec}")
             self.transformed_curve = self._select_segment(self.transformed_curve, segment_spec)
-            logger.debug(f"Applied segment selection: {len(self.transformed_curve)} points")
+            # logger.debug(f"Applied segment selection: {len(self.transformed_curve)} points")
 
         # Apply other transformations
         transformations = self.curve_spec.get('transformations', [])
@@ -83,16 +83,16 @@ class Curves:
 
             if operation == 'scale':
                 self.transformed_curve = self._scale_curve(self.transformed_curve, transform)
-                logger.debug(f"Applied scale transformation")
+                # logger.debug(f"Applied scale transformation")
             elif operation == 'rotate':
                 self.transformed_curve = self._rotate_curve(self.transformed_curve, transform)
-                logger.debug(f"Applied rotation: {transform.get('axis')} {transform.get('angle')}°")
+                # logger.debug(f"Applied rotation: {transform.get('axis')} {transform.get('angle')}°")
             elif operation == 'translate':
                 self.transformed_curve = self._translate_curve(self.transformed_curve, transform)
-                logger.debug(f"Applied translation: {transform.get('offset')}")
+                # logger.debug(f"Applied translation: {transform.get('offset')}")
             elif operation == 'mirror':
                 self.transformed_curve = self._mirror_curve(self.transformed_curve, transform)
-                logger.debug(f"Applied mirror: {transform.get('plane')}")
+                # logger.debug(f"Applied mirror: {transform.get('plane')}")
             else:
                 logger.warning(f"Unknown transformation operation: {operation}")
 
@@ -120,7 +120,7 @@ class Curves:
             'end_point': points[-1].tolist()
         }
 
-        logger.debug(f"Curve info: {len(points)} points, length {info['total_length']:.3f}")
+        # logger.debug(f"Curve info: {len(points)} points, length {info['total_length']:.3f}")
         return info
 
     def add_visualization_vertices(self, segment_obj=None, group_name: str = None) -> str:
@@ -240,14 +240,14 @@ class Curves:
             point = t * length * direction
             curve_points.append(point.tolist())
 
-        logger.debug(f"Generated linear curve: length={length}, points={points}")
+        # logger.debug(f"Generated linear curve: length={length}, points={points}")
         return curve_points
 
     def _generate_helical(self, radius: float = 10.0, pitch: float = 2.5,
                           turns: float = 4.0, points: int = 100,
                           start_at_origin: bool = True) -> List[List[float]]:
         """Generate a helical curve."""
-        logger.debug(f"Generating helix: radius={radius}, pitch={pitch}, turns={turns}, points={points}")
+        # logger.debug(f"Generating helix: radius={radius}, pitch={pitch}, turns={turns}, points={points}")
 
         curve_points = []
         total_angle = turns * 2 * math.pi
@@ -267,7 +267,7 @@ class Curves:
             offset = curve_points[0]
             curve_points = [[p[0] - offset[0], p[1] - offset[1], p[2] - offset[2]]
                             for p in curve_points]
-            logger.debug("Translated helix to start at origin")
+            # logger.debug("Translated helix to start at origin")
 
         return curve_points
 
@@ -293,7 +293,7 @@ class Curves:
 
     def _generate_trefoil(self, **parameters):
         """Generate a trefoil knot curve."""
-        logger.debug(f"Generating trefoil with parameters: {parameters}")
+        # logger.debug(f"Generating trefoil with parameters: {parameters}")
         p = generate_woodcut_trefoil(
             slices=150,
             major_radius=8.0,
@@ -301,14 +301,14 @@ class Curves:
             smooth_factor=0.92,
             jitter=0.02,
             optimize_spacing=True)
-        logger.debug(f"Generated trefoil with {len(p)} points")
+        # logger.debug(f"Generated trefoil with {len(p)} points")
         return p
 
     def _generate_sinusoidal(self, length: float = 50.0, amplitude: float = 5.0,
                              frequency: float = 2.0, points: int = 100,
                              axis: str = 'x') -> List[List[float]]:
         """Generate a sinusoidal curve."""
-        logger.debug(f"Generating sinusoidal: length={length}, amplitude={amplitude}, freq={frequency}")
+        # logger.debug(f"Generating sinusoidal: length={length}, amplitude={amplitude}, freq={frequency}")
 
         curve_points = []
         for i in range(points):
@@ -330,7 +330,7 @@ class Curves:
     def _generate_overhand_knot(self, scale: float = 1.0, points: int = 100,
                                 increment: float = 1.0) -> List[List[float]]:
         """Generate an overhand knot curve."""
-        logger.debug(f"Generating overhand knot: scale={scale}, points={points}")
+        # logger.debug(f"Generating overhand knot: scale={scale}, points={points}")
 
         curve_points = []
         x0 = y0 = z0 = 0
@@ -354,7 +354,7 @@ class Curves:
     def _generate_circle(self, radius: float = 10.0, points: int = 100,
                          plane: str = 'xy') -> List[List[float]]:
         """Generate a circular curve."""
-        logger.debug(f"Generating circle: radius={radius}, plane={plane}")
+        # logger.debug(f"Generating circle: radius={radius}, plane={plane}")
 
         curve_points = []
         for i in range(points):
@@ -380,7 +380,7 @@ class Curves:
         Creates an Archimedean spiral that rises in Z as it spirals outward.
         The radius grows uniformly with angle (each turn adds constant width).
         """
-        logger.debug(f"Generating spiral: min_r={min_radius}, max_r={max_radius}, turns={turns}, height={max_height}")
+        # logger.debug(f"Generating spiral: min_r={min_radius}, max_r={max_radius}, turns={turns}, height={max_height}")
 
         curve_points = []
         total_angle = turns * 2 * math.pi
@@ -412,7 +412,7 @@ class Curves:
     def _generate_figure_eight(self, radius: float = 10.0, points: int = 100,
                                plane: str = 'xy') -> List[List[float]]:
         """Generate a figure-eight curve."""
-        logger.debug(f"Generating figure-eight: radius={radius}, plane={plane}")
+        # logger.debug(f"Generating figure-eight: radius={radius}, plane={plane}")
 
         curve_points = []
         for i in range(points):
@@ -463,9 +463,91 @@ class Curves:
             'message': 'Curve sampling is adequate'
         }
 
-
 def generate_woodcut_trefoil(slices=180, **parameters):
-    """Generate a trefoil curve optimized for wood cutting with cylindrical slices."""
+    """
+    Generate a trefoil knot curve optimized for wood cutting with cylindrical slices.
+
+    A trefoil knot is a (p,q)-torus knot that wraps around a torus p times in one
+    direction and q times in the other. This implementation creates a parametric
+    trefoil curve suitable for cutting from cylindrical stock.
+
+    Args:
+        slices (int): Number of points to generate along the curve (default: 180).
+                     More slices = smoother curve but more complex cutting.
+                     Maximum is capped at 200 points.
+
+        **parameters: Keyword arguments controlling the trefoil geometry:
+
+            major_radius (float): Radius of the main torus path (default: 6.0).
+                                 Controls the overall size of the trefoil.
+                                 Larger values = bigger knot.
+
+            tube_radius (float): Radius of the tube that wraps around the torus (default: 2.0).
+                                Controls the "thickness" of the knot path.
+                                Affects how much the curve deviates from the main circle.
+
+            p (int): Number of times the curve wraps around the torus longitudinally (default: 2).
+                    For a trefoil, typically p=2.
+
+            q (int): Number of times the curve wraps around the torus meridionally (default: 3).
+                    For a trefoil, typically q=3.
+                    The (p,q) pair defines the knot type: (2,3) = trefoil, (3,5) = cinquefoil, etc.
+
+            center (tuple): (x, y, z) coordinates for the center point (default: (0, 0, 0)).
+                           Translates the entire curve to this location.
+
+            phase_deg (float): Rotation phase in degrees (default: 0.0).
+                              Rotates where the curve starts around the knot.
+                              Use to orient the knot optimally for cutting.
+
+            scale_z (float): Vertical scaling factor (default: 1.0).
+                            Stretches or compresses the knot in the Z direction.
+                            Values < 1.0 flatten the knot, > 1.0 stretch it vertically.
+
+            jitter (float): Random perturbation factor (default: 0.0).
+                           Adds randomness to point spacing (0.0 = none, 1.0 = maximum).
+                           Can create organic variation but may complicate cutting.
+
+            smooth_factor (float): Smoothing multiplier for tube radius (default: 0.5).
+                                  Controls how pronounced the knot's curves are.
+                                  Values < 1.0 reduce deviation from the major circle,
+                                  creating a gentler, more cuttable curve.
+
+            optimize_spacing (bool): Whether to optimize point spacing for cutting (default: True).
+                                    When True, redistributes points for more even spacing,
+                                    which can improve cutting accuracy and reduce waste.
+
+    Returns:
+        numpy.ndarray: Array of shape (n+1, 3) containing [x, y, z] coordinates.
+                      The curve is closed (first point equals last point).
+
+    Example:
+        >>> # Basic trefoil with default settings
+        >>> points = generate_woodcut_trefoil(slices=120)
+
+        >>> # Larger trefoil with custom dimensions
+        >>> points = generate_woodcut_trefoil(
+        ...     slices=200,
+        ...     major_radius=8.0,
+        ...     tube_radius=3.0,
+        ...     scale_z=1.5
+        ... )
+
+        >>> # Flattened trefoil rotated 45 degrees
+        >>> points = generate_woodcut_trefoil(
+        ...     slices=150,
+        ...     scale_z=0.5,
+        ...     phase_deg=45.0,
+        ...     smooth_factor=0.3
+        ... )
+
+    Notes:
+        - The (p, q) = (2, 3) configuration creates the classic trefoil knot
+        - Increase smooth_factor for more dramatic knot curves (harder to cut)
+        - Decrease smooth_factor for gentler curves (easier to cut from cylinder)
+        - Use scale_z < 1.0 to flatten the knot for easier visualization
+        - The curve closes on itself (first point = last point)
+    """
     R = float(parameters.get("major_radius", 6.0))
     r = float(parameters.get("tube_radius", 2.0))
     p = int(parameters.get("p", 2))
@@ -503,7 +585,7 @@ def generate_woodcut_trefoil(slices=180, **parameters):
         pts = _optimize_cutting_spacing(pts)
 
     new_pts = np.append(pts, [pts[0]], axis=0)
-    logger.debug(f"Generated woodcut trefoil with {len(new_pts)} points")
+    # logger.debug(f"Generated woodcut trefoil with {len(new_pts)} points")
     return new_pts
 
 

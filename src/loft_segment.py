@@ -7,7 +7,7 @@ and concatenated with other segments.
 """
 
 import FreeCAD as App
-import Part
+# import Part
 from curve_follower_loft import CurveFollowerLoft
 from core.logging_setup import get_logger
 
@@ -59,7 +59,7 @@ class LoftSegment:
         self.z_min = None
         self.z_max = None
 
-        logger.debug(f"Created LoftSegment: {name}")
+        # logger.debug(f"Created LoftSegment: {name}")
 
     def generate_wafers(self):
         """
@@ -87,8 +87,8 @@ class LoftSegment:
             logger.info(f"Generated {len(self.wafer_list)} wafers for segment '{self.name}'")
             if self.wafer_list and self.wafer_list[0].wafer:
                 first_wafer_bbox = self.wafer_list[0].wafer.BoundBox
-                logger.debug(f"First wafer bounding box (local): {first_wafer_bbox}")
-                logger.debug(f"First wafer placement (local): {self.wafer_list[0].wafer.Placement}")
+                # logger.debug(f"First wafer bounding box (local): {first_wafer_bbox}")
+                # logger.debug(f"First wafer placement (local): {self.wafer_list[0].wafer.Placement}")
             return self.wafer_list
 
         except Exception as e:
@@ -269,7 +269,7 @@ class LoftSegment:
         # Create Part container
         segment_part = doc.addObject("App::Part", f"{self.name}_Part")
         segment_part.Placement = self.base_placement
-        logger.debug(f"Created Part with placement: {self.base_placement}")
+        # logger.debug(f"Created Part with placement: {self.base_placement}")
 
         # Create groups (NOT added to Part yet)
         wafer_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Wafers")
@@ -284,7 +284,7 @@ class LoftSegment:
                 loft_obj.ViewObject.Transparency = 70
                 loft_obj.ViewObject.ShapeColor = (0.8, 0.9, 1.0)
                 reference_group.addObject(loft_obj)  # Only add to group
-                logger.debug("Added loft")
+                # logger.debug("Added loft")
 
         # Add spine to reference_group ONLY
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'spine_curve'):
@@ -296,13 +296,13 @@ class LoftSegment:
                 spine_obj.ViewObject.LineWidth = 2.0
                 spine_obj.ViewObject.Visibility = False
                 reference_group.addObject(spine_obj)  # Only add to group
-                logger.debug("Added spine")
+                # logger.debug("Added spine")
 
         # Create LCS group if needed
         lcs_group = None
         if self.segment_settings.get('show_lcs', False):
             lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
-            logger.debug("Created LCS group")
+            # logger.debug("Created LCS group")
 
         # Add wafers to wafer_group ONLY
         wafer_count = 0
@@ -334,7 +334,7 @@ class LoftSegment:
                     lcs_obj.Placement = wafer_data.lcs2
                     lcs_group.addObject(lcs_obj)  # Only add to group
 
-        logger.debug(f"Added {wafer_count} wafers")
+        # logger.debug(f"Added {wafer_count} wafers")
 
         # NOW add the groups to the Part (only once, at the end)
         segment_part.addObject(wafer_group)

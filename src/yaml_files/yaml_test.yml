@@ -33,11 +33,10 @@ workflow:
 
   - operation: "set_position"
     description: "Set starting position and orientation"
-    position: [0, 0, 0]          # x, y, z coordinates
-    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+    position: [10, 0, 0]          # x, y, z coordinates
+    rotation: [0, 45, 0]          # roll, pitch, yaw in degrees (optional)
 
   - operation: "build_segment"
-    segment_type: "curve_follower"
     name: "test_circle"
     description: "Build circular structure using curve follower"
 
@@ -94,25 +93,6 @@ workflow:
       build_segment: true
       rotate_segment: 0.0
       add_curve_vertices: true
-
-
-  - operation: "build_segment"
-    segment_type: "helical"
-    name: "comparison_helix"
-    description: "Traditional helix for comparison"
-
-    helix_settings:
-      lift_angle: 9.0
-      rotate_angle: 0.0
-      wafer_count: 16
-      outside_height: 1.0
-      cylinder_diameter: 1.5
-
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-
 
 # Alternative workflow configurations (can be selected)
 workflows:

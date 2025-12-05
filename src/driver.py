@@ -12,12 +12,10 @@ import sys
 import os
 import yaml
 import math
-from pathlib import Path
 import FreeCAD as App
-import Part
 
 from core.logging_setup import get_logger
-from test_transform import run_transform_test
+# from test_transform import run_transform_test
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -78,13 +76,13 @@ class Driver:
         try:
             # Try to get existing document
             self.doc = self.app.getDocument(self.doc_name)
-            logger.debug(f"Using existing '{self.doc_name}' document")
+            # logger.debug(f"Using existing '{self.doc_name}' document")
         except:
             # Create new document if it doesn't exist
             self.doc = self.app.newDocument(self.doc_name)
             logger.debug(f"Created new '{self.doc_name}' document")
 
-        logger.debug(f"Document ready: {self.doc.Name}")
+        # logger.debug(f"Document ready: {self.doc.Name}")
 
     def workflow(self):
         """Execute the complete workflow"""
@@ -131,7 +129,7 @@ class Driver:
         # Log operation start
         description = operation.get('description', operation_type)
         logger.info(f"Executing: {description}")
-        logger.debug(f"Operation details: {operation_type}")
+        # logger.debug(f"Operation details: {operation_type}")
 
         # Route to appropriate handler
         if operation_type == 'remove_objects':
@@ -203,9 +201,10 @@ class Driver:
 
         logger.info(f"Objects to keep: {len(objects_to_keep)}")
         if objects_to_keep:
-            logger.debug("Complete list of objects to keep:")
+            # logger.debug("Complete list of objects to keep:")
             for obj in objects_to_keep:
-                logger.debug(f"  KEEP: {obj.Label}")
+                # logger.debug(f"  KEEP: {obj.Label}")
+                pass
 
         # CRITICAL: Break parent-child links for kept objects whose parents will be removed
         for obj in objects_to_keep:
@@ -234,11 +233,11 @@ class Driver:
                 # Check if object still exists
                 obj = App.ActiveDocument.getObject(obj_name)
                 if obj:
-                    logger.debug(f"Removing: {obj_label}")
+                    # logger.debug(f"Removing: {obj_label}")
                     App.ActiveDocument.removeObject(obj_name)
                     removed_count += 1
-                else:
-                    logger.debug(f"Already removed: {obj_label}")
+                # else:
+                #     logger.debug(f"Already removed: {obj_label}")
             except Exception as e:
                 logger.warning(f"Could not remove {obj_label}: {e}")
 
@@ -257,21 +256,21 @@ class Driver:
         if hasattr(parent, 'Group'):
             new_group = [child for child in parent.Group if child != obj]
             parent.Group = new_group
-            logger.debug(f"  Removed {obj.Label} from {parent.Label}'s Group")
+            # logger.debug(f"  Removed {obj.Label} from {parent.Label}'s Group")
 
     def _add_children_to_set(self, obj, object_set):
         """Recursively add all children of an object to the set"""
         if hasattr(obj, 'Group'):
             for child in obj.Group:
                 if child not in object_set:
-                    logger.debug(f"  Keeping child: {child.Label}")
+                    # logger.debug(f"  Keeping child: {child.Label}")
                     object_set.add(child)
                     self._add_children_to_set(child, object_set)
 
         if hasattr(obj, 'OutList'):
             for child in obj.OutList:
                 if child not in object_set:
-                    logger.debug(f"  Keeping dependency: {child.Label}")
+                    # logger.debug(f"  Keeping dependency: {child.Label}")
                     object_set.add(child)
                     self._add_children_to_set(child, object_set)
 
@@ -284,12 +283,9 @@ class Driver:
 
     def _execute_build_segment(self, operation):
         """Build a segment"""
-        segment_type = operation.get('segment_type', 'curve_follower')
+        # Now only curve_follower segments are supported.
+        self._build_curve_follower_segment(operation)
 
-        if segment_type == 'curve_follower':
-            self._build_curve_follower_segment(operation)
-        else:
-            logger.warning(f"Unknown segment type: {segment_type}")
 
     def _build_curve_follower_segment(self, operation):
         """Build a loft-based curve follower segment"""
@@ -349,10 +345,10 @@ class Driver:
                     break
 
             if part_obj:
-                logger.debug(f"Part placement BEFORE: {part_obj.Placement}")
+                # logger.debug(f"Part placement BEFORE: {part_obj.Placement}")
                 part_obj.Placement = adjusted_placement
                 segment.base_placement = adjusted_placement
-                logger.debug(f"Part placement AFTER: {part_obj.Placement}")
+                # logger.debug(f"Part placement AFTER: {part_obj.Placement}")
             else:
                 logger.warning(f"Could not find Part object. Tried: {part_name_variations}")
 
@@ -382,9 +378,9 @@ class Driver:
         logger.debug(f"Aligning segment '{segment.name}' to '{prev_segment.name}'")
 
         # DEBUG: Check what's in connection_spec
-        logger.debug(f"Type of connection_spec: {type(segment.connection_spec)}")
-        logger.debug(f"Full connection_spec contents: {segment.connection_spec}")
-        logger.debug(f"connection_spec repr: {repr(segment.connection_spec)}")
+        # logger.debug(f"Type of connection_spec: {type(segment.connection_spec)}")
+        # logger.debug(f"Full connection_spec contents: {segment.connection_spec}")
+        # logger.debug(f"connection_spec repr: {repr(segment.connection_spec)}")
 
         # 1. Get previous segment's EXIT LCS in world coordinates
         if not prev_segment.wafer_list or not prev_segment.wafer_list[-1].lcs2:
@@ -393,7 +389,7 @@ class Driver:
 
         prev_local_exit = prev_segment.wafer_list[-1].lcs2
         prev_world_exit = prev_segment.base_placement.multiply(prev_local_exit)
-        logger.debug(f"Previous segment EXIT (world): {prev_world_exit}")
+        # logger.debug(f"Previous segment EXIT (world): {prev_world_exit}")
 
         # 2. Get current segment's ENTRY LCS in local coordinates
         if not segment.wafer_list or not segment.wafer_list[0].lcs1:
@@ -401,16 +397,16 @@ class Driver:
             return segment.base_placement
 
         curr_local_entry = segment.wafer_list[0].lcs1
-        logger.debug(f"Current segment ENTRY (local): {curr_local_entry}")
+        # logger.debug(f"Current segment ENTRY (local): {curr_local_entry}")
 
         # 3. Calculate adjusted placement: prev_exit * curr_entry.inverse()
         adjusted_placement = prev_world_exit.multiply(curr_local_entry.inverse())
-        logger.debug(f"Calculated adjusted placement: {adjusted_placement}")
+        # logger.debug(f"Calculated adjusted placement: {adjusted_placement}")
 
         # Apply additional Z-axis rotation if specified in connection_spec
         rotation_angle = segment.connection_spec.get('rotation_angle', 0)
-        logger.debug(f"Connection spec: {segment.connection_spec}")
-        logger.debug(f"Rotation angle from connection_spec: {rotation_angle}")
+        # logger.debug(f"Connection spec: {segment.connection_spec}")
+        # logger.debug(f"Rotation angle from connection_spec: {rotation_angle}")
 
         if rotation_angle != 0:
             logger.info(f"Applying Z-axis rotation: {rotation_angle}°")
@@ -432,36 +428,37 @@ class Driver:
             adjusted_placement.Rotation = additional_rotation.multiply(adjusted_placement.Rotation)
 
             logger.info(f"Applied additional Z-axis rotation: {rotation_angle}°")
-            logger.debug(f"Adjusted placement after rotation: {adjusted_placement}")
-        else:
-            logger.debug("No additional rotation specified (rotation_angle is 0 or not specified)")
+        #     logger.debug(f"Adjusted placement after rotation: {adjusted_placement}")
+        # else:
+        #     logger.debug("No additional rotation specified (rotation_angle is 0 or not specified)")
+
         # 4. Verify alignment (for debugging)
 
         curr_world_entry = adjusted_placement.multiply(curr_local_entry)
         pos_match = (curr_world_entry.Base - prev_world_exit.Base).Length
         rot_match = curr_world_entry.Rotation.isSame(prev_world_exit.Rotation, 1e-6)
 
-        logger.debug(f"Position difference: {pos_match}")
-        logger.debug(f"Rotation match: {rot_match}")
+        # logger.debug(f"Position difference: {pos_match}")
+        # logger.debug(f"Rotation match: {rot_match}")
 
         # Check individual axes
-        prev_x = prev_world_exit.Rotation.multVec(App.Vector(1, 0, 0))
-        prev_y = prev_world_exit.Rotation.multVec(App.Vector(0, 1, 0))
-        prev_z = prev_world_exit.Rotation.multVec(App.Vector(0, 0, 1))
+        # prev_x = prev_world_exit.Rotation.multVec(App.Vector(1, 0, 0))
+        # prev_y = prev_world_exit.Rotation.multVec(App.Vector(0, 1, 0))
+        # prev_z = prev_world_exit.Rotation.multVec(App.Vector(0, 0, 1))
+        #
+        # curr_x = curr_world_entry.Rotation.multVec(App.Vector(1, 0, 0))
+        # curr_y = curr_world_entry.Rotation.multVec(App.Vector(0, 1, 0))
+        # curr_z = curr_world_entry.Rotation.multVec(App.Vector(0, 0, 1))
 
-        curr_x = curr_world_entry.Rotation.multVec(App.Vector(1, 0, 0))
-        curr_y = curr_world_entry.Rotation.multVec(App.Vector(0, 1, 0))
-        curr_z = curr_world_entry.Rotation.multVec(App.Vector(0, 0, 1))
-
-        logger.debug(f"Prev X={prev_x}, Curr X={curr_x}, dot={prev_x.dot(curr_x):.6f}")
-        logger.debug(f"Prev Y={prev_y}, Curr Y={curr_y}, dot={prev_y.dot(curr_y):.6f}")
-        logger.debug(f"Prev Z={prev_z}, Curr Z={curr_z}, dot={prev_z.dot(curr_z):.6f}")
+        # logger.debug(f"Prev X={prev_x}, Curr X={curr_x}, dot={prev_x.dot(curr_x):.6f}")
+        # logger.debug(f"Prev Y={prev_y}, Curr Y={curr_y}, dot={prev_y.dot(curr_y):.6f}")
+        # logger.debug(f"Prev Z={prev_z}, Curr Z={curr_z}, dot={prev_z.dot(curr_z):.6f}")
 
         if pos_match < 1e-6 and rot_match:
-            logger.debug("✓ LCS alignment verified")
+            # logger.debug("✓ LCS alignment verified")
+            pass
         else:
             logger.warning(f"✗ LCS alignment verification failed: pos={pos_match}, rot={rot_match}")
-
         return adjusted_placement
 
 
@@ -475,7 +472,7 @@ class Driver:
         rot = App.Rotation(rotation[0], rotation[1], rotation[2])
         self.current_placement = App.Placement(pos, rot)
 
-        logger.debug(f"Position set to: {self.current_placement}")
+        # logger.debug(f"Position set to: {self.current_placement}")
 
     def _generate_cutting_list(self):
         """Generate cutting list for all segments"""
@@ -483,13 +480,11 @@ class Driver:
         if not os.path.isabs(output_file):
             base_dir = self.output_files.get('working_directory', '')
             output_file = os.path.join(base_dir, output_file)
-            logger.debug(f"Generating cutting list with file: {output_file}")
+            logger.info(f"Generating cutting list with file: {output_file}")
 
         if not output_file:
             logger.warning("No cutting list file specified")
             return
-
-        logger.debug(f"Generating cutting list: {output_file}")
 
         with open(output_file, 'w') as f:
             # Header
@@ -606,7 +601,7 @@ class Driver:
         logger.info(f"✓ Cutting list written: {output_file}")
 
     def _format_fractional_inches(self, decimal_inches):
-        """Convert decimal inches to fractional format like '1 3/16\"'"""
+        """Convert decimal inches to fractional format like '1 3/16'"""
         whole = int(decimal_inches)
         frac = decimal_inches - whole
 
