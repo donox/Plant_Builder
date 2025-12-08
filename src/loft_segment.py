@@ -278,7 +278,7 @@ class LoftSegment:
         # Add loft to reference_group ONLY
         if hasattr(self.follower, 'generator') and hasattr(self.follower.generator, 'loft'):
             loft = self.follower.generator.loft
-            if loft:
+            if loft and self.segment_settings.get('show_loft', False):
                 loft_obj = doc.addObject("Part::Feature", f"Loft_{self.name}")
                 loft_obj.Shape = loft
                 loft_obj.ViewObject.Transparency = 70

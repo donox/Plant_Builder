@@ -286,7 +286,6 @@ class Driver:
         # Now only curve_follower segments are supported.
         self._build_curve_follower_segment(operation)
 
-
     def _build_curve_follower_segment(self, operation):
         """Build a loft-based curve follower segment"""
         segment_name = operation.get('name', 'segment')
@@ -345,12 +344,49 @@ class Driver:
                     break
 
             if part_obj:
-                # logger.debug(f"Part placement BEFORE: {part_obj.Placement}")
                 part_obj.Placement = adjusted_placement
                 segment.base_placement = adjusted_placement
-                # logger.debug(f"Part placement AFTER: {part_obj.Placement}")
             else:
                 logger.warning(f"Could not find Part object. Tried: {part_name_variations}")
+
+        # Apply rotate_segment if specified (rotates around segment's base Z-axis)
+        rotate_segment = segment_settings.get('rotate_segment', 0)
+        if rotate_segment != 0 and part_obj:
+            logger.info(f"Applying segment rotation: {rotate_segment}°")
+
+            # Get the entry LCS (first wafer's first LCS) as rotation axis
+            if len(segment.wafer_list) > 0 and segment.wafer_list[0].lcs1:
+                entry_lcs = segment.wafer_list[0].lcs1
+
+                # Transform entry LCS to world coordinates
+                if len(self.segment_list) > 0:
+                    # Non-first segment - entry LCS is in adjusted_placement coordinates
+                    entry_lcs_world = adjusted_placement.multiply(entry_lcs)
+                else:
+                    # First segment
+                    entry_lcs_world = entry_lcs
+
+                # Get Z-axis and rotation point from entry LCS
+                rotation_axis = entry_lcs_world.Rotation.multVec(App.Vector(0, 0, 1))
+                rotation_point = entry_lcs_world.Base
+
+                # Create rotation
+                rotation = App.Rotation(rotation_axis, rotate_segment)
+
+                # Apply to Part object
+                current_placement = part_obj.Placement
+
+                # Rotate position around rotation point
+                offset = current_placement.Base - rotation_point
+                rotated_offset = rotation.multVec(offset)
+                current_placement.Base = rotation_point + rotated_offset
+
+                # Apply rotation to orientation
+                current_placement.Rotation = rotation.multiply(current_placement.Rotation)
+
+                part_obj.Placement = current_placement
+                segment.base_placement = current_placement
+                logger.debug(f"Rotated segment {rotate_segment}° around entry Z-axis")
 
         # Store segment
         self.segment_list.append(segment)
@@ -718,14 +754,15 @@ class Driver:
 
                 cuts_file.write(f"{cut_num} {length_str:<10} {blade} {rotation_str} {cylinder} ")
                 cuts_file.write(f"{collin_str} {azimuth_str} {cumul_str:<12} {done_mark}\n")
-
+            print(f"Include definitions XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX: {include_definitions}")
             # Summary
             cuts_file.write("\n" + "-" * 90 + "\n")
             cuts_file.write(f"Total cylinder length required: {self._format_inches(cumulative_length)}\n")
             cuts_file.write(f"  ({cumulative_length:.3f} inches = {cumulative_length * 25.4:.1f} mm)\n\n")
 
             # Column definitions (if enabled)
-            include_definitions = self.global_settings.get('include_cut_list_definitions', True)
+            include_definitions = self.global_settings.get('include_cut_list_definitions', False)
+            print(f"Include definitions: {include_definitions}")
 
             if include_definitions:
                 self._write_cut_list_definitions(cuts_file)

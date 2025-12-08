@@ -829,6 +829,7 @@ class LoftWaferGenerator:
                 x_axis.normalize()
         else:
             # logger.debug(f"  X and Z are already perpendicular")
+            pass
 
         # Calculate Y = Z × X (right-hand rule)
         y_axis = z_axis.cross(x_axis)
@@ -867,7 +868,7 @@ class LoftWaferGenerator:
         rotation_matrix.A31, rotation_matrix.A32, rotation_matrix.A33 = x_axis.z, y_axis.z, z_axis.z
 
         placement.Rotation = App.Rotation(rotation_matrix)
-        logger.debug(f"  Created LCS placement: {placement}"
+        # logger.debug(f"  Created LCS placement: {placement}")
 
         return placement
 
@@ -886,96 +887,87 @@ class LoftWaferGenerator:
             plane1 = self.cutting_planes[i]
             plane2 = self.cutting_planes[i + 1]
 
+            # Skip degenerate wafers (None from generate_all_wafers_by_slicing)
             if wafer_data is None:
-                wafer_obj = Wafer(
-                    solid=None,
-                    index=i,
-                    plane1=plane1,
-                    plane2=plane2,
-                    geometry={},
-                    lcs1=None,
-                    lcs2=None
-                )
-            else:
-                solid = wafer_data['solid']
-                geometry = wafer_data['geometry']
+                logger.debug(f"Skipping degenerate wafer {i}")
+                continue  # ← Don't add to wafer list at all
 
-                ellipse1 = geometry['ellipse1']
-                ellipse2 = geometry['ellipse2']
+            solid = wafer_data['solid']
+            geometry = wafer_data['geometry']
 
-                # Get chord direction for consistent orientation
-                chord_direction = App.Vector(
-                    geometry['chord_vector'].x,
-                    geometry['chord_vector'].y,
-                    geometry['chord_vector'].z
-                )
-                chord_direction.normalize()
+            ellipse1 = geometry['ellipse1']
+            ellipse2 = geometry['ellipse2']
 
-                # For lcs1 (entry): ensure Z-axis points along the chord direction
-                normal1 = App.Vector(
-                    ellipse1['normal'].x,
-                    ellipse1['normal'].y,
-                    ellipse1['normal'].z
-                )
-                major_axis1 = App.Vector(
-                    ellipse1['major_axis_vector'].x,
-                    ellipse1['major_axis_vector'].y,
-                    ellipse1['major_axis_vector'].z
-                )
+            # Get chord direction for consistent orientation
+            chord_direction = App.Vector(
+                geometry['chord_vector'].x,
+                geometry['chord_vector'].y,
+                geometry['chord_vector'].z
+            )
+            chord_direction.normalize()
 
-                # Check if normal points opposite to chord direction
-                if normal1.dot(chord_direction) < 0:
-                    # logger.debug(f"Wafer {i} lcs1: Flipping normal to align with chord direction")
-                    normal1 = -normal1
-                    major_axis1 = -major_axis1  # Flip major axis to maintain right-hand rule
+            # For lcs1 (entry): ensure Z-axis points along the chord direction
+            normal1 = App.Vector(
+                ellipse1['normal'].x,
+                ellipse1['normal'].y,
+                ellipse1['normal'].z
+            )
+            major_axis1 = App.Vector(
+                ellipse1['major_axis_vector'].x,
+                ellipse1['major_axis_vector'].y,
+                ellipse1['major_axis_vector'].z
+            )
 
-                lcs1 = self._create_lcs(
-                    ellipse1['center'],
-                    normal1,
-                    major_axis1
-                )
+            # Check if normal points opposite to chord direction
+            if normal1.dot(chord_direction) < 0:
+                normal1 = -normal1
+                major_axis1 = -major_axis1  # Flip major axis to maintain right-hand rule
 
-                # For lcs2 (exit): ensure Z-axis points along the chord direction
-                normal2 = App.Vector(
-                    ellipse2['normal'].x,
-                    ellipse2['normal'].y,
-                    ellipse2['normal'].z
-                )
-                major_axis2 = App.Vector(
-                    ellipse2['major_axis_vector'].x,
-                    ellipse2['major_axis_vector'].y,
-                    ellipse2['major_axis_vector'].z
-                )
+            lcs1 = self._create_lcs(
+                ellipse1['center'],
+                normal1,
+                major_axis1
+            )
 
-                # Check if normal points opposite to chord direction
-                if normal2.dot(chord_direction) < 0:
-                    # logger.debug(f"Wafer {i} lcs2: Flipping normal to align with chord direction")
-                    normal2 = -normal2
-                    major_axis2 = -major_axis2  # Flip major axis to maintain right-hand rule
+            # For lcs2 (exit): ensure Z-axis points along the chord direction
+            normal2 = App.Vector(
+                ellipse2['normal'].x,
+                ellipse2['normal'].y,
+                ellipse2['normal'].z
+            )
+            major_axis2 = App.Vector(
+                ellipse2['major_axis_vector'].x,
+                ellipse2['major_axis_vector'].y,
+                ellipse2['major_axis_vector'].z
+            )
 
-                lcs2 = self._create_lcs(
-                    ellipse2['center'],
-                    normal2,
-                    major_axis2
-                )
+            # Check if normal points opposite to chord direction
+            if normal2.dot(chord_direction) < 0:
+                normal2 = -normal2
+                major_axis2 = -major_axis2  # Flip major axis to maintain right-hand rule
 
-                wafer_obj = Wafer(
-                    solid=solid,
-                    index=i,
-                    plane1=plane1,
-                    plane2=plane2,
-                    geometry=geometry,
-                    lcs1=lcs1,
-                    lcs2=lcs2
-                )
+            lcs2 = self._create_lcs(
+                ellipse2['center'],
+                normal2,
+                major_axis2
+            )
+
+            wafer_obj = Wafer(
+                solid=solid,
+                index=i,
+                plane1=plane1,
+                plane2=plane2,
+                geometry=geometry,
+                lcs1=lcs1,
+                lcs2=lcs2
+            )
 
             self.wafers.append(wafer_obj)
 
-        successful = sum(1 for w in self.wafers if w.wafer is not None)
+        successful = len(self.wafers)
         logger.info(f"Packaged {successful} wafers with LCS")
 
         return self.wafers
-
     def visualize_in_freecad(self, doc, show_lcs=True, show_cutting_planes=True, lcs_size=None):
         """Create FreeCAD objects to visualize wafers, loft, and LCS"""
         logger.info("Creating FreeCAD visualization")
