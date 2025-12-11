@@ -12,8 +12,8 @@ import math
 import sys
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple
-import FreeCAD
-# import Part
+import FreeCAD as App
+import Part
 
 
 class Curves:
@@ -40,6 +40,7 @@ class Curves:
             'spiral': self._generate_spiral,
             'figure_eight': self._generate_figure_eight,
             'trefoil': self._generate_trefoil,
+            'closing_curve': self._generate_closing_curve,
         }
 
         self._generate_base_curve()
@@ -430,6 +431,166 @@ class Curves:
                 raise ValueError(f"Invalid plane: {plane}. Use 'xy', 'xz', or 'yz'")
 
         return curve_points
+
+    def _generate_closing_curve(self, **parameters):
+        """
+        Generate closing curve with G2 (curvature) continuity
+
+        Uses multiple LCS from each end to establish not just tangent direction,
+        but also curvature, then creates a curve that smoothly transitions between them.
+        """
+        import FreeCAD as App
+        import Part
+        import math
+
+        start_segment = parameters.get('start_segment')
+        end_segment = parameters.get('end_segment')
+
+        if start_segment is None or end_segment is None:
+            raise ValueError("closing_curve requires start_segment and end_segment parameters")
+
+        num_lcs = parameters.get('num_lcs_per_end', 3)
+        num_points = parameters.get('points', 50)
+        tension = parameters.get('tension', 0.5)
+
+        # Get wafer lists
+        start_wafers = start_segment.wafer_list
+        end_wafers = end_segment.wafer_list
+
+        if len(start_wafers) < num_lcs or len(end_wafers) < num_lcs:
+            logger.warning(f"Not enough wafers for {num_lcs} LCS per end, reducing")
+            num_lcs = min(len(start_wafers), len(end_wafers), max(2, num_lcs))
+
+        # Get wafer lists
+        start_wafers = start_segment.wafer_list
+        end_wafers = end_segment.wafer_list
+
+        if len(start_wafers) < 1 or len(end_wafers) < 1:
+            raise ValueError("Segments must have at least one wafer to create closing curve")
+
+        # Get first and last wafers
+        last_wafer = end_wafers[-1]
+        first_wafer = start_wafers[0]
+
+        # WORK IN WORLD COORDINATES - much simpler!
+        # Get everything in world space, create curve there, then transform to local
+
+        # Start point: lcs2 exit of last wafer (world coordinates)
+        last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
+        P0_world = last_lcs2_world.Base
+
+        # Start direction: lcs2's +Z axis (forward continuation direction)
+        V0_world = last_lcs2_world.Rotation.multVec(App.Vector(0, 0, 1))
+        V0_world.normalize()
+
+        # End point: lcs1 entry of first wafer (world coordinates)
+        first_lcs1_world = start_segment.base_placement.multiply(first_wafer.lcs1)
+        P3_world = first_lcs1_world.Base
+
+        # End direction: lcs1's +Z axis (direction INTO first segment)
+        V3_world = first_lcs1_world.Rotation.multVec(App.Vector(0, 0, 1))
+        V3_world.normalize()
+
+        gap_distance = P0_world.distanceToPoint(P3_world)
+
+        logger.debug(f"=== Working in WORLD coordinates ===")
+        logger.debug(f"P0_world (lcs2 exit): {P0_world}")
+        logger.debug(f"P3_world (lcs1 entry): {P3_world}")
+        logger.debug(f"V0_world (lcs2 +Z): {V0_world}")
+        logger.debug(f"V3_world (lcs1 +Z): {V3_world}")
+        logger.debug(f"Gap distance: {gap_distance:.3f}")
+
+        angle = math.degrees(V0_world.getAngle(V3_world))
+        logger.debug(f"Tangent angle: {angle:.1f}°")
+
+        # Get cylinder radius for constraint checking
+        cylinder_radius = parameters.get('cylinder_radius', 1.0)
+
+        # Calculate arm length for gentle curves
+        angle_rad = math.radians(angle)
+
+        # Base arm length proportional to gap
+        base_arm = gap_distance * 0.5
+
+        # Angle adjustment: sharper turns need longer arms
+        angle_factor = 1.0 + math.sin(angle_rad / 2)
+
+        # Tension scaling (user can adjust 0.0-1.0, maps to 0.7-1.3)
+        tension_factor = 0.7 + tension * 0.6
+
+        arm_length = base_arm * angle_factor * tension_factor
+
+        # Enforce minimum for gentle curves
+        min_arm = gap_distance * 0.4
+        arm_length = max(arm_length, min_arm)
+
+        logger.debug(f"Arm length calculation:")
+        logger.debug(f"  gap={gap_distance:.3f}, base_arm={base_arm:.3f}")
+        logger.debug(f"  angle={angle:.1f}°, angle_factor={angle_factor:.2f}")
+        logger.debug(f"  tension={tension:.2f}, tension_factor={tension_factor:.2f}")
+        logger.debug(f"  calculated arm_length={arm_length:.3f}")
+        logger.debug(f"  cylinder_radius={cylinder_radius:.3f}")
+
+        # Create control points in WORLD coordinates
+        P1_world = P0_world + V0_world * arm_length
+        P2_world = P3_world - V3_world * arm_length
+
+        logger.debug(f"Control points (WORLD coordinates):")
+        logger.debug(f"  P0_world = {P0_world}")
+        logger.debug(f"  P1_world = {P1_world}, dist from P0 = {P0_world.distanceToPoint(P1_world):.3f}")
+        logger.debug(f"  P2_world = {P2_world}, dist from P3 = {P3_world.distanceToPoint(P2_world):.3f}")
+        logger.debug(f"  P3_world = {P3_world}")
+
+        # Create cubic Bezier curve IN WORLD COORDINATES
+        control_points_world = [P0_world, P1_world, P2_world, P3_world]
+        bspline = Part.BSplineCurve()
+        bspline.buildFromPoles(control_points_world, False)
+
+        # DIAGNOSTIC: Check curvature along the curve
+        max_curvature = 0.0
+        for u in [0.0, 0.25, 0.5, 0.75, 1.0]:
+            try:
+                curvature = bspline.curvature(u)
+                max_curvature = max(max_curvature, curvature)
+            except:
+                pass
+
+        if max_curvature > 0:
+            min_radius = 1.0 / max_curvature
+            logger.info(f"Curve min radius: {min_radius:.3f} (cylinder radius: {cylinder_radius:.3f}, ratio: {min_radius/cylinder_radius:.1f}×)")
+            if min_radius < cylinder_radius * 3:
+                logger.warning(f"⚠ Curve may be too tight! Min radius {min_radius:.3f} < 3× cylinder radius ({cylinder_radius * 3:.3f})")
+                logger.warning(f"   Consider: (1) increase tension parameter, (2) shorten adjacent segments to increase gap")
+        else:
+            logger.debug("Could not calculate curvature")
+
+        curve_length = bspline.length()
+        logger.info(f"Generated closing curve: length={curve_length:.3f}, points={num_points}, angle={angle:.1f}°")
+
+        # Sample points along the curve (in WORLD coordinates)
+        points_world = []
+        for i in range(num_points):
+            u = i / (num_points - 1) if num_points > 1 else 0.0
+            point = bspline.value(u)
+            points_world.append(point)
+
+        # NOW transform from world coordinates to local coordinates
+        # The segment will be placed at lcs2's world position/orientation
+        last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
+        placement_inv = last_lcs2_world.inverse()
+
+        points_local = []
+        for point_world in points_world:
+            point_local = placement_inv.multVec(point_world)
+            points_local.append([point_local.x, point_local.y, point_local.z])
+
+        # Verify endpoints (in local coordinates)
+        logger.debug(f"Curve start (local): {points_local[0]}")
+        logger.debug(f"Curve end (local): {points_local[-1]}")
+        P3_local = placement_inv.multVec(P3_world)
+        logger.debug(f"Expected end (local): {[P3_local.x, P3_local.y, P3_local.z]}")
+
+        return np.array(points_local)
 
     def validate_curve_sampling(self, min_height: float, max_chord: float) -> Dict[str, Any]:
         """Validate that curve has reasonable sampling for geometry calculations."""

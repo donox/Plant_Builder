@@ -138,8 +138,103 @@ class Driver:
             self._execute_build_segment(operation)
         elif operation_type == 'set_position':
             self._execute_set_position(operation)
+        elif operation_type == 'close_loop':
+            self._close_loop(operation)
         else:
             logger.warning(f"Unknown operation type: {operation_type}")
+
+    def _close_loop(self, operation):
+        """
+        Create a closing segment that connects the last segment back to the first
+        Uses multiple LCS from each segment for smooth curvature continuity.
+        """
+        if len(self.segment_list) < 2:
+            logger.warning("Need at least 2 segments to close a loop")
+            return
+
+        logger.info("Creating closing segment with smooth curvature matching")
+
+        # Get segments
+        first_segment = self.segment_list[0]
+        last_segment = self.segment_list[-1]
+
+        # Get wafer settings
+        wafer_settings = operation.get('wafer_settings', {})
+        segment_settings = operation.get('segment_settings', {})
+
+        # Create curve_spec with closing curve
+        curve_spec = {
+            'type': 'closing_curve',
+            'parameters': {
+                'start_segment': first_segment,
+                'end_segment': last_segment,
+                'num_lcs_per_end': operation.get('num_lcs_per_end', 3),
+                'tension': operation.get('tension', 0.5),
+                'points': operation.get('points', 50),
+                'cylinder_radius': wafer_settings.get('cylinder_diameter', 2.0) / 2.0
+            }
+        }
+
+        # Create the closing segment at ORIGIN (like all non-first segments)
+        from loft_segment import LoftSegment
+        closing_segment = LoftSegment(
+            doc=self.doc,
+            name=operation.get('name', 'closing_segment'),
+            curve_spec=curve_spec,
+            wafer_settings=wafer_settings,
+            segment_settings=segment_settings,
+            base_placement=App.Placement(),
+            connection_spec={}
+        )
+
+        logger.debug(f"Created LoftSegment: {closing_segment.name}")
+
+        # Generate wafers (at origin)
+        closing_segment.generate_wafers()
+
+        # Visualize (creates Part and adds objects)
+        closing_segment.visualize(self.doc)
+
+        # Special alignment for closing segment:
+        # Its START should connect to last segment's END
+        adjusted_placement = self._align_segment_to_previous(closing_segment, last_segment)
+
+        # Find and update the Part object
+        part_name = f"{closing_segment.name}_Part"
+        part_obj = self.doc.getObject(part_name)
+
+        if part_obj:
+            part_obj.Placement = adjusted_placement
+            closing_segment.base_placement = adjusted_placement
+            logger.debug(f"Aligned closing segment to last segment")
+        else:
+            logger.warning(f"Could not find Part object: {part_name}")
+
+        # Store segment
+        self.segment_list.append(closing_segment)
+
+        # Verify the closure
+        end_placement = closing_segment.get_end_placement()
+        start_placement = first_segment.get_start_placement()
+
+        gap = end_placement.Base.distanceToPoint(start_placement.Base)
+        logger.info(f"Loop closure gap: {gap:.3f}")
+
+        # Debug: show actual segment length
+        if len(closing_segment.wafer_list) > 0:
+            first_wafer_pos = closing_segment.base_placement.multVec(
+                closing_segment.wafer_list[0].lcs1.Base
+            )
+            last_wafer_pos = closing_segment.base_placement.multVec(
+                closing_segment.wafer_list[-1].lcs2.Base
+            )
+            actual_length = first_wafer_pos.distanceToPoint(last_wafer_pos)
+            logger.warning(f"Closing segment actual length: {actual_length:.3f} (expected ~{gap:.3f})")
+
+        if gap > 1.0:
+            logger.warning(f"Large closure gap detected: {gap:.3f} - loop may not be properly closed")
+
+        logger.info("✓ Closing segment created with curvature continuity")
 
     def _remove_objects(self, operation):
         """Remove objects from the FreeCAD document except those specified to keep"""

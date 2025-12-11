@@ -110,6 +110,20 @@ workflow:
       rotate_segment: 0
       add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
 
+  - operation: "close_loop"
+    name: "closing_segment"
+    num_lcs_per_end: 3
+    tension: 0.4
+    points: 60
+    wafer_settings:
+      cylinder_diameter: 2.0
+      min_height: 0.5
+      max_chord: 0.3
+    segment_settings:
+      show_loft: true
+      show_lcs: true
+      add_curve_vertices: true
+#
 
 
 
