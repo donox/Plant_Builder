@@ -8,11 +8,12 @@ Orchestrates the build workflow by:
 - Generating output files (cutting lists, placement lists)
 """
 
-import sys
 import os
-import yaml
 import math
 import FreeCAD as App
+
+from config.loader import load_config
+
 
 from core.logging_setup import get_logger
 # from test_transform import run_transform_test
@@ -45,31 +46,16 @@ class Driver:
         self.output_files = {}
         self.metadata = {}
 
-
     def load_configuration(self, config_file):
-        """
-        Load configuration from YAML file
+        loaded = load_config(
+            config_file,
+            yaml_base_dir=os.path.join(os.path.dirname(__file__), "yaml_files", "base")
+        )
 
-        Args:
-            config_file: Path to YAML configuration file
-        """
-        self.config_file = config_file
-        logger.info(f"Loading config: {config_file}")
-
-        try:
-            with open(config_file, 'r') as f:
-                self.config = yaml.safe_load(f)
-
-            # Extract global settings
-            self.global_settings = self.config.get('global_settings', {})
-            self.output_files = self.config.get('output_files', {})
-            self.metadata = self.config.get('metadata', {})
-
-            logger.info("✅ Config loaded")
-
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-            raise
+        self.config = loaded.data
+        self.global_settings = self.config["global_settings"]
+        self.output_files = self.config["output_files"]
+        self.metadata = self.config.get("metadata", {})
 
     def setup_document(self):
         """Setup or get FreeCAD document"""

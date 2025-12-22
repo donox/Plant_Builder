@@ -1,0 +1,15 @@
+wafer_presets:
+  fine:
+    min_height: 0.08
+    max_chord: 0.06
+    max_wafer_count: 120
+
+  standard:
+    min_height: 0.1
+    max_chord: 0.1
+    max_wafer_count: 60
+
+  coarse:
+    min_height: 0.2
+    max_chord: 0.2
+    max_wafer_count: 30

@@ -1,0 +1,26 @@
+include:
+  - "base/defaults.yml"
+
+params:
+  project_name: "Test Spiral"
+  diameter: 1.9375
+
+metadata:
+  project_name: "${project_name}"
+  version: "1.0"
+
+workflow:
+  - operation: build_segment
+    segment_type: curve_follower
+    name: spiral
+    curve_spec:
+      type: spiral
+      parameters:
+        max_height: 10
+        min_radius: 1
+        max_radius: 5
+        turns: 3
+        points: 300
+    wafer_settings:
+      preset: standard
+      cylinder_diameter: "${diameter}"

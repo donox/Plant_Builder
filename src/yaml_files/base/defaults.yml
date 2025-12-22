@@ -1,0 +1,19 @@
+params:
+  out_dir: "${ENV:HOME}/Documents/Temp/FreeCAD"
+
+global_settings:
+  workflow_mode: null
+  remove_existing: true
+  relocate_segments: true
+  print_cuts: true
+  print_place: true
+  show_lcs: false
+  temp_file: "temp_construction.dat"
+  include_cut_list_definitions: false
+
+output_files:
+  working_directory: "${out_dir}"
+  cuts_file: "cutting_list.txt"
+  place_file: "placement_list.txt"
+  trace_file: "build_trace.log"
+  show_lcs_in_cutlist: false
