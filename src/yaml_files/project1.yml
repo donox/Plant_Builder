@@ -1,4 +1,4 @@
-# Plant Builder Project Configuration
+  # Plant Builder Project Configuration
 # This file defines the workflow and construction parameters for building segments
 
 metadata:
@@ -122,6 +122,11 @@ workflow:
       rotate_segment: 0.0
       add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
 
+  - operation: "close_loop"
+    wafer_settings:
+      cylinder_diameter: 2.25
+    segment_settings:
+      show_lcs: true
 
 
 

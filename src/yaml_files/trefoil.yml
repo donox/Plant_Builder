@@ -49,7 +49,6 @@ workflow:
 #      build_segment: true
 #      rotate_segment: 0.0
 #      add_curve_vertices: false      # This is displaying improperly (though calculations appear correct)
-
   - operation: "build_segment"
     segment_type: "curve_follower"
     name: "Trefoil"
@@ -66,9 +65,11 @@ workflow:
         #          - center       (seq3) : Optional XYZ offset for the whole curve.                      [default: (0,0,0)]
         #          - phase_deg    (float): Rotation about +Z before sampling (shifts start point).       [default: 0.0]
         #          - scale_z      (float): Optional
-        major_radius: 5.0
+        major_radius: 6.0
         tube_radius: 3.0
-        points: 200
+        points: 100
+        p: 2
+        q: 3
       transformations:  []
 #        - operation: "scale"
 #          factor: 1.0
@@ -79,9 +80,10 @@ workflow:
         start_fraction: 0.0
         end_fraction: 1.0
     wafer_settings:
-      cylinder_diameter: 2.25
-      min_height: 0.5          # Much smaller
+      cylinder_diameter: 2.0
+      min_height: 0.4         # Much smaller
       max_chord: 0.2            # Much tighter
+      profile_density: 0.5
     segment_settings:
       show_lcs: false
       build_segment: true

@@ -85,36 +85,42 @@ class Driver:
         # logger.debug(f"Document ready: {self.doc.Name}")
 
     def workflow(self):
-        """Execute the complete workflow"""
+        """Execute the workflow defined in the config"""
         logger.info("Running: workflow()")
-        #
-        # # RUN TEST AND EXIT
-        #
-        # run_transform_test()
-        # logger.info("Test complete - exiting")
-        # return
 
         # Setup document
         self.setup_document()
 
-        # Get workflow operations
-        workflow_ops = self.config.get('workflow', [])
+        # Get workflow mode setting
+        workflow_mode = self.config.get('global_settings', {}).get('workflow_mode', None)
 
-        if not workflow_ops:
-            logger.warning("No workflow operations defined")
-            return
+        if workflow_mode == "first_pass":
+            logger.info("🎬 FIRST PASS MODE: Generate all segments + create editable closing curve")
+        elif workflow_mode == "second_pass":
+            logger.info("🔧 SECOND PASS MODE: Skip all operations except close_loop")
+        else:
+            logger.info("▶️  SINGLE RUN MODE: Normal execution")
 
-        # Execute each operation
-        for operation in workflow_ops:
+        workflow_operations = self.config.get('workflow', [])
+
+        for operation in workflow_operations:
+            operation_type = operation.get('operation')
+            description = operation.get('description', operation_type)
+
+            # In second pass mode, skip everything except close_loop
+            if workflow_mode == "second_pass" and operation_type != 'close_loop':
+                logger.debug(f"⏭️  Skipping '{description}' (second pass mode)")
+                continue
+
+            logger.info(f"Executing: {description}")
+
             try:
                 self._execute_operation(operation)
             except Exception as e:
-                logger.error(f"Operation failed: {e}", exc_info=True)
+                logger.error(f"Operation failed: {e}")
+                import traceback
+                logger.error(f"Full traceback:\n{traceback.format_exc()}")
                 raise
-
-        # Generate cutting list for ALL segments at the end
-        if self.global_settings.get('print_cuts', False):
-            self._generate_cutting_list()
 
         logger.info("✅ Workflow complete")
 
@@ -140,25 +146,108 @@ class Driver:
             self._execute_set_position(operation)
         elif operation_type == 'close_loop':
             self._close_loop(operation)
+        elif operation_type == 'test_bezier_closing':
+            self._test_bezier_closing(operation)
         else:
             logger.warning(f"Unknown operation type: {operation_type}")
+
+    def _test_bezier_closing(self, operation):
+        """
+        Run Bezier closing curve test
+
+        Args:
+            operation: Dictionary with test parameters
+        """
+        from test_bezier_closing import BezierClosingTest
+
+        logger.info("Running Bezier closing test")
+
+        tester = BezierClosingTest(self.doc)
+
+        # Check if using explicit points
+        use_explicit = operation.get('use_explicit_points', False)
+        end_points_list = operation.get('end_points', None)
+        start_points_list = operation.get('start_points', None)
+
+        result = tester.run_test(
+            num_end_points=operation.get('num_end_points', 3),
+            num_start_points=operation.get('num_start_points', 3),
+            separation=operation.get('separation', 10.0),
+            tension=operation.get('tension', 0.5),
+            curvature_weight=operation.get('curvature_weight', 0.2),
+            cylinder_radius=operation.get('cylinder_radius', 1.0),
+            seed=operation.get('seed', None),
+            use_explicit_points=use_explicit,
+            end_points_list=end_points_list,
+            start_points_list=start_points_list
+        )
+
+        logger.info("✓ Bezier test complete")
 
     def _close_loop(self, operation):
         """
         Create a closing segment that connects the last segment back to the first
         Uses multiple LCS from each segment for smooth curvature continuity.
         """
-        if len(self.segment_list) < 2:
-            logger.warning("Need at least 2 segments to close a loop")
-            return
+        workflow_mode = self.config.get('global_settings', {}).get('workflow_mode', None)
 
-        logger.info("Creating closing segment with smooth curvature matching")
+        # Handle second pass mode - reconstruct segments from document
+        # In second_pass mode, remove any existing closing segments (but NOT editable curves!)
+        if workflow_mode == "second_pass":
+            objects_to_remove = []
+            for obj in self.doc.Objects:
+                if 'closing_segment' in obj.Label:
+                    # Don't delete editable curves (they start with "EDIT_")
+                    if obj.Label.startswith('EDIT_'):
+                        logger.debug(f"Preserving editable curve: {obj.Label}")
+                        continue
+                    objects_to_remove.append(obj.Name)
 
-        # Get segments
+            if objects_to_remove:
+                logger.info(f"Removing {len(objects_to_remove)} old closing segment objects")
+                for obj_name in objects_to_remove:
+                    try:
+                        self.doc.removeObject(obj_name)
+                    except:
+                        pass
+                self.doc.recompute()
+            logger.info("Second pass mode: Looking for existing segments in document")
+            # DEBUG: Show what objects exist
+            logger.debug(f"All objects in document: {[obj.Label for obj in self.doc.Objects]}")
+            logger.debug(f"Object types: {[(obj.Label, obj.TypeId) for obj in self.doc.Objects]}")
+
+            # Find all segment Part objects - be more lenient
+            segment_parts = []
+            for obj in self.doc.Objects:
+                if '_Part' in obj.Label and 'closing_segment' not in obj.Label:
+                    segment_parts.append(obj)
+                    logger.debug(f"Found segment part: {obj.Label} ({obj.TypeId})")
+
+            if len(segment_parts) < 2:
+                raise ValueError(f"Second pass mode requires at least 2 existing segments. Found: {len(segment_parts)}")
+
+            logger.info(f"Found {len(segment_parts)} existing segments")
+
+            # Reconstruct first and last segments
+            first_segment = self._reconstruct_segment_from_part(segment_parts[0])
+            last_segment = self._reconstruct_segment_from_part(segment_parts[-1])
+
+            # Store in segment_list for the close operation
+            self.segment_list = [first_segment, last_segment]
+
+            logger.info(f"Reconstructed segments: '{first_segment.name}' (first) and '{last_segment.name}' (last)")
+        else:
+            # Normal mode or first pass mode: use built segments
+            if len(self.segment_list) < 2:
+                logger.warning("Need at least 2 segments to close a loop")
+                return
+
         first_segment = self.segment_list[0]
         last_segment = self.segment_list[-1]
 
-        # Get wafer settings
+        logger.info("Creating closing segment with smooth curvature matching")
+
+        # Get wafer settings and segment settings
         wafer_settings = operation.get('wafer_settings', {})
         segment_settings = operation.get('segment_settings', {})
 
@@ -171,11 +260,28 @@ class Driver:
                 'num_lcs_per_end': operation.get('num_lcs_per_end', 3),
                 'tension': operation.get('tension', 0.5),
                 'points': operation.get('points', 50),
-                'cylinder_radius': wafer_settings.get('cylinder_diameter', 2.0) / 2.0
+                'cylinder_radius': wafer_settings.get('cylinder_diameter', 2.0) / 2.0,
+                # Pass through edit-related parameters
+                'use_edited_curve': operation.get('use_edited_curve'),
+                'create_editable_curve': operation.get('create_editable_curve', workflow_mode == "first_pass")
             }
         }
 
-        # Create the closing segment at ORIGIN (like all non-first segments)
+        # Determine base placement for closing segment
+        use_edited_curve = operation.get('use_edited_curve')
+
+        if use_edited_curve:
+            # For edited curves in world coordinates, place segment at the exit point
+            # so the local coordinate transformation aligns correctly
+            last_wafer = last_segment.wafer_list[-1]
+            base_placement_for_closing = last_segment.base_placement.multiply(last_wafer.lcs2)
+            logger.info(f"Edited curve mode - placing segment at exit LCS: {base_placement_for_closing.Base}")
+        else:
+            # For auto-generated curves, create at origin (will be aligned later)
+            base_placement_for_closing = App.Placement()
+            logger.debug("Auto-generated curve mode - placing segment at origin")
+
+        # Create the closing segment
         from loft_segment import LoftSegment
         closing_segment = LoftSegment(
             doc=self.doc,
@@ -183,7 +289,7 @@ class Driver:
             curve_spec=curve_spec,
             wafer_settings=wafer_settings,
             segment_settings=segment_settings,
-            base_placement=App.Placement(),
+            base_placement=base_placement_for_closing,
             connection_spec={}
         )
 
@@ -192,23 +298,51 @@ class Driver:
         # Generate wafers (at origin)
         closing_segment.generate_wafers()
 
+        # In first pass mode, stop after creating editable curve
+        if workflow_mode == "first_pass":
+            logger.info("⏸️  FIRST PASS COMPLETE")
+            logger.info("    1. Edit the created curve using FreeCAD tools")
+            logger.info("    2. Change workflow_mode to 'second_pass' in YAML")
+            logger.info("    3. Add use_edited_curve parameter to close_loop operation")
+            logger.info("    4. Re-run the workflow")
+            return
+
+        # Continue with normal processing (visualize, align, etc.)
         # Visualize (creates Part and adds objects)
         closing_segment.visualize(self.doc)
 
-        # Special alignment for closing segment:
-        # Its START should connect to last segment's END
-        adjusted_placement = self._align_segment_to_previous(closing_segment, last_segment)
+        # Continue with normal processing (visualize, align, etc.)
+        # Visualize (creates Part and adds objects)
+        closing_segment.visualize(self.doc)
 
-        # Find and update the Part object
-        part_name = f"{closing_segment.name}_Part"
-        part_obj = self.doc.getObject(part_name)
+        # Check if we used an edited curve
+        used_edited_curve = operation.get('use_edited_curve') is not None
 
-        if part_obj:
-            part_obj.Placement = adjusted_placement
-            closing_segment.base_placement = adjusted_placement
-            logger.debug(f"Aligned closing segment to last segment")
+        if not used_edited_curve:
+            # Only apply alignment if we auto-generated the curve
+            # Special alignment for closing segment
+            adjusted_placement = self._align_segment_to_previous(closing_segment, last_segment)
+
+            # CRITICAL: Apply 180° rotation in LOCAL coordinates
+            local_rotation = App.Rotation(App.Vector(0, 1, 0), 180)
+            adjusted_placement = App.Placement(
+                adjusted_placement.Base,
+                adjusted_placement.Rotation.multiply(local_rotation)
+            )
+            logger.debug("Applied 180° rotation around local Y-axis to closing segment")
+
+            # Find and update the Part object
+            part_name = f"{closing_segment.name}_Part"
+            part_obj = self.doc.getObject(part_name)
+
+            if part_obj:
+                part_obj.Placement = adjusted_placement
+                closing_segment.base_placement = adjusted_placement
+                logger.debug(f"Aligned closing segment to last segment")
+            else:
+                logger.warning(f"Could not find Part object: {part_name}")
         else:
-            logger.warning(f"Could not find Part object: {part_name}")
+            logger.info("Using edited curve - skipping alignment (wafers already in correct position)")
 
         # Store segment
         self.segment_list.append(closing_segment)
@@ -235,6 +369,100 @@ class Driver:
             logger.warning(f"Large closure gap detected: {gap:.3f} - loop may not be properly closed")
 
         logger.info("✓ Closing segment created with curvature continuity")
+
+    def _reconstruct_segment_from_part(self, part_obj):
+        """
+        Reconstruct a LoftSegment from an existing Part object in the document.
+        Used in second_pass mode to work with pre-existing segments.
+        """
+        from loft_segment import LoftSegment
+        from wafer_loft import Wafer
+        import FreeCAD as App
+
+        # Extract segment name from Part label (remove '_Part' suffix)
+        segment_name = part_obj.Label.replace('_Part', '')
+
+        logger.debug(f"Reconstructing segment '{segment_name}' from Part object")
+
+        # Create minimal LoftSegment with placeholder values
+        segment = LoftSegment(
+            doc=self.doc,
+            name=segment_name,
+            curve_spec={'type': 'reconstructed'},
+            wafer_settings={'cylinder_diameter': 2.0},
+            segment_settings={},
+            base_placement=part_obj.Placement,
+            connection_spec={}
+        )
+
+        # Find associated wafer objects
+        wafer_prefix = f"Wafer_{segment_name}_"
+        wafer_objects = []
+        for obj in self.doc.Objects:
+            if obj.Label.startswith(wafer_prefix):
+                wafer_objects.append(obj)
+
+        # Sort by number in name
+        wafer_objects.sort(key=lambda obj: int(obj.Label.split('_')[-1]) if obj.Label.split('_')[-1].isdigit() else 0)
+
+        if wafer_objects:
+            logger.debug(f"Found {len(wafer_objects)} wafer objects for '{segment_name}'")
+
+            # Find LCS objects for each wafer
+            for i, wafer_obj in enumerate(wafer_objects):
+                # Look for associated LCS objects
+                lcs1_name = f"LCS_{segment_name}_{i}_1"
+                lcs2_name = f"LCS_{segment_name}_{i}_2"
+
+                lcs1_obj = self.doc.getObject(lcs1_name)
+                lcs2_obj = self.doc.getObject(lcs2_name)
+
+                if lcs1_obj and lcs2_obj:
+                    # Create minimal Wafer with all required parameters
+                    wafer = Wafer(
+                        solid=wafer_obj,  # Use the wafer object itself
+                        index=i,
+                        plane1=None,  # Not needed for reconstruction
+                        plane2=None,  # Not needed for reconstruction
+                        geometry=None,  # Not needed for reconstruction
+                        lcs1=lcs1_obj.Placement,
+                        lcs2=lcs2_obj.Placement
+                    )
+                else:
+                    # Approximate LCS from wafer placement
+                    wafer = Wafer(
+                        solid=wafer_obj,
+                        index=i,
+                        plane1=None,
+                        plane2=None,
+                        geometry=None,
+                        lcs1=wafer_obj.Placement,
+                        lcs2=App.Placement(
+                            wafer_obj.Placement.Base + wafer_obj.Placement.Rotation.multVec(App.Vector(0, 0, 1)),
+                            wafer_obj.Placement.Rotation
+                        )
+                    )
+                segment.wafer_list.append(wafer)
+        else:
+            logger.warning(f"No wafer objects found for '{segment_name}', creating dummy wafer")
+
+            # Create single dummy wafer at Part placement
+            dummy_wafer = Wafer(
+                solid=None,
+                index=0,
+                plane1=None,
+                plane2=None,
+                geometry=None,
+                lcs1=part_obj.Placement,
+                lcs2=App.Placement(
+                    part_obj.Placement.Base + part_obj.Placement.Rotation.multVec(App.Vector(0, 0, 1)),
+                    part_obj.Placement.Rotation
+                )
+            )
+            segment.wafer_list = [dummy_wafer]
+
+        logger.debug(f"Reconstructed segment '{segment_name}' with {len(segment.wafer_list)} wafers")
+        return segment
 
     def _remove_objects(self, operation):
         """Remove objects from the FreeCAD document except those specified to keep"""
@@ -313,6 +541,7 @@ class Driver:
         objects_to_remove = []
         for obj in all_objects:
             if obj not in objects_to_keep:
+
                 objects_to_remove.append((obj.Name, obj.Label))
 
         logger.info(f"Objects marked for removal: {len(objects_to_remove)}")
@@ -943,4 +1172,3 @@ class Driver:
         rot = placement.Rotation
         angles = rot.toEuler()
         return f"Pos=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f}), Rot=({angles[0]:.1f},{angles[1]:.1f},{angles[2]:.1f})"
-

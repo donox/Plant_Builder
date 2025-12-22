@@ -46,13 +46,16 @@ class Wafer:
 class LoftWaferGenerator:
     """Generate wafers by creating straight cylinders between cutting planes"""
 
-    def __init__(self, cylinder_radius=1.0):
+    def __init__(self, cylinder_radius=1.0, wafer_settings=None):
         """
         Initialize loft wafer generator
 
         Args:
-            cylinder_radius: Radius of the cylindrical wafers
+            cylinder_radius: Radius of the cylinder
+            wafer_settings: Dictionary with wafer configuration (optional)
         """
+        self.cylinder_radius = cylinder_radius
+        self.wafer_settings = wafer_settings if wafer_settings else {}
         self.spine_curve = None
         self.loft = None
         self.sample_points = []
@@ -137,7 +140,8 @@ class LoftWaferGenerator:
             logger.debug(f"Spine length: {spine_length:.3f}")
 
             # Calculate number of profiles based on spine length
-            profiles_per_unit = 0.89  # Empirical value
+            # Read profile_density from wafer_settings
+            profiles_per_unit = self.wafer_settings.get('profile_density', 0.89)
             num_profiles = max(10, int(spine_length * profiles_per_unit))
 
             logger.debug(f"Auto-calculated {num_profiles} profiles ({profiles_per_unit:.2f} per unit)")

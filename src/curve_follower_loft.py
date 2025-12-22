@@ -326,7 +326,7 @@ class CurveFollowerLoft:
         cylinder_diameter = wafer_settings.get('cylinder_diameter', 1.875)
         cylinder_radius = cylinder_diameter / 2.0
 
-        self.generator = LoftWaferGenerator(cylinder_radius=cylinder_radius)
+        self.generator = LoftWaferGenerator(wafer_settings=wafer_settings , cylinder_radius=cylinder_radius)
         # logger.debug(f"Created LoftWaferGenerator with radius {cylinder_radius:.3f}")
 
         doc = App.ActiveDocument

@@ -28,71 +28,94 @@ workflow:
   - operation: "remove_objects"
     description: "Clean up any existing objects"
     keep_patterns:
-      - "test_.*"
-      - "temp.*"
+      - "testx_.*"
+  - operation: "test_bezier_closing"
+    description: "LCS Z-axis simulation - exact production scenario"
+    use_explicit_points: true
 
-  - operation: "set_position"
-    description: "Set starting position and orientation"
-    position: [10, 0, 0]          # x, y, z coordinates
-    rotation: [0, 45, 0]          # roll, pitch, yaw in degrees (optional)
+    # End segment points derived from exit LCS Z-axis
+    # LCS position: (0, -1.373, 29.844)
+    # LCS Z-axis: (0, 0.991, 0.134)
+    # Points trace backward along Z-axis to show incoming trajectory
+    end_points:
+      - [0.000000, -5.336927, 29.308010]
+      - [0.000000, -3.354963, 29.576005]
+      - [0.000000, -1.373000, 29.844000]
 
-  - operation: "build_segment"
-    name: "test_circle"
-    description: "Build circular structure using curve follower"
+    # Start segment points derived from entry LCS Z-axis
+    # LCS position: (0, 0, 0)
+    # LCS Z-axis: (0, 0, 1.0)
+    # Points trace forward along Z-axis to show outgoing trajectory
+    start_points:
+      - [0.000000, 0.000000, 0.000000]
+      - [0.000000, 0.000000, 2.000000]
+      - [0.000000, 0.000000, 4.000000]
 
-    # Curve specification using new Curves class
-    curve_spec:
-      type: "circle"
-      parameters:
-        radius: 8.0
-        points: 100
-      transformations:
-        - operation: "scale"
-          factor: 1.0
-        - operation: "rotate"
-          axis: "z"
-          angle: 0
-      segment:
-        start_fraction: 0.0
-        end_fraction: 0.75
+    tension: 0.5
+    cylinder_radius: 1.125
 
-    # Wafer construction parameters
-    wafer_settings:
-      cylinder_diameter: 2.0
-      min_height: 0.8
-      max_chord: .3         # Need to relate to # points
+#  - operation: "set_position"
+#    description: "Set starting position and orientation"
+#    position: [10, 0, 0]          # x, y, z coordinates
+#    rotation: [0, 45, 0]          # roll, pitch, yaw in degrees (optional)
 
-    # Segment control settings
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-      add_curve_vertices: true
-
-  - operation: "build_segment"
-    segment_type: "curve_follower"
-    name: "test_helix_2"
-    description: "Build helical structure using curve follower"
-
-    curve_spec:
-      type: "helical"
-      parameters:
-        radius: 8.0        # Match the traditional helix
-        pitch: 8.0         # Larger pitch for better spacing
-        turns: .9        # Fewer turns
-        points: 120
-      transformations: [ ]   # Remove transformations for now
-
-    wafer_settings:
-      cylinder_diameter: 1.9    # Match traditional helix
-      min_height: 0.5           # Much smaller
-      max_chord: 0.2         # Much tighter
-
-    segment_settings:
-      show_lcs: false
-      build_segment: true
-      rotate_segment: 0.0
-      add_curve_vertices: true
+#  - operation: "build_segment"
+#    name: "test_circle"
+#    description: "Build circular structure using curve follower"
+#
+#    # Curve specification using new Curves class
+#    curve_spec:
+#      type: "circle"
+#      parameters:
+#        radius: 8.0
+#        points: 100
+#      transformations:
+#        - operation: "scale"
+#          factor: 1.0
+#        - operation: "rotate"
+#          axis: "z"
+#          angle: 0
+#      segment:
+#        start_fraction: 0.0
+#        end_fraction: 0.75
+#
+#    # Wafer construction parameters
+#    wafer_settings:
+#      cylinder_diameter: 2.0
+#      min_height: 0.8
+#      max_chord: .3         # Need to relate to # points
+#
+#    # Segment control settings
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#      add_curve_vertices: true
+#
+#  - operation: "build_segment"
+#    segment_type: "curve_follower"
+#    name: "test_helix_2"
+#    description: "Build helical structure using curve follower"
+#
+#    curve_spec:
+#      type: "helical"
+#      parameters:
+#        radius: 8.0        # Match the traditional helix
+#        pitch: 8.0         # Larger pitch for better spacing
+#        turns: .9        # Fewer turns
+#        points: 120
+#      transformations: [ ]   # Remove transformations for now
+#
+#    wafer_settings:
+#      cylinder_diameter: 1.9    # Match traditional helix
+#      min_height: 0.5           # Much smaller
+#      max_chord: 0.2         # Much tighter
+#
+#    segment_settings:
+#      show_lcs: false
+#      build_segment: true
+#      rotate_segment: 0.0
+#      add_curve_vertices: true
 
 # Alternative workflow configurations (can be selected)
 workflows:
