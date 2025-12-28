@@ -29,6 +29,7 @@ workflow:
     description: "Clean up any existing objects"
     keep_patterns:
       - "testx_.*"
+      - .*Metadata.*
   - operation: "test_bezier_closing"
     description: "LCS Z-axis simulation - exact production scenario"
     use_explicit_points: true
