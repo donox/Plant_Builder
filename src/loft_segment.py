@@ -7,8 +7,17 @@ and concatenated with other segments.
 """
 
 import FreeCAD as App
+from numpy.ma.core import max_filler
+from scipy.optimize import curve_fit
+from sqlalchemy.sql.operators import from_
+
 # import Part
 from curve_follower_loft import CurveFollowerLoft
+from curve_io import get_wire_from_label, sample_points_on_wire, transform_world_to_local
+from curve_follower_loft import CurveFollowerLoft
+from wafer_loft import LoftWaferGenerator
+from curve_io import get_wire_from_label, sample_points_on_wire, transform_world_to_local
+
 from core.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -62,40 +71,124 @@ class LoftSegment:
         # logger.debug(f"Created LoftSegment: {name}")
 
     def generate_wafers(self):
-        """
-        Generate wafers for this segment using loft-based approach
-        All geometry generated at ORIGIN in local coordinates.
-
-        Returns:
-            List of Wafer objects
-        """
-        logger.info(f"Generating wafers for segment '{self.name}'")
-
+        """Generate wafers for this segment using the loft-based approach."""
+        logger.info(f"Generating wafers for segment {self.name}")
         try:
-            self.follower = CurveFollowerLoft(wafer_settings=self.wafer_settings)
+            curve_type = None
+            if self.curve_spec:
+                curve_type = self.curve_spec.get("type", None)
 
-            # Generate everything at ORIGIN (no base_placement)
-            self.follower.generate_loft_wafers(
-                self.curve_spec,
-                self.wafer_settings,
-                base_placement=None
-            )
+            if curve_type == "existing_curve":
+                wafers = self._generate_wafers_from_existing_curve()
+            else:
+                wafers = self._generate_wafers_from_parametric_curve()
 
-            self.wafer_list = self.follower.get_wafer_list()
+            self.wafer_list = wafers
             self._calculate_bounds()
-
-            logger.info(f"Generated {len(self.wafer_list)} wafers for segment '{self.name}'")
-            if self.wafer_list and self.wafer_list[0].wafer:
-                first_wafer_bbox = self.wafer_list[0].wafer.BoundBox
-                # logger.debug(f"First wafer bounding box (local): {first_wafer_bbox}")
-                # logger.debug(f"First wafer placement (local): {self.wafer_list[0].wafer.Placement}")
+            logger.info(f"Generated {len(self.wafer_list)} wafers for segment {self.name}")
             return self.wafer_list
 
         except Exception as e:
-            logger.error(f"Failed to generate wafers for segment '{self.name}': {e}", exc_info=True)
+            logger.error(f"Failed to generate wafers for segment {self.name}: {e}", exc_info=True)
             raise
 
-    def _transform_curve_points(self, points):
+
+    def _generate_wafers_from_parametric_curve(self):
+        """
+        Generate wafers using the existing Curves + CurveFollowerLoft pipeline.
+        This preserves current behavior for non-customcurve types.
+        """
+        self.follower = CurveFollowerLoft(wafer_settings=self.wafer_settings)
+        # Existing path: CurveFollowerLoft handles Curves and loft creation. [file:1][file:7]
+        self.follower.generate_loft_wafers(self.curve_spec, self.wafer_settings, base_placement=None)
+        wafers = self.follower.get_wafer_list()
+        return wafers
+
+    def _generate_wafers_from_existing_curve(self):
+        """
+        Generate wafers from an existing FreeCAD curve object, referenced by Label
+        via curve_spec:
+            type: custom_curve
+            from_label: SomeCurveLabel
+            num_samples: 200
+        """
+        if not self.curve_spec:
+            raise ValueError("curve_spec is required for custom_curve segments.")
+
+        from_label = self.curve_spec.get("from_label", None)
+        num_samples = int(self.curve_spec.get("num_samples", 0))
+
+        if not from_label:
+            raise ValueError("custom_curve requires 'from_label' in curve_spec.")
+        if num_samples < 2:
+            raise ValueError(f"custom_curve requires num_samples >= 2, got {num_samples}.")
+
+        if self.doc is None:
+            raise ValueError("LoftSegment.doc is None; cannot look up existing curve object.")
+
+        # 1) Find the wire by label (hard fail if not unique / not continuous).
+        wire = get_wire_from_label(self.doc, from_label, tol=1e-4)
+
+        # 2) Sample world-coordinate points along the wire.
+        points_world = sample_points_on_wire(wire, num_samples)
+
+        # 3) Transform to segment-local coordinates using base_placement.
+        #    This mirrors the world->local pattern used in generate_closing_curve. [file:2][file:7]
+        points_local = transform_world_to_local(points_world, self.base_placement)
+
+        # 4) Feed these local points into CurveFollowerLoft.
+        self.follower = CurveFollowerLoft(wafer_settings=self.wafer_settings)
+        self.follower.set_curve_points(points_local)
+        self.follower.create_spine_curve()
+
+        # Now reuse the existing loft + wafer logic in CurveFollowerLoft.
+        # We only need LoftWaferGenerator to operate on the already-created spine.
+        # The simplest way that reuses existing code is to call generate_loft_wafers
+        # with a minimal curve_spec that tells it "points already set".
+        #
+        # For now, we add a dedicated method on CurveFollowerLoft would be ideal,
+        # but to minimize changes, we call its internal machinery directly.
+
+        # Create a spine for the LoftWaferGenerator just as generate_loft_wafers would.
+        # This assumes LoftWaferGenerator.create_spine_from_points matches our points. [file:3]
+        generator = LoftWaferGenerator(
+            cylinder_radius=self.wafer_settings.get("cylinder_diameter", 1.875) / 2.0,
+            wafer_settings=self.wafer_settings,
+        )
+        generator.create_spine_from_points(points_local)
+        generator.create_loft_along_spine(self.follower)
+        # Sampling strategy: reuse the limited_sampler logic inside CurveFollowerLoft. [file:1]
+        target_chord = self.wafer_settings.get("max_chord", 0.5)
+        max_filler_wafer_count = self.wafer_settings.get("max_wafer_count", None)
+
+        def limited_sampler(spine_edge):
+            params = self.follower.chord_distance_sampler(spine_edge, target_chord)
+            if max_filler_wafer_count and len(params) > max_filler_wafer_count + 1:
+                params = params[: max_filler_wafer_count + 1]
+            return params
+
+        generator.sample_points_along_loft(limited_sampler)
+        generator.calculate_cutting_planes()
+        wafers = generator.generate_wafers()
+
+        # Save min/max X for this segment if available, same as CurveFollowerLoft. [file:1][file:3]
+        xcoords = []
+        for wafer in wafers:
+            if wafer.wafer is not None:
+                bbox = wafer.wafer.BoundBox
+                xcoords.extend([bbox.XMin, bbox.XMax])
+        if xcoords:
+            self.xmin = min(xcoords)
+            self.xmax = max(xcoords)
+        else:
+            self.xmin = None
+            self.xmax = None
+
+        return wafers
+
+
+
+    def transform_curve_points(self, points):
         """
         Transform curve points by base_placement
 

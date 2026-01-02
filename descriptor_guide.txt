@@ -237,7 +237,53 @@ Creates a figure-eight shape:
     points: 100                # Number of points
     plane: "xy"                # Plane: "xy", "xz", or "yz"
 
-8. CUSTOM CURVE
+ 8. TREFOIL
+ _________________
+ Creates a trefoil shape:
+
+ type: "trefoil"
+ parameters:
+       major_radius (float): Radius of the main torus path (default: 6.0).
+                                 Controls the overall size of the trefoil.
+                                 Larger values = bigger knot.
+
+            tube_radius (float): Radius of the tube that wraps around the torus (default: 2.0).
+                                Controls the "thickness" of the knot path.
+                                Affects how much the curve deviates from the main circle.
+
+            p (int): Number of times the curve wraps around the torus longitudinally (default: 2).
+                    For a trefoil, typically p=2.
+
+            q (int): Number of times the curve wraps around the torus meridionally (default: 3).
+                    For a trefoil, typically q=3.
+                    The (p,q) pair defines the knot type: (2,3) = trefoil, (3,5) = cinquefoil, etc.
+
+            center (tuple): (x, y, z) coordinates for the center point (default: (0, 0, 0)).
+                           Translates the entire curve to this location.
+
+            phase_deg (float): Rotation phase in degrees (default: 0.0).
+                              Rotates where the curve starts around the knot.
+                              Use to orient the knot optimally for cutting.
+
+            scale_z (float): Vertical scaling factor (default: 1.0).
+                            Stretches or compresses the knot in the Z direction.
+                            Values < 1.0 flatten the knot, > 1.0 stretch it vertically.
+
+            jitter (float): Random perturbation factor (default: 0.0).
+                           Adds randomness to point spacing (0.0 = none, 1.0 = maximum).
+                           Can create organic variation but may complicate cutting.
+
+            smooth_factor (float): Smoothing multiplier for tube radius (default: 0.5).
+                                  Controls how pronounced the knot's curves are.
+                                  Values < 1.0 reduce deviation from the major circle,
+                                  creating a gentler, more cuttable curve.
+
+            optimize_spacing (bool): Whether to optimize point spacing for cutting (default: True).
+                                    When True, redistributes points for more even spacing,
+                                    which can improve cutting accuracy and reduce waste.
+
+
+9. CUSTOM CURVE
 ---------------
 Use your own curve function:
 

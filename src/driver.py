@@ -18,6 +18,7 @@ import FreeCAD as App
 
 from config.loader import load_config
 from core.logging_setup import get_logger
+from curves import Curves
 from core.metadata import apply_metadata
 
 
@@ -229,12 +230,180 @@ class Driver:
             self._close_loop(operation)
         elif operation_type == "test_bezier_closing":
             self._test_bezier_closing(operation)
+        elif operation_type == "export_curve":
+            self._execute_export_curve(operation)
         else:
             logger.warning(f"Unknown operation type: {operation_type}")
 
     # -------------------------------------------------------------------------
     # Operations
     # -------------------------------------------------------------------------
+
+    def _execute_export_curve(self, operation: Dict[str, Any]) -> None:
+        """
+        Export a composite curve from existing segments as a single FreeCAD object.
+
+        YAML example:
+
+        - operation export_curve
+          name FinalCurve
+          description Composite of base + Curve Left + Curve Right + close_seg
+          segments
+            - base
+            - Curve Left
+            - Curve Right
+            - close_seg
+          sampling
+            per_segment 100
+        """
+        curve_name = operation.get("name", "ExportedCurve")
+        segment_names = operation.get("segments", [])
+        sampling_cfg = operation.get("sampling", {})
+        points_per_segment = int(sampling_cfg.get("per_segment", 100))
+
+        if not segment_names:
+            raise ValueError("export_curve operation requires a non-empty 'segments' list.")
+
+        if points_per_segment < 2:
+            raise ValueError(
+                f"export_curve 'sampling.per_segment' must be >= 2, got {points_per_segment}."
+            )
+
+        if not self.segment_list:
+            raise ValueError(
+                "No segments available in driver.segment_list; "
+                "export_curve must run after build_segment operations."
+            )
+
+        logger.info(
+            f"Exporting composite curve '{curve_name}' from segments {segment_names} "
+            f"with {points_per_segment} points per segment."
+        )
+
+        # 1) Resolve LoftSegment instances in the order given.
+        ordered_segments = []
+        for seg_name in segment_names:
+            match = None
+            for seg in self.segment_list:
+                print(f"NAMES OF SEGMENTS: {seg_name} -> {seg.name}")
+                if seg.name == seg_name:
+                    match = seg
+                    break
+            if match is None:
+                raise ValueError(
+                    f"export_curve: could not find segment named '{seg_name}' "
+                    "in driver.segment_list."
+                )
+            ordered_segments.append(match)
+
+        all_points_world: list[App.Vector] = []
+
+        # 2) For each segment, regenerate its curve points in local coordinates
+        #    via Curves + curve_spec, then map to world using segment.base_placement. [file:2][file:7]
+        for idx, segment in enumerate(ordered_segments):
+            if not segment.curve_spec:
+                raise ValueError(
+                    f"export_curve: segment '{segment.name}' has no curve_spec."
+                )
+
+            curve_spec = segment.curve_spec
+            curve_type = curve_spec.get("type")
+
+            if curve_type == "existing_curve":
+                logger.info(
+                    f"export_curve: skipping segment '{segment.name}' "
+                    f"(type {curve_type}) for parametric sampling."
+                )
+                continue
+
+            # Use the Curves class to generate the transformed curve points.
+            curves_instance = Curves(self.doc, curve_spec)
+            points_array = curves_instance.get_curve_points()  # numpy array (N, 3). [file:2]
+
+            if points_array is None or len(points_array) == 0:
+                raise ValueError(
+                    f"export_curve: Curves returned no points for segment '{segment.name}'."
+                )
+
+            # Resample / thin to points_per_segment, using simple index-based sampling
+            # for v1. This keeps behavior predictable and easy to adjust later.
+            total_pts = len(points_array)
+            if total_pts <= points_per_segment:
+                indices = range(total_pts)
+            else:
+                # Evenly distributed indices from 0 .. total_pts-1
+                indices = [
+                    int(round(i * (total_pts - 1) / (points_per_segment - 1)))
+                    for i in range(points_per_segment)
+                ]
+
+            segment_points_local: list[App.Vector] = []
+            for i in indices:
+                p = points_array[i]
+                segment_points_local.append(App.Vector(float(p[0]), float(p[1]), float(p[2])))
+
+            # Transform to world coordinates using the segment's base_placement. [file:7]
+            segment_points_world = segment.transform_curve_points(segment_points_local)
+
+            # Avoid duplicating the join point between consecutive segments
+            if all_points_world and segment_points_world:
+                last_global = all_points_world[-1]
+                first_new = segment_points_world[0]
+                if (last_global.sub(first_new)).Length <= 1e-6:
+                    segment_points_world = segment_points_world[1:]
+
+            all_points_world.extend(segment_points_world)
+
+            logger.info(
+                f"export_curve: segment '{segment.name}' contributed "
+                f"{len(segment_points_world)} world points "
+                f"(source points: {total_pts})."
+            )
+
+        if len(all_points_world) < 2:
+            raise ValueError(
+                f"export_curve: composite curve '{curve_name}' has fewer than 2 points."
+            )
+
+        # 3) Build a BSpline curve through all world points and create a Part::Feature.
+        import Part  # local import to avoid circular issues
+
+        bspline = Part.BSplineCurve()
+        bspline.interpolate(all_points_world)
+
+        doc = self.doc
+        if doc is None:
+            raise ValueError("export_curve: driver.doc is None; cannot create curve object.")
+
+        # Remove any existing object with this label, to keep things clean.
+        existing = [obj for obj in doc.Objects if obj.Label == curve_name]
+        for obj in existing:
+            try:
+                doc.removeObject(obj.Name)
+            except Exception:
+                pass
+
+        curve_obj = doc.addObject("Part::Feature", "ExportedCurve")
+        curve_obj.Label = curve_name
+        curve_obj.Shape = bspline.toShape()
+
+        # Simple styling so it is visible.
+        if hasattr(curve_obj, "ViewObject"):
+            curve_obj.ViewObject.LineColor = (0.0, 1.0, 0.0)
+            curve_obj.ViewObject.LineWidth = 3.0
+
+        doc.recompute()
+
+        # 4) Basic diagnostics: length and point count.
+        total_length = 0.0
+        for i in range(len(all_points_world) - 1):
+            total_length += all_points_world[i].distanceToPoint(all_points_world[i + 1])
+
+        logger.info(
+            f"export_curve: created curve '{curve_name}' with "
+            f"{len(all_points_world)} points, approximate length {total_length:.3f}."
+        )
+
 
     def _test_bezier_closing(self, operation):
         from test_bezier_closing import BezierClosingTest
