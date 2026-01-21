@@ -9,7 +9,7 @@ params:
 
   project_name: Floor standing spiral Lamp
   version: '1.0'
-  created: '2025-12-13'
+  created: '2026-1-20'
   description: Lamp for Suzi
 
   cylinder_diameter: 2.0
@@ -39,7 +39,6 @@ workflow:
   description: Clean up any existing objects
   keep_patterns:
   - helix.*
-  - spiral_1*
   - Fusion*
 
 - operation: build_segment
@@ -49,9 +48,9 @@ workflow:
   curve_spec:
     type: helical
     parameters:
-      radius: 6.0
+      radius: 3.0
       pitch: 12.0
-      turns: 3
+      turns: 4
       points: 100
   wafer_settings:
     cylinder_diameter: ${cylinder_diameter}
