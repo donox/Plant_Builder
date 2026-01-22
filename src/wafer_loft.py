@@ -620,7 +620,10 @@ class LoftWaferGenerator:
                         continue
 
                     # Use actual geometry for the wafer data
+                    # First calculate the full geometry including lift_angle
+                    full_geometry = self._calculate_basic_geometry(plane1, plane2, chord_vector)
                     geometry = {
+                        **full_geometry,  # Include lift_angle_deg and other calculated values
                         'chord_vector': chord_vector,
                         'chord_length': chord_length,
                         'ellipse1': actual_ellipse1,
