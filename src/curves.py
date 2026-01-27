@@ -9,9 +9,8 @@ from core.logging_setup import get_logger, set_display_levels
 logger = get_logger(__name__)
 
 import math
-import sys
 import numpy as np
-from typing import List, Dict, Any, Optional, Callable, Tuple
+from typing import List, Dict, Any, Optional
 import FreeCAD as App
 import Part
 

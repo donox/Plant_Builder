@@ -2,6 +2,7 @@
 import FreeCAD as App
 import Part
 from typing import List, Tuple
+from core.core_utils import is_identity_placement
 
 
 def _points_are_close(p1: App.Vector, p2: App.Vector, tol: float) -> bool:
@@ -183,9 +184,6 @@ def sample_points_on_wire(wire: Part.Wire, numsamples: int) -> List[App.Vector]:
 
 
 
-import FreeCAD as App
-from typing import List
-
 
 def transform_world_to_local(points: List[App.Vector],
                              baseplacement: App.Placement) -> List[App.Vector]:
@@ -201,16 +199,7 @@ def transform_world_to_local(points: List[App.Vector],
     Returns:
         List of App.Vector in local coordinates.
     """
-    if baseplacement is None:
-        return list(points)
-
-    # Identity check: same idea as LoftSegment.isidentityplacement. [file:7]
-    identity_pos = App.Vector(0, 0, 0)
-    identity_rot = App.Rotation(0, 0, 0, 1)
-    posclose = (baseplacement.Base - identity_pos).Length <= 1e-6
-    rotclose = baseplacement.Rotation.isSame(identity_rot, 1e-6)
-
-    if posclose and rotclose:
+    if baseplacement is None or is_identity_placement(baseplacement):
         return list(points)
 
     placement_inv = baseplacement.inverse()

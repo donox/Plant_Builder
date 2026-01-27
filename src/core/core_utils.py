@@ -4,6 +4,17 @@ from typing import Any
 import FreeCAD
 
 
+def is_identity_placement(placement: FreeCAD.Placement) -> bool:
+    """Check if placement is identity (no transformation)."""
+    if placement is None:
+        return True
+    identity_pos = FreeCAD.Vector(0, 0, 0)
+    identity_rot = FreeCAD.Rotation(0, 0, 0, 1)
+    pos_close = (placement.Base - identity_pos).Length < 1e-6
+    rot_close = placement.Rotation.isSame(identity_rot, 1e-6)
+    return pos_close and rot_close
+
+
 def make_transform_align(source_lcs: Any, target_lcs: Any) -> FreeCAD.Placement:
     """
     Compute transform that moves 'source_lcs' frame onto 'target_lcs' frame.

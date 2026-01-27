@@ -16,6 +16,7 @@ import math
 import curves
 from wafer_loft import LoftWaferGenerator, simple_chord_distance_sampler
 from core.logging_setup import get_logger
+from core.core_utils import is_identity_placement
 
 logger = get_logger(__name__)
 
@@ -462,16 +463,7 @@ class CurveFollowerLoft:
 
     def _is_identity_placement(self, placement):
         """Check if placement is identity (no transformation)"""
-        if placement is None:
-            return True
-
-        identity_pos = App.Vector(0, 0, 0)
-        identity_rot = App.Rotation(0, 0, 0, 1)
-
-        pos_close = (placement.Base - identity_pos).Length < 1e-6
-        rot_close = placement.Rotation.isSame(identity_rot, 1e-6)
-
-        return pos_close and rot_close
+        return is_identity_placement(placement)
 
     def visualize_wafers(self, doc, show_lcs=True, show_cutting_planes=True):
         """

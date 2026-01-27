@@ -11,7 +11,6 @@ Orchestrates the build workflow by:
 from __future__ import annotations
 
 import os
-import math
 from typing import Any, Dict, Optional
 
 import FreeCAD as App
@@ -115,54 +114,7 @@ class Driver:
 
         # Apply metadata immediately (but make sure remove_objects keeps it)
         if self.doc and self.metadata:
-            self.apply_metadata(self.doc, self.metadata, source_config=config_file)
-
-    def apply_metadata(self, doc, metadata: dict, *, source_config: str | None = None):
-        """
-        Apply metadata from YAML into the FreeCAD document.
-
-        - Writes metadata to doc.Meta (File → Properties → Custom)
-        - Creates / updates a visible 'ModelMetadata' object
-        - Safe to call multiple times (idempotent)
-        """
-        if not metadata:
-            return
-
-        # Document-level metadata
-        for key, value in metadata.items():
-            doc.Meta[str(key)] = str(value)
-
-        if source_config:
-            doc.Meta["SourceConfig"] = source_config
-
-        doc.Meta["Generator"] = "PlantBuilder"
-        doc.Meta["MetadataApplied"] = "true"
-
-        # Visible metadata object in tree
-        meta_obj = doc.getObject("ModelMetadata")
-        if meta_obj is None:
-            meta_obj = doc.addObject("App::FeaturePython", "ModelMetadata")
-
-        def ensure_prop(name, prop_type, group, tooltip):
-            if not hasattr(meta_obj, name):
-                meta_obj.addProperty(prop_type, name, group, tooltip)
-
-        ensure_prop("ProjectName", "App::PropertyString", "Metadata", "Project name")
-        ensure_prop("Version", "App::PropertyString", "Metadata", "Model version")
-        ensure_prop("Description", "App::PropertyString", "Metadata", "Model description")
-        ensure_prop("Created", "App::PropertyString", "Metadata", "Creation date")
-        ensure_prop("SourceConfig", "App::PropertyString", "Metadata", "Source YAML file")
-        ensure_prop("Generator", "App::PropertyString", "Metadata", "Generating system")
-
-        meta_obj.ProjectName = str(metadata.get("project_name", ""))
-        meta_obj.Version = str(metadata.get("version", ""))
-        meta_obj.Description = str(metadata.get("description", ""))
-        meta_obj.Created = str(metadata.get("created", ""))
-        meta_obj.SourceConfig = str(source_config or "")
-        meta_obj.Generator = "PlantBuilder"
-        meta_obj.Label = "Model Metadata"
-
-        doc.recompute()
+            apply_metadata(self.doc, self.metadata, source_config=config_file)
 
     # -------------------------------------------------------------------------
     # Workflow execution
@@ -228,8 +180,6 @@ class Driver:
             self._execute_set_position(operation)
         elif operation_type == "close_loop":
             self._close_loop(operation)
-        elif operation_type == "test_bezier_closing":
-            self._test_bezier_closing(operation)
         elif operation_type == "export_curve":
             self._execute_export_curve(operation)
         else:
@@ -285,7 +235,7 @@ class Driver:
         for seg_name in segment_names:
             match = None
             for seg in self.segment_list:
-                print(f"NAMES OF SEGMENTS: {seg_name} -> {seg.name}")
+                logger.debug(f"NAMES OF SEGMENTS: {seg_name} -> {seg.name}")
                 if seg.name == seg_name:
                     match = seg
                     break
@@ -404,32 +354,6 @@ class Driver:
             f"{len(all_points_world)} points, approximate length {total_length:.3f}."
         )
 
-
-    def _test_bezier_closing(self, operation):
-        from test_bezier_closing import BezierClosingTest
-
-        logger.info("Running Bezier closing test")
-
-        tester = BezierClosingTest(self.doc)
-
-        use_explicit = operation.get("use_explicit_points", False)
-        end_points_list = operation.get("end_points", None)
-        start_points_list = operation.get("start_points", None)
-
-        tester.run_test(
-            num_end_points=operation.get("num_end_points", 3),
-            num_start_points=operation.get("num_start_points", 3),
-            separation=operation.get("separation", 10.0),
-            tension=operation.get("tension", 0.5),
-            curvature_weight=operation.get("curvature_weight", 0.2),
-            cylinder_radius=operation.get("cylinder_radius", 1.0),
-            seed=operation.get("seed", None),
-            use_explicit_points=use_explicit,
-            end_points_list=end_points_list,
-            start_points_list=start_points_list,
-        )
-
-        logger.info("✓ Bezier test complete")
 
     def _close_loop(self, operation):
         """

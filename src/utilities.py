@@ -1,6 +1,4 @@
 import numpy as np
-import csv
-import re
 import math
 from core.logging_setup import get_logger
 
@@ -28,7 +26,7 @@ def squared_distance(place1, place2):
 
 
 def display_axis_angle(pref, place):
-    print(f"{pref}: {np.round(place.Rotation.Angle, 2)} {np.round(place.Rotation.Axis, 2)}")
+    logger.debug(f"{pref}: {np.round(place.Rotation.Angle, 2)} {np.round(place.Rotation.Axis, 2)}")
 
 
 def convert_angle(angle):

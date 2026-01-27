@@ -7,18 +7,13 @@ and concatenated with other segments.
 """
 
 import FreeCAD as App
-from numpy.ma.core import max_filler
-from scipy.optimize import curve_fit
-from sqlalchemy.sql.operators import from_
 
-# import Part
 from curve_follower_loft import CurveFollowerLoft
 from curve_io import get_wire_from_label, sample_points_on_wire, transform_world_to_local
-from curve_follower_loft import CurveFollowerLoft
 from wafer_loft import LoftWaferGenerator
-from curve_io import get_wire_from_label, sample_points_on_wire, transform_world_to_local
 
 from core.logging_setup import get_logger
+from core.core_utils import is_identity_placement
 
 logger = get_logger(__name__)
 
@@ -220,13 +215,7 @@ class LoftSegment:
 
     def _is_identity_placement(self, placement):
         """Check if placement is identity (no transformation)"""
-        identity_pos = App.Vector(0, 0, 0)
-        identity_rot = App.Rotation(0, 0, 0, 1)
-
-        pos_close = (placement.Base - identity_pos).Length < 1e-6
-        rot_close = placement.Rotation.isSame(identity_rot, 1e-6)
-
-        return pos_close and rot_close
+        return is_identity_placement(placement)
 
 
     def _calculate_bounds(self):
@@ -286,30 +275,6 @@ class LoftSegment:
             local_start_lcs = first_wafer.lcs1
             world_start_lcs = self.base_placement.multiply(local_start_lcs)
             return world_start_lcs
-        else:
-            # No LCS available - return base_placement
-            return self.base_placement
-
-    def get_end_placement(self):
-        """
-        Get the placement at the END of this segment in WORLD coordinates
-        This is where the next segment should start.
-
-        Returns:
-            App.Placement in world coordinates
-        """
-        if not self.wafer_list or len(self.wafer_list) == 0:
-            # No wafers - return base_placement unchanged
-            return self.base_placement
-
-        # Get last wafer's exit LCS (in local coordinates)
-        last_wafer = self.wafer_list[-1]
-
-        if last_wafer.lcs2:
-            # Transform local LCS to world coordinates
-            local_end_lcs = last_wafer.lcs2
-            world_end_lcs = self.base_placement.multiply(local_end_lcs)
-            return world_end_lcs
         else:
             # No LCS available - return base_placement
             return self.base_placement

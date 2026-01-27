@@ -171,7 +171,7 @@ class LoftWaferGenerator:
             # Add helpful suggestions
             try:
                 suggestions = self._get_loft_failure_suggestions(curve_follower, num_profiles)
-            except:
+            except Exception:
                 suggestions = ["Could not generate detailed diagnostics"]
 
             logger.error("LOFT FAILURE DIAGNOSTICS:")
@@ -179,44 +179,6 @@ class LoftWaferGenerator:
                 logger.error(f"  {i}. {suggestion}")
 
             raise RuntimeError(error_msg)
-
-        def _create_profiles(self, num_profiles):
-            """Create circular profiles perpendicular to spine at evenly spaced parameters"""
-            profiles = []
-            spine_edge = Part.Edge(self.spine)
-
-            for i in range(num_profiles):
-                # Calculate parameter along spine (0.0 to 1.0)
-                u = i / (num_profiles - 1) if num_profiles > 1 else 0.0
-
-                # Get point and tangent at this parameter
-                point = self.spine.value(u)
-                tangent = self.spine.tangent(u)[0]  # Returns tuple (tangent, )
-                tangent.normalize()
-
-                # Create a plane perpendicular to the tangent
-                # Use arbitrary perpendicular vector for the plane's normal direction
-                if abs(tangent.z) < 0.9:
-                    perp = App.Vector(0, 0, 1).cross(tangent)
-                else:
-                    perp = App.Vector(1, 0, 0).cross(tangent)
-                perp.normalize()
-
-                # Create circle in the plane
-                circle = Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), self.radius)
-                circle_edge = Part.Edge(circle)
-                circle_wire = Part.Wire(circle_edge)
-
-                # Create placement: translate to point, rotate to align with tangent
-                # Z-axis should align with tangent
-                rotation = App.Rotation(App.Vector(0, 0, 1), tangent)
-                placement = App.Placement(point, rotation)
-
-                # Transform the circle
-                profile = circle_wire.transformGeometry(placement.toMatrix())
-                profiles.append(profile)
-
-            return profiles
 
     def _diagnose_profiles(self, profiles, spine_length):
         """Check profiles for potential loft issues"""
@@ -339,7 +301,6 @@ class LoftWaferGenerator:
         Returns:
             List of cutting plane data dictionaries
         """
-        # logger.debug("Calculating cutting planes")
 
         self.cutting_planes = []
 
@@ -485,8 +446,6 @@ class LoftWaferGenerator:
             # Get face normal (actual, from geometry)
             normal = face.normalAt(0, 0)
             center = face.CenterOfMass
-            # logger.debug(
-            #     f"Face CenterOfMass={center}, target was {target_center}, distance={(center - target_center).Length:.6f}")
 
             # Find the ellipse or circle edge
             for edge in face.Edges:
@@ -511,7 +470,6 @@ class LoftWaferGenerator:
                     major_axis_dir = major_axis_dir - normal * (major_axis_dir.dot(normal))
                     if major_axis_dir.Length > 1e-9:
                         major_axis_dir.normalize()
-                    # logger.debug(f"Extracted circle: center={center}, normal={normal}, radius={self.radius}")
 
                 elif hasattr(curve, 'MajorRadius'):
                     # It's an ellipse
@@ -540,8 +498,6 @@ class LoftWaferGenerator:
                         else:
                             major_axis_dir = App.Vector(1, 0, 0).cross(normal)
                         major_axis_dir.normalize()
-                    # logger.debug(
-                    #     f"Extracted ellipse: center={center}, normal={normal}, major_axis_dir={major_axis_dir}")
                 else:
                     continue
 
@@ -561,7 +517,6 @@ class LoftWaferGenerator:
             plane1 = self.cutting_planes[i]
             plane2 = self.cutting_planes[i + 1]
 
-            # logger.debug(f"Creating wafer {i}")
 
             try:
                 center1 = plane1['point']
@@ -638,7 +593,6 @@ class LoftWaferGenerator:
                         'plane1': plane1,
                         'plane2': plane2
                     })
-                    # logger.debug(f"Wafer {i} created, volume: {wafer.Volume:.4f}")
                 else:
                     logger.warning(f"Wafer {i} failed (zero volume)")
                     wafer_data_list.append(None)
@@ -648,7 +602,6 @@ class LoftWaferGenerator:
                 wafer_data_list.append(None)
 
         # Rotation angle calculation remains the same...
-        # logger.debug("Calculating rotation angles")
 
         chord_0a = None
         chord_0b = None
@@ -784,15 +737,10 @@ class LoftWaferGenerator:
         Returns:
             App.Placement: LCS with X along major axis, Z along normal, Y completing right-hand rule
         """
-        # logger.debug(f"_create_lcs called:")
-        # logger.debug(f"  center={center}")
-        # logger.debug(f"  normal (target Z)={normal}")
-        # logger.debug(f"  major_axis_dir (target X)={major_axis_dir}")
 
         # Normalize Z-axis (normal)
         z_axis = App.Vector(normal.x, normal.y, normal.z)
         z_axis_length = z_axis.Length
-        # logger.debug(f"  Z-axis length before normalization: {z_axis_length:.6f}")
 
         if z_axis_length < 1e-9:
             logger.error(f"  Z-axis has zero length! Using fallback (0,0,1)")
@@ -803,7 +751,6 @@ class LoftWaferGenerator:
         # Normalize X-axis (major axis)
         x_axis = App.Vector(major_axis_dir.x, major_axis_dir.y, major_axis_dir.z)
         x_axis_length = x_axis.Length
-        # logger.debug(f"  X-axis length before normalization: {x_axis_length:.6f}")
 
         if x_axis_length < 1e-9:
             logger.error(f"  X-axis has zero length! Using fallback")
@@ -817,13 +764,11 @@ class LoftWaferGenerator:
 
         # Ensure X is perpendicular to Z (project X onto plane perpendicular to Z)
         dot_product = x_axis.dot(z_axis)
-        # logger.debug(f"  X·Z dot product: {dot_product:.9f}")
 
         if abs(dot_product) > 1e-6:
             logger.info(f"  X and Z are not perpendicular, projecting X onto Z's perpendicular plane")
             x_axis = x_axis - z_axis * dot_product
             x_axis_length_after_projection = x_axis.Length
-            # logger.debug(f"  X-axis length after projection: {x_axis_length_after_projection:.6f}")
 
             if x_axis_length_after_projection > 1e-9:
                 x_axis.normalize()
@@ -835,13 +780,11 @@ class LoftWaferGenerator:
                     x_axis = App.Vector(1, 0, 0).cross(z_axis)
                 x_axis.normalize()
         else:
-            # logger.debug(f"  X and Z are already perpendicular")
             pass
 
         # Calculate Y = Z × X (right-hand rule)
         y_axis = z_axis.cross(x_axis)
         y_axis_length = y_axis.Length
-        # logger.debug(f"  Y-axis (Z×X) length: {y_axis_length:.6f}")
 
         if y_axis_length < 1e-9:
             logger.error(f"  Y-axis has zero length! X and Z might be parallel")
@@ -854,15 +797,10 @@ class LoftWaferGenerator:
         xy_dot = x_axis.dot(y_axis)
         yz_dot = y_axis.dot(z_axis)
         zx_dot = z_axis.dot(x_axis)
-        # logger.debug(f"  Orthogonality check: X·Y={xy_dot:.9f}, Y·Z={yz_dot:.9f}, Z·X={zx_dot:.9f}")
 
         if abs(xy_dot) > 1e-6 or abs(yz_dot) > 1e-6 or abs(zx_dot) > 1e-6:
             logger.warning(f"  Axes are not orthogonal!")
 
-        # logger.debug(f"  Final LCS axes:")
-        # logger.debug(f"    X={x_axis} (length={x_axis.Length:.6f})")
-        # logger.debug(f"    Y={y_axis} (length={y_axis.Length:.6f})")
-        # logger.debug(f"    Z={z_axis} (length={z_axis.Length:.6f})")
 
         # Create placement from axes
         placement = App.Placement()
@@ -875,7 +813,6 @@ class LoftWaferGenerator:
         rotation_matrix.A31, rotation_matrix.A32, rotation_matrix.A33 = x_axis.z, y_axis.z, z_axis.z
 
         placement.Rotation = App.Rotation(rotation_matrix)
-        # logger.debug(f"  Created LCS placement: {placement}")
 
         return placement
 
@@ -987,14 +924,12 @@ class LoftWaferGenerator:
             spine_obj.Shape = self.spine_curve
             spine_obj.ViewObject.LineColor = (1.0, 0.5, 0.0)
             spine_obj.ViewObject.LineWidth = 4
-            # logger.debug("Added spine curve")
 
         if self.loft:
             loft_obj = doc.addObject("Part::Feature", "Loft_Reference")
             loft_obj.Shape = self.loft
             loft_obj.ViewObject.ShapeColor = (0.7, 0.7, 0.5)
             loft_obj.ViewObject.Transparency = 85
-            # logger.debug("Added loft reference")
 
         if show_cutting_planes:
             cutting_planes_group = doc.addObject("App::DocumentObjectGroup", "CuttingPlanes")
@@ -1011,7 +946,6 @@ class LoftWaferGenerator:
                 plane_obj.ViewObject.Transparency = 85
 
                 cutting_planes_group.addObject(plane_obj)
-            # logger.debug(f"Added {len(self.cutting_planes)} cutting planes")
 
         wafer_count = 0
         for wafer_obj in self.wafers:
@@ -1053,7 +987,6 @@ class LoftWaferGenerator:
 
                 wafer_count += 1
 
-        # logger.debug(f"Added {wafer_count} wafers to visualization")
         doc.recompute()
         logger.info("Visualization complete")
 
@@ -1068,7 +1001,7 @@ class LoftWaferGenerator:
 
             return lcs
 
-        except:
+        except Exception:
             origin = placement.Base
             rotation = placement.Rotation
 
@@ -1102,5 +1035,4 @@ def simple_chord_distance_sampler(spine_edge, target_chord_distance=0.5):
     for i in range(num_samples):
         t = first_param + (last_param - first_param) * i / (num_samples - 1)
         params.append(t)
-    # logger.debug(f"Chord distance sampler: {num_samples} samples for length {total_length:.3f}")
     return params

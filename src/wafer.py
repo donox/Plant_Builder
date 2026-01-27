@@ -1,5 +1,5 @@
-from core.logging_setup import get_logger, log_coord, apply_display_levels
-apply_display_levels(["ERROR", "WARNING", "INFO", "DEBUG"])
+from core.logging_setup import get_logger, set_display_levels
+set_display_levels(["ERROR", "WARNING", "INFO", "DEBUG"])
 # apply_display_levels(["ERROR", "WARNING", "INFO"])
 
 logger = get_logger(__name__)
@@ -102,17 +102,6 @@ class Wafer(object):
         cylinder_length = chord_length + extend1 + extend2
         cylinder_end = pos1 + wafer_axis * (chord_length + extend2)
 
-        # logger.debug(f"      Cylinder: chord_length={chord_length:.3f}, extend1={extend1:.3f}, extend2={extend2:.3f}")
-        # logger.debug(f"      Total cylinder length: {cylinder_length:.3f}")
-        # logger.debug(f"        🔍 WAFER GEOMETRY DEBUG for {wafer_name}:")
-        # logger.debug(f"           LCS1 position: [{pos1.x:.3f}, {pos1.y:.3f}, {pos1.z:.3f}]")
-        # logger.debug(f"           LCS2 position: [{pos2.x:.3f}, {pos2.y:.3f}, {pos2.z:.3f}]")
-        # logger.debug(
-        #     f"           Cylinder START: [{cylinder_start.x:.3f}, {cylinder_start.y:.3f}, {cylinder_start.z:.3f}]")
-        # logger.debug(f"           Cylinder END:   [{cylinder_end.x:.3f}, {cylinder_end.y:.3f}, {cylinder_end.z:.3f}]")
-        # logger.debug(f"           Extension beyond LCS1: {extend1:.3f} (backwards)")
-        # logger.debug(f"           Extension beyond LCS2: {extend2:.3f} (forwards)")
-
         # Create the cylinder
         cylinder = Part.makeCylinder(
             self.cylinder_radius,
@@ -136,9 +125,6 @@ class Wafer(object):
 
         self.lcs1 = lcs1
         self.lcs2 = lcs2
-
-        # logger.debug(f"      Created cylinder for wafer between {lcs1.Label} and {lcs2.Label}")
-        # logger.debug(f"      LCS positions unchanged - extensions are purely geometric")
 
     def get_lift_angle(self):
         """
@@ -226,15 +212,6 @@ def log_lcs_info(lcs, tag, logger_level="info"):
         euler = rotation.toEuler()
         log_func(f"  Euler angles: [Yaw={euler[0]:.3f}°, Pitch={euler[1]:.3f}°, Roll={euler[2]:.3f}°]")
 
-        # Axis-angle representation
-        # axis = rotation.Axis
-        # angle_deg = rotation.Angle * 180.0 / 3.14159265359
-        # log_func(f"  Axis-Angle: Axis=[{axis.x:.6f}, {axis.y:.6f}, {axis.z:.6f}], Angle={angle_deg:.3f}°")
-
-        # Quaternion
-        # q = rotation.Q
-        # log_func(f"  Quaternion: [{q[0]:.6f}, {q[1]:.6f}, {q[2]:.6f}, {q[3]:.6f}]")
-
         # Local coordinate axes in global coordinates
         x_axis = rotation.multVec(FreeCAD.Vector(1, 0, 0))
         y_axis = rotation.multVec(FreeCAD.Vector(0, 1, 0))
@@ -251,19 +228,6 @@ def log_lcs_info(lcs, tag, logger_level="info"):
         xy_dot = x_axis.dot(y_axis)
         xz_dot = x_axis.dot(z_axis)
         yz_dot = y_axis.dot(z_axis)
-
-        # log_func(f"  Axis lengths: X={x_len:.6f}, Y={y_len:.6f}, Z={z_len:.6f}")
-        # log_func(f"  Dot products: X·Y={xy_dot:.6f}, X·Z={xz_dot:.6f}, Y·Z={yz_dot:.6f}")
-        #
-        # # Check for orthonormality issues
-        # if abs(x_len - 1.0) > 1e-6 or abs(y_len - 1.0) > 1e-6 or abs(z_len - 1.0) > 1e-6:
-        #     log_func(f"  WARNING: Axes are not unit length!")
-        # if abs(xy_dot) > 1e-6 or abs(xz_dot) > 1e-6 or abs(yz_dot) > 1e-6:
-        #     log_func(f"  WARNING: Axes are not orthogonal!")
-        #
-        # # Additional placement info if available
-        # if hasattr(lcs, 'Visibility'):
-        #     log_func(f"  Visibility: {lcs.Visibility}")
 
         log_func(f"=== END LCS INFO: {tag} ===\n")
 
