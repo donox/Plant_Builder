@@ -893,14 +893,7 @@ class Driver:
             if getattr(w, "wafer", None) is not None and hasattr(w.wafer, "Volume"):
                 total_volume += w.wafer.Volume
 
-        # f.write(f"SEGMENT: {segment.name}\n")
-        # f.write("=" * 90 + "\n\n")
-        # f.write(f"Wafer count: {wafer_count}\n")
-        # f.write(f"Total volume: {total_volume:.4f}\n\n")
-        # f.write("-" * 90 + "\n\n")
-
         # Calculate bounding box for the segment
-        # Combine all wafer solids into a compound to get overall bounding box
         wafer_shapes = []
         for w in segment.wafer_list:
             if getattr(w, "wafer", None) is not None:
