@@ -4,8 +4,8 @@ PLANT BUILDER DESCRIPTOR FILE USER GUIDE
 
 OVERVIEW
 --------
-The Plant Builder uses YAML format descriptor files to define construction 
-workflows. These files specify what objects to build, their parameters, and 
+The Plant Builder uses YAML format descriptor files to define construction
+workflows. These files specify what objects to build, their parameters, and
 the sequence of operations.
 
 The YAML format is human-readable and supports:
@@ -13,67 +13,124 @@ The YAML format is human-readable and supports:
 - Hierarchical structure with indentation
 - Lists and dictionaries
 - Multiple data types (strings, numbers, booleans)
+- File includes and parameter substitution
 
 FILE STRUCTURE
 --------------
 Each descriptor file contains several main sections:
 
-1. metadata          - Project information
-2. global_settings   - Settings that apply to all operations
-3. output_files      - File paths for generated reports
-4. workflow          - Main sequence of operations to perform
-5. workflows         - Alternative workflow definitions (optional)
-6. curve_templates   - Reusable curve definitions (optional)
+1. include          - Files to include and merge (optional)
+2. params           - Parameter definitions for ${var} substitution (optional)
+3. metadata         - Project information (optional)
+4. global_settings  - Settings that apply to all operations
+5. output_files     - File paths for generated reports
+6. workflow         - Main sequence of operations to perform
 
 SECTION DETAILS
 ===============
 
-1. METADATA SECTION
--------------------
-Basic project information for documentation purposes.
+1. INCLUDE AND PARAMETER SUBSTITUTION
+--------------------------------------
+Files can include other YAML files and define reusable parameters.
 
-Example:
+Include files:
+  include:
+    - base/defaults.yml          # Relative to yaml_files/base/
+    - ../shared/common.yml       # Relative to config file directory
+    - /absolute/path/file.yml    # Absolute path
+
+Included files are deep-merged: dicts merge recursively, scalars and lists
+replace. Includes are processed first, so the including file's values
+override included defaults. Circular includes are detected and rejected.
+
+Parameter substitution:
+  params:
+    out_dir: /home/user/output
+    cylinder_diameter: 2.25
+    project_name: My Project
+
+  output_files:
+    working_directory: ${out_dir}     # Substituted at load time
+
+  wafer_settings:
+    cylinder_diameter: ${cylinder_diameter}   # Type preserved (float)
+
+Rules:
+- If ${param} is the entire value, the original type is preserved (float,
+  int, bool)
+- If ${param} is embedded in a larger string, it is coerced to string
+- ${ENV:VAR_NAME} accesses environment variables
+- Undefined parameters raise an error
+
+2. METADATA SECTION
+-------------------
+Project information written to FreeCAD document properties and a visible
+ModelMetadata object.
+
   metadata:
     project_name: "Helical Test Structure"
     version: "1.0"
     created: "2025-01-25"
     description: "Test project demonstrating helical curve following"
 
-2. GLOBAL SETTINGS
+Standard keys: project_name, version, description, created.
+Any additional keys are written to doc.Meta as string key-value pairs.
+The system auto-adds Generator, MetadataApplied, and SourceConfig.
+
+3. GLOBAL SETTINGS
 ------------------
 Settings that affect the entire build process:
 
   global_settings:
-    remove_existing: true      # Remove existing objects before building
-    relocate_segments: true    # Position segments end-to-end automatically
-    print_cuts: false         # Generate cutting instruction file
-    print_place: false        # Generate placement coordinate file
-    show_lcs: true            # Show local coordinate systems in FreeCAD
-    temp_file: "temp.dat"     # Temporary file for construction data
+    workflow_mode: null             # null | "first_pass" | "second_pass"
+    remove_existing: true           # Remove existing objects before building
+    relocate_segments: true         # Position segments end-to-end
+    print_cuts: true                # Generate cutting instruction file
+    print_place: true               # Generate placement coordinate file
+    show_lcs: false                 # Show local coordinate systems
+    temp_file: "temp_construction.dat"
+    include_cut_list_definitions: false  # Append column definitions to cut list
 
-3. OUTPUT FILES
+Workflow modes:
+  null (or omitted) - Single run: executes all operations normally
+  "first_pass"      - Generates segments; close_loop creates an editable
+                      BSpline curve and stops for manual editing
+  "second_pass"     - Skips all operations except close_loop; reconstructs
+                      segments from existing document objects; uses the
+                      edited curve from first_pass
+
+4. OUTPUT FILES
 ---------------
 Specify paths for generated files:
 
   output_files:
-    working_directory: "/home/don/Documents/Temp/FreeCAD/"
-    cuts_file: "cutting_list.txt"     # Cutting instructions
-    place_file: "placement_list.txt"  # Wafer placement coordinates
-    trace_file: "build_trace.log"     # Build process log
+    working_directory: "/home/user/output/"
+    cuts_file: "cutting_list.txt"       # Cutting instructions
+    place_file: "placement_list.txt"    # Wafer placement coordinates
+    trace_file: "build_trace.log"       # Build process log
+    show_lcs_in_cutlist: false          # Include LCS data in cut list
 
-4. WORKFLOW OPERATIONS
+5. WORKFLOW OPERATIONS
 ======================
 
 REMOVE OBJECTS
 --------------
-Remove existing FreeCAD objects by pattern matching.  Objects to be kept are
-indicated in the patterns. Any identified object also keeps its children.  Otherwise, a object is deleted:
+Remove existing FreeCAD objects, keeping those that match patterns.
+ModelMetadata is always preserved automatically.
 
   - operation: "remove_objects"
     description: "Clean up any existing objects"
     keep_patterns:
-      - "test_helix.*"        # Regular expression patterns
-      - "Curve.*"             # .* means "anything after"
+      - "helix.*"                   # Substring/prefix/suffix match
+      - ".*Metadata.*"
+
+Pattern matching supports:
+- Exact match: "MyObject"
+- Prefix match: "Curve*"       (pattern ends with *)
+- Suffix match: "*_Part"       (pattern starts with *)
+- Substring match: "helix"     (contained anywhere in label or name)
+
+Matched objects and all their children (Group members, OutList) are kept.
 
 SET POSITION
 ------------
@@ -81,52 +138,112 @@ Set the starting position and orientation for the first segment:
 
   - operation: "set_position"
     description: "Set starting position and orientation"
-    position: [0, 0, 0]          # x, y, z coordinates in model units
-    rotation: [0, 0, 0]          # roll, pitch, yaw in degrees (optional)
+    position: [0, 0, 0]          # x, y, z coordinates
+    rotation: [0, 0, 0]          # yaw, pitch, roll in degrees (optional)
 
 If rotation is omitted, defaults to [0, 0, 0].
 
-BUILD CURVE FOLLOWER SEGMENT
-----------------------------
+BUILD SEGMENT
+-------------
 Build a segment that follows a mathematical curve:
 
   - operation: "build_segment"
     segment_type: "curve_follower"
     name: "segment_name"
     description: "Optional description"
-    
+
     curve_spec:
-      type: "curve_type"        # See curve types below
-      parameters:               # Curve-specific parameters
+      type: "curve_type"          # See curve types below
+      parameters:                 # Curve-specific parameters
         # ... varies by curve type
-      transformations:          # Optional list of transformations
+      transformations:            # Optional, applied in order
         - operation: "scale"
           factor: 1.5
         - operation: "rotate"
           axis: "z"
           angle: 45
-        # ... more transformations
-      segment:                  # Optional curve portion selection
-        start_fraction: 0.0     # 0.0 = curve start, 1.0 = curve end
-        end_fraction: 1.0
-    
+      segment:                    # Optional curve portion selection
+        start_fraction: 0.0       # 0.0 = curve start
+        end_fraction: 1.0         # 1.0 = curve end
+
+    connection:                   # Optional, for joining to previous segment
+      rotation_angle: 0           # Z-axis rotation at junction (degrees)
+
     wafer_settings:
-      cylinder_diameter: 2.0    # Diameter of the cylinder being sliced
-      min_height: 1.0          # Minimum height of each wafer slice
-      max_chord: 0.5           # Maximum deviation from curve (accuracy)
+      cylinder_diameter: 2.0
+      min_height: 1.0
+      max_chord: 0.5
+      max_wafer_count: null       # Optional hard cap on wafer count
+      profile_density: 0.89       # Loft profiles per unit spine length
 
     segment_settings:
-      show_lcs: true           # Show coordinate systems in FreeCAD
-      build_segment: true      # true = build new, false = reuse existing
-      rotate_segment: 0.0      # Rotate entire segment (degrees)
-      add_curve_vertices: true # Add visual points along curve
+      show_lcs: true              # Show coordinate systems in FreeCAD
+      show_loft: false            # Show the reference loft surface
+      build_segment: true         # Build the segment geometry
+      rotate_segment: 0.0         # Post-build rotation (degrees)
+      add_curve_vertices: false   # Add visual points along curve path
+
+CLOSE LOOP
+----------
+Create a closing segment that connects the last segment back to the first,
+using Bezier interpolation with curvature continuity:
+
+  - operation: "close_loop"
+    name: "closing_segment"
+    num_lcs_per_end: 3            # LCS points per end for curvature match
+    tension: 0.5                  # Bezier tension parameter
+    points: 50                    # Points for closing curve
+    use_edited_curve: null        # FreeCAD label of edited curve (second_pass)
+    create_editable_curve: false  # Create editable BSpline (first_pass)
+    wafer_settings:
+      cylinder_diameter: 2.25
+    segment_settings:
+      show_lcs: true
+
+In first_pass mode, creates an editable curve and stops. In second_pass
+mode, uses the edited curve specified by use_edited_curve.
+
+EXPORT CURVE
+------------
+Export a composite curve from multiple existing segments as a single
+FreeCAD BSpline object:
+
+  - operation: "export_curve"
+    name: "FinalCurve"            # Label for the exported curve
+    description: "Composite curve"
+    segments:                     # Ordered list of segment names
+      - base
+      - Curve Left
+      - Curve Right
+    sampling:
+      per_segment: 100            # Points per segment (must be >= 2)
+
+The exported curve joins segment points in world coordinates, removing
+duplicate points at junctions. Creates a Part::Feature with a green
+BSpline curve.
+
+TEST BEZIER CLOSING
+-------------------
+Run a Bezier closing test for development/debugging:
+
+  - operation: "test_bezier_closing"
+    num_end_points: 3
+    num_start_points: 3
+    separation: 10.0
+    tension: 0.5
+    curvature_weight: 0.2
+    cylinder_radius: 1.0
+    seed: null                    # Random seed (null = random)
+    use_explicit_points: false
+    end_points: null              # Explicit point list (optional)
+    start_points: null            # Explicit point list (optional)
 
 
 AVAILABLE CURVE TYPES
 =====================
 
-1. LINEAR CURVE
----------------
+1. LINEAR
+---------
 Creates a straight line:
 
   type: "linear"
@@ -135,15 +252,8 @@ Creates a straight line:
     points: 100                # Number of points along line
     direction: [0, 0, 1]       # Direction vector [x, y, z]
 
-Example: Vertical line 50 units long with 75 points:
-  type: "linear"
-  parameters:
-    length: 50.0
-    points: 75
-    direction: [0, 0, 1]
-
-2. HELICAL CURVE
-----------------
+2. HELICAL
+----------
 Creates a helix (corkscrew shape):
 
   type: "helical"
@@ -152,17 +262,10 @@ Creates a helix (corkscrew shape):
     pitch: 2.5                 # Vertical distance per complete turn
     turns: 4.0                 # Number of complete turns
     points: 100                # Number of points along helix
+    start_at_origin: true      # Translate to start at origin
 
-Example: Tight helix with 6 turns:
-  type: "helical"
-  parameters:
-    radius: 5.0
-    pitch: 1.5
-    turns: 6.0
-    points: 150
-
-3. SINUSOIDAL CURVE
--------------------
+3. SINUSOIDAL
+-------------
 Creates a sine wave curve:
 
   type: "sinusoidal"
@@ -173,31 +276,15 @@ Creates a sine wave curve:
     points: 100                # Number of points
     axis: "x"                  # Primary axis: "x", "y", or "z"
 
-Example: Wave along Y-axis:
-  type: "sinusoidal"
-  parameters:
-    length: 30.0
-    amplitude: 8.0
-    frequency: 3.0
-    points: 120
-    axis: "y"
-
 4. OVERHAND KNOT
 ----------------
 Creates a mathematical overhand knot:
 
   type: "overhand_knot"
   parameters:
-    scale: 10.0                # Overall size of the knot
-    points: 200                # Number of points (more = smoother)
-    increment: 1.0             # Curve density parameter
-
-Example: Larger, smoother knot:
-  type: "overhand_knot"
-  parameters:
-    scale: 15.0
-    points: 300
-    increment: 0.8
+    scale: 1.0                 # Overall size of the knot
+    points: 100                # Number of points (more = smoother)
+    increment: 1.0             # Angular increment in degrees
 
 5. CIRCLE
 ---------
@@ -209,159 +296,117 @@ Creates a circular curve:
     points: 100                # Number of points around circle
     plane: "xy"                # Plane: "xy", "xz", or "yz"
 
-Example: Circle in XZ plane:
-  type: "circle"
-  parameters:
-    radius: 8.0
-    points: 80
-    plane: "xz"
-
 6. SPIRAL
 ---------
-Creates an expanding spiral:
+Creates a spiral with variable radius:
 
   type: "spiral"
   parameters:
-    max_radius: 10.0           # Final radius at end of spiral
-    turns: 3.0                 # Number of complete turns
+    max_radius: 10.0           # Outer radius
+    min_radius: 5.0            # Inner radius
+    max_height: 10.0           # Total Z-height
+    turns: 2.0                 # Number of complete turns
     points: 100                # Number of points
     plane: "xy"                # Plane: "xy", "xz", or "yz"
 
 7. FIGURE EIGHT
 ---------------
-Creates a figure-eight shape:
+Creates a figure-eight (lemniscate) shape:
 
   type: "figure_eight"
   parameters:
-    radius: 10.0               # Size of the figure-eight lobes
+    radius: 10.0               # Size of the lobes
     points: 100                # Number of points
     plane: "xy"                # Plane: "xy", "xz", or "yz"
 
- 8. TREFOIL
- _________________
- Creates a trefoil shape:
+8. TREFOIL
+----------
+Creates a trefoil knot (torus knot):
 
- type: "trefoil"
- parameters:
-       major_radius (float): Radius of the main torus path (default: 6.0).
-                                 Controls the overall size of the trefoil.
-                                 Larger values = bigger knot.
+  type: "trefoil"
+  parameters:
+    major_radius: 6.0          # Radius of the main torus path
+    tube_radius: 2.0           # Radius of the tube wrapping the torus
+    p: 2                       # Longitudinal wraps (2 for trefoil)
+    q: 3                       # Meridional wraps (3 for trefoil)
+    points: 150                # Number of slices (capped at 200)
+    center: [0, 0, 0]          # Center position [x, y, z]
+    phase_deg: 0.0             # Starting rotation in degrees
+    scale_z: 1.0               # Vertical scaling (< 1 flattens, > 1 stretches)
+    jitter: 0.0                # Random perturbation (0.0 - 1.0)
+    smooth_factor: 0.5         # Curve smoothing (< 1 = gentler curves)
+    optimize_spacing: true     # Redistribute for uniform point spacing
 
-            tube_radius (float): Radius of the tube that wraps around the torus (default: 2.0).
-                                Controls the "thickness" of the knot path.
-                                Affects how much the curve deviates from the main circle.
+The (p, q) pair defines the knot type: (2,3) = trefoil, (3,5) = cinquefoil.
 
-            p (int): Number of times the curve wraps around the torus longitudinally (default: 2).
-                    For a trefoil, typically p=2.
+9. EXISTING CURVE
+-----------------
+Sample points from an existing FreeCAD curve object in the document:
 
-            q (int): Number of times the curve wraps around the torus meridionally (default: 3).
-                    For a trefoil, typically q=3.
-                    The (p,q) pair defines the knot type: (2,3) = trefoil, (3,5) = cinquefoil, etc.
+  type: "existing_curve"
+  from_label: "Spine_Curve_Left"  # Label of existing curve object
+  num_samples: 100                # Number of sample points (>= 2)
 
-            center (tuple): (x, y, z) coordinates for the center point (default: (0, 0, 0)).
-                           Translates the entire curve to this location.
+Note: from_label and num_samples are direct keys under curve_spec,
+not nested under parameters.
 
-            phase_deg (float): Rotation phase in degrees (default: 0.0).
-                              Rotates where the curve starts around the knot.
-                              Use to orient the knot optimally for cutting.
-
-            scale_z (float): Vertical scaling factor (default: 1.0).
-                            Stretches or compresses the knot in the Z direction.
-                            Values < 1.0 flatten the knot, > 1.0 stretch it vertically.
-
-            jitter (float): Random perturbation factor (default: 0.0).
-                           Adds randomness to point spacing (0.0 = none, 1.0 = maximum).
-                           Can create organic variation but may complicate cutting.
-
-            smooth_factor (float): Smoothing multiplier for tube radius (default: 0.5).
-                                  Controls how pronounced the knot's curves are.
-                                  Values < 1.0 reduce deviation from the major circle,
-                                  creating a gentler, more cuttable curve.
-
-            optimize_spacing (bool): Whether to optimize point spacing for cutting (default: True).
-                                    When True, redistributes points for more even spacing,
-                                    which can improve cutting accuracy and reduce waste.
-
-
-9. CUSTOM CURVE
----------------
-Use your own curve function:
+10. CUSTOM
+----------
+Use a custom Python function (not configurable via YAML alone):
 
   type: "custom"
   parameters:
     # Whatever parameters your function needs
-    amplitude: 5.0
-    frequency: 2.0
-    custom_param: 10
   custom_function: my_curve_function
 
-Your custom function must return a list of [x, y, z] coordinate lists.
+The custom function must return a list of [x, y, z] coordinate lists.
+
 
 CURVE TRANSFORMATIONS
 =====================
 
-Transformations are applied to curves in the order listed.
+Transformations are applied to curves in the order listed, after curve
+generation and segment selection.
 
 1. SCALE
 --------
 Resize the curve uniformly or per-axis:
 
-Uniform scaling:
+Uniform:
   - operation: "scale"
-    factor: 2.0                # Makes curve 2x larger in all directions
+    factor: 2.0                # All axes scaled equally
 
-Per-axis scaling:
+Per-axis:
   - operation: "scale"
-    factors: [2.0, 1.5, 1.0]   # Scale x by 2.0, y by 1.5, z by 1.0
+    factors: [2.0, 1.5, 1.0]  # Scale x by 2.0, y by 1.5, z unchanged
 
 2. ROTATE
 ---------
 Rotate the curve around an axis:
 
   - operation: "rotate"
-    axis: "z"                  # Rotation axis: "x", "y", or "z"
-    angle: 45                  # Angle in degrees (positive = counterclockwise)
-
-Example: Rotate 90 degrees around X-axis:
-  - operation: "rotate"
-    axis: "x"
-    angle: 90
+    axis: "z"                  # "x", "y", or "z"
+    angle: 45                  # Degrees (positive = counterclockwise)
 
 3. TRANSLATE
 ------------
-Move the curve to a new position:
+Move the curve:
 
   - operation: "translate"
-    offset: [10, 0, 5]         # Move by [x, y, z] units
+    offset: [10, 0, 5]        # [x, y, z] units
 
 4. MIRROR
 ---------
 Mirror the curve across a plane:
 
   - operation: "mirror"
-    plane: "xy"                # Mirror plane: "xy", "xz", or "yz"
+    plane: "xy"                # "xy", "xz", or "yz"
 
-Example: Mirror across XZ plane (flips Y coordinates):
-  - operation: "mirror"
-    plane: "xz"
-
-TRANSFORMATION ORDER EXAMPLE
-----------------------------
-Transformations are applied in sequence:
-
-  transformations:
-    - operation: "scale"        # 1. First, scale the curve
-      factor: 1.5
-    - operation: "rotate"       # 2. Then rotate the scaled curve
-      axis: "z"
-      angle: 45
-    - operation: "translate"    # 3. Finally, move the scaled+rotated curve
-      offset: [10, 0, 0]
 
 CURVE SEGMENT SELECTION
 =======================
 
-You can use only part of a generated curve:
+Use only part of a generated curve:
 
   segment:
     start_fraction: 0.2        # Start at 20% along the curve
@@ -369,79 +414,22 @@ You can use only part of a generated curve:
 
 Fractions range from 0.0 (curve start) to 1.0 (curve end).
 
-Examples:
-- First half of curve: start_fraction: 0.0, end_fraction: 0.5
-- Last quarter: start_fraction: 0.75, end_fraction: 1.0
-- Middle section: start_fraction: 0.3, end_fraction: 0.7
 
-ALTERNATIVE WORKFLOWS
-=====================
+WAFER SETTINGS REFERENCE
+=========================
 
-You can define multiple workflows and select which one to run:
+  cylinder_diameter: 2.0       # Diameter of cylinder stock
+  min_height: 1.0              # Minimum wafer thickness
+  max_chord: 0.5               # Max chord deviation (smaller = more wafers)
+  max_wafer_count: null         # Hard cap on wafers per segment (optional)
+  profile_density: 0.89         # Loft profiles per unit of spine length
 
-  workflows:
-    simple_test:
-      - operation: "build_segment"
-        segment_type: "curve_follower"
-        name: "test_curve"
-        # ... rest of definition
+Wafer presets (defined in base/wafer_presets.yml):
 
-    complex_build:
-      - operation: "set_position"
-        position: [0, 0, 0]
-      - operation: "build_segment"
-        # ... first segment
-      - operation: "build_segment"
-        # ... second segment
+  fine:      min_height: 0.08, max_chord: 0.06, max_wafer_count: 120
+  standard:  min_height: 0.1,  max_chord: 0.1,  max_wafer_count: 60
+  coarse:    min_height: 0.2,  max_chord: 0.2,  max_wafer_count: 30
 
-To use an alternative workflow, specify its name in the driver or interface.
-
-CURVE TEMPLATES
-===============
-
-Define reusable curve specifications to avoid repetition:
-
-  curve_templates:
-    standard_helix:
-      type: "helical"
-      parameters:
-        radius: 10.0
-        pitch: 2.5
-        turns: 4.0
-        points: 100
-
-    tight_spiral:
-      type: "spiral"
-      parameters:
-        max_radius: 8.0
-        turns: 5.0
-        points: 150
-        plane: "xy"
-
-Use templates in workflows:
-
-  workflow:
-    - operation: "build_segment"
-      segment_type: "curve_follower"
-      name: "my_helix"
-      curve_spec: "standard_helix"    # Reference template by name
-
-WAFER SETTINGS EXPLAINED
-========================
-
-cylinder_diameter: 2.0
-  The diameter of the cylinder that the wafers are sliced from.
-  This determines the basic size of each wafer.
-
-min_height: 1.0
-  The minimum height (thickness) that any wafer can have.
-  Prevents creating wafers that are too thin to be practical.
-
-max_chord: 0.5
-  The maximum distance the straight line between wafer ends can
-  deviate from the actual curve. Smaller values = more accurate
-  curve following but more wafers. Larger values = fewer wafers
-  but less accurate curve following.
 
 TIPS AND BEST PRACTICES
 ========================
@@ -450,22 +438,27 @@ TIPS AND BEST PRACTICES
    Begin with basic curves (linear, circle) before attempting
    complex shapes (knots, custom curves).
 
-2. USE COMMENTS
+2. USE INCLUDES AND PARAMS
+   Put common settings in a base file and include it:
+     include:
+       - base/defaults.yml
+     params:
+       cylinder_diameter: 2.25
+
+3. USE COMMENTS
    Add comments with # to document your choices:
    # This creates the main structural helix
    - operation: "build_segment"
 
-3. TEST INCREMENTALLY
+4. TEST INCREMENTALLY
    Build one segment at a time, verify it looks correct, then
    add the next segment.
-
-4. BACKUP WORKING CONFIGS
-   Keep copies of configurations that work well.
 
 5. PARAMETER RELATIONSHIPS
    - More points = smoother curves but slower processing
    - Smaller max_chord = more accurate but more wafers
    - Larger min_height = fewer wafers but less curve accuracy
+   - Higher profile_density = smoother loft surfaces
 
 6. COORDINATE SYSTEM
    - X: typically left/right
@@ -477,8 +470,10 @@ TIPS AND BEST PRACTICES
    All measurements are in FreeCAD model units (typically millimeters).
 
 8. VISUALIZATION
-   Set add_curve_vertices: true to see the curve path before
-   building wafers.
+   Set add_curve_vertices: true to see the curve path.
+   Set show_lcs: true to see coordinate systems at wafer boundaries.
+   Set show_loft: true to see the reference loft surface.
+
 
 TROUBLESHOOTING
 ===============
@@ -500,25 +495,91 @@ Common Issues:
   - Verify axis names are "x", "y", or "z"
   - Ensure rotation angles are reasonable
 
+"Could not find segment named ..."
+  - Verify segment names in export_curve match build_segment names exactly
+  - Segment names are case-sensitive
+
 File Format Errors:
   - Check YAML indentation (use spaces, not tabs)
   - Verify all brackets and quotes are properly closed
   - Use a YAML validator online to check syntax
+  - Check ${param} references match keys in params section
+
 
 EXAMPLE COMPLETE FILE
 =====================
 
-See the project.yaml file for a complete working example that
-demonstrates all the major features and proper formatting.
+include:
+  - base/defaults.yml
 
-GETTING HELP
-=============
+params:
+  out_dir: /home/user/output
+  cylinder_diameter: 2.25
+  project_name: Example Build
 
-1. Check this guide for parameter explanations
-2. Examine the example project.yaml file
-3. Start with simple configurations and add complexity gradually
-4. Use FreeCAD's Python console to debug issues
-5. Check the trace file (if enabled) for detailed build information
+metadata:
+  project_name: ${project_name}
+  version: "1.0"
+  created: "2025-07-27"
+  description: "Example with two segments and loop closure"
+
+output_files:
+  working_directory: ${out_dir}
+  cuts_file: "cutting_list.txt"
+
+global_settings:
+  print_cuts: true
+  workflow_mode: null
+
+workflow:
+  - operation: remove_objects
+    description: Clean up existing objects
+
+  - operation: build_segment
+    segment_type: curve_follower
+    name: base
+    description: Vertical base column
+    curve_spec:
+      type: linear
+      parameters:
+        length: 5.0
+        points: 10
+    wafer_settings:
+      cylinder_diameter: ${cylinder_diameter}
+      min_height: 1.0
+      max_chord: 0.3
+    segment_settings:
+      show_lcs: true
+      build_segment: true
+
+  - operation: build_segment
+    segment_type: curve_follower
+    name: Curve Left
+    description: Quarter circle turn
+    curve_spec:
+      type: circle
+      parameters:
+        radius: 8.0
+        points: 100
+      segment:
+        start_fraction: 0.0
+        end_fraction: 0.25
+    connection:
+      rotation_angle: 180
+    wafer_settings:
+      cylinder_diameter: ${cylinder_diameter}
+      min_height: 0.5
+      max_chord: 0.1
+    segment_settings:
+      show_lcs: true
+      build_segment: true
+
+  - operation: export_curve
+    name: CompositeCurve
+    segments: [base, Curve Left]
+    sampling:
+      per_segment: 100
+
 
 ================================================================================
 END OF USER GUIDE
