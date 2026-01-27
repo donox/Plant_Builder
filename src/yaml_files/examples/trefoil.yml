@@ -12,7 +12,7 @@ params:
   created: '2025-12-13'
   description: Trefoil example
 
-  cylinder_diameter: 2.0
+  cylinder_diameter: 2.25
   profile_density: 0.5
   min_height: 0.4
   max_chord: 0.2

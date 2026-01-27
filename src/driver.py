@@ -893,10 +893,50 @@ class Driver:
             if getattr(w, "wafer", None) is not None and hasattr(w.wafer, "Volume"):
                 total_volume += w.wafer.Volume
 
+        # f.write(f"SEGMENT: {segment.name}\n")
+        # f.write("=" * 90 + "\n\n")
+        # f.write(f"Wafer count: {wafer_count}\n")
+        # f.write(f"Total volume: {total_volume:.4f}\n\n")
+        # f.write("-" * 90 + "\n\n")
+
+        # Calculate bounding box for the segment
+        # Combine all wafer solids into a compound to get overall bounding box
+        wafer_shapes = []
+        for w in segment.wafer_list:
+            if getattr(w, "wafer", None) is not None:
+                wafer_shapes.append(w.wafer)
+
+        if wafer_shapes:
+            # Create compound of all wafers
+            import Part
+            compound = Part.makeCompound(wafer_shapes)
+            bbox = compound.BoundBox
+
+            # Get dimensions
+            bbox_x = bbox.XLength
+            bbox_y = bbox.YLength
+            bbox_z = bbox.ZLength
+            bbox_volume = bbox_x * bbox_y * bbox_z
+
+            # Get center point
+            bbox_center = (
+                (bbox.XMin + bbox.XMax) / 2,
+                (bbox.YMin + bbox.YMax) / 2,
+                (bbox.ZMin + bbox.ZMax) / 2
+            )
+        else:
+            bbox_x = bbox_y = bbox_z = bbox_volume = 0.0
+            bbox_center = (0, 0, 0)
+
+        # Now write to file (replace lines 896-899):
         f.write(f"SEGMENT: {segment.name}\n")
         f.write("=" * 90 + "\n\n")
         f.write(f"Wafer count: {wafer_count}\n")
-        f.write(f"Total volume: {total_volume:.4f}\n\n")
+        f.write(f"Total volume: {total_volume:.4f}\n")
+        f.write(f"Bounding box (X × Y × Z): {bbox_x:.2f} × {bbox_y:.2f} × {bbox_z:.2f}\n")
+        f.write(f"Bounding box volume: {bbox_volume:.4f}\n")
+        f.write(f"Bounding box center: ({bbox_center[0]:.2f}, {bbox_center[1]:.2f}, {bbox_center[2]:.2f})\n")
+        f.write(f"Packing efficiency: {(total_volume / bbox_volume * 100):.1f}%\n\n")
         f.write("-" * 90 + "\n\n")
 
         f.write("CUTTING INSTRUCTIONS:\n")
