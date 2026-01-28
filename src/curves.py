@@ -447,12 +447,12 @@ class Curves:
 
     def _generate_closing_curve(self, **parameters):
         """
-        Generate closing curve using geometric construction from circular arcs
+        Generate closing curve using geometric construction from circular arcs.
 
         Supports both automatic generation and using user-edited curves.
+        Delegates to named helpers for each construction phase.
         """
         import FreeCAD as App
-        import Part
         import math
 
         start_segment = parameters.get('start_segment')
@@ -461,60 +461,158 @@ class Curves:
         if start_segment is None or end_segment is None:
             raise ValueError("closing_curve requires start_segment and end_segment parameters")
 
-        # ============================================================================
-        # CHECK FOR EDITED CURVE FIRST - USE IT IF PROVIDED
-        # ============================================================================
+        # Check for edited curve first
         use_edited_curve = parameters.get('use_edited_curve')
         if use_edited_curve:
-            logger.info(f"📝 Using edited curve: {use_edited_curve}")
-            curve_obj = App.ActiveDocument.getObject(use_edited_curve)
+            return self._load_edited_curve(
+                use_edited_curve, end_segment, parameters.get('points', 50)
+            )
 
-            if curve_obj is None:
-                raise ValueError(f"Could not find curve object: {use_edited_curve}")
-
-            # Sample points from the edited curve's Shape
-            if hasattr(curve_obj, 'Shape') and hasattr(curve_obj.Shape, 'Edges') and len(curve_obj.Shape.Edges) > 0:
-                edge = curve_obj.Shape.Edges[0]
-                curve_points_world = []
-                num_samples = parameters.get('points', 50)
-
-                logger.info(f"Sampling {num_samples} points from edited curve")
-
-                for i in range(num_samples):
-                    u = i / max(1, num_samples - 1)
-                    param = edge.FirstParameter + u * (edge.LastParameter - edge.FirstParameter)
-                    point = edge.valueAt(param)
-                    curve_points_world.append(point)
-
-                logger.info(f"✓ Sampled {len(curve_points_world)} points from edited curve")
-
-                # Transform to local coordinates and return
-                end_wafers = end_segment.wafer_list
-                last_wafer = end_wafers[-1]
-                last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
-                placement_inv = last_lcs2_world.inverse()
-
-                points_local = []
-                for point_world in curve_points_world:
-                    point_local = placement_inv.multVec(point_world)
-                    points_local.append([point_local.x, point_local.y, point_local.z])
-
-                logger.debug(f"Edited curve start (local): {points_local[0]}")
-                logger.debug(f"Edited curve end (local): {points_local[-1]}")
-
-                return np.array(points_local)
-            else:
-                raise ValueError(f"Curve object {use_edited_curve} has no usable geometry (Shape.Edges)")
-
-        # ============================================================================
-        # NO EDITED CURVE - CONTINUE WITH AUTOMATIC GEOMETRIC GENERATION
-        # ============================================================================
+        # Automatic geometric generation
         logger.debug("No edited curve specified, using automatic generation")
+
+        geometry = self._compute_closing_geometry(
+            start_segment, end_segment, parameters
+        )
+
+        P0_world = geometry['P0']
+        P3_world = geometry['P3']
+        exit_direction = geometry['exit_direction']
+        entry_direction = geometry['entry_direction']
+        num_points = geometry['num_points']
+        construction_radius = geometry['construction_radius']
+        min_radius = geometry['min_radius']
+        gap_distance = geometry['gap_distance']
+
+        # Direction from P0 toward P3
+        to_target = P3_world - P0_world
+        to_target.normalize()
+
+        # Calculate turn angles
+        exit_turn_angle = math.degrees(exit_direction.getAngle(to_target))
+        entry_turn_angle = math.degrees((-to_target).getAngle(entry_direction))
+
+        logger.debug(f"Exit turn needed: {exit_turn_angle:.1f}")
+        logger.debug(f"Entry turn needed: {entry_turn_angle:.1f}")
+
+        # Build the curve from geometric pieces
+        curve_points_world = []
+
+        # STEP 1: Exit arc
+        exit_arc_points, P1_world, dir1_world = self._build_exit_arc(
+            P0_world, exit_direction, to_target,
+            construction_radius, num_points, exit_turn_angle
+        )
+        curve_points_world.extend(exit_arc_points)
+
+        # STEP 2: Entry arc
+        entry_arc_points, P2_world, dir2_world = self._build_entry_arc(
+            P3_world, entry_direction, to_target,
+            construction_radius, num_points, entry_turn_angle
+        )
+
+        # STEP 3: Bridge between exit and entry arcs
+        bridge_points = self._build_bezier_bridge(
+            P1_world, dir1_world, P2_world, dir2_world,
+            min_radius, num_points, gap_distance
+        )
+        curve_points_world.extend(bridge_points)
+
+        # Add entry arc (or just the end point)
+        if entry_arc_points:
+            curve_points_world.extend(entry_arc_points)
+        else:
+            curve_points_world.append(P3_world)
+
+        # Log total curve length
+        total_curve_length = sum(
+            curve_points_world[i].distanceToPoint(curve_points_world[i + 1])
+            for i in range(len(curve_points_world) - 1)
+        )
+        logger.info(
+            f"Generated geometric closing curve: "
+            f"length={total_curve_length:.3f}, points={len(curve_points_world)}"
+        )
+
+        # Create editable curve if requested
+        if parameters.get('create_editable_curve', False):
+            self._create_editable_closing_curve(
+                P0_world, P3_world,
+                exit_direction, entry_direction,
+                exit_turn_angle, entry_turn_angle,
+                exit_arc_points if exit_turn_angle > 5 else [],
+                entry_arc_points,
+                end_segment, start_segment, gap_distance
+            )
+
+        # Transform to local coordinates
+        end_wafers = end_segment.wafer_list
+        last_wafer = end_wafers[-1]
+        last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
+        placement_inv = last_lcs2_world.inverse()
+
+        points_local = []
+        for point_world in curve_points_world:
+            point_local = placement_inv.multVec(point_world)
+            points_local.append([point_local.x, point_local.y, point_local.z])
+
+        logger.debug(f"Curve start (local): {points_local[0]}")
+        logger.debug(f"Curve end (local): {points_local[-1]}")
+
+        return np.array(points_local)
+
+    def _load_edited_curve(self, curve_label, end_segment, num_samples):
+        """Load and sample points from a user-edited curve object."""
+        import FreeCAD as App
+
+        logger.info(f"Using edited curve: {curve_label}")
+        curve_obj = App.ActiveDocument.getObject(curve_label)
+
+        if curve_obj is None:
+            raise ValueError(f"Could not find curve object: {curve_label}")
+
+        if not (hasattr(curve_obj, 'Shape') and hasattr(curve_obj.Shape, 'Edges')
+                and len(curve_obj.Shape.Edges) > 0):
+            raise ValueError(
+                f"Curve object {curve_label} has no usable geometry (Shape.Edges)"
+            )
+
+        edge = curve_obj.Shape.Edges[0]
+        curve_points_world = []
+
+        for i in range(num_samples):
+            u = i / max(1, num_samples - 1)
+            param = edge.FirstParameter + u * (edge.LastParameter - edge.FirstParameter)
+            curve_points_world.append(edge.valueAt(param))
+
+        logger.info(f"Sampled {len(curve_points_world)} points from edited curve")
+
+        # Transform to local coordinates
+        end_wafers = end_segment.wafer_list
+        last_wafer = end_wafers[-1]
+        last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
+        placement_inv = last_lcs2_world.inverse()
+
+        points_local = []
+        for point_world in curve_points_world:
+            point_local = placement_inv.multVec(point_world)
+            points_local.append([point_local.x, point_local.y, point_local.z])
+
+        return np.array(points_local)
+
+    def _compute_closing_geometry(self, start_segment, end_segment, parameters):
+        """
+        Compute endpoints, directions, and construction parameters for closing curve.
+
+        Returns a dict with keys: P0, P3, exit_direction, entry_direction,
+        num_points, construction_radius, min_radius, gap_distance.
+        """
+        import FreeCAD as App
+        import math
 
         num_lcs = parameters.get('num_lcs_per_end', 3)
         num_points = parameters.get('points', 50)
 
-        # Get wafer lists
         start_wafers = start_segment.wafer_list
         end_wafers = end_segment.wafer_list
 
@@ -546,59 +644,52 @@ class Curves:
 
         logger.debug(f"Using {len(end_lcs_list)} end LCS and {len(start_lcs_list)} start LCS")
 
-        # Get connection points and directions in WORLD coordinates
         P0_world = end_lcs_list[-1].Base
         P3_world = start_lcs_list[0].Base
 
         # Calculate exit direction
-        if len(end_lcs_list) >= 2:
-            exit_directions = []
-            for i in range(len(end_lcs_list) - 1):
-                direction = end_lcs_list[i + 1].Base - end_lcs_list[i].Base
-                if direction.Length > 1e-6:
-                    direction.normalize()
-                    exit_directions.append(direction)
-            if exit_directions:
-                exit_direction_world = App.Vector(
-                    sum(d.x for d in exit_directions) / len(exit_directions),
-                    sum(d.y for d in exit_directions) / len(exit_directions),
-                    sum(d.z for d in exit_directions) / len(exit_directions)
-                )
-                exit_direction_world.normalize()
-                exit_direction_world = -exit_direction_world
-            else:
-                forward = end_lcs_list[-1].Rotation.multVec(App.Vector(0, 0, 1))
-                exit_direction_world = -forward
-        else:
-            forward = end_lcs_list[-1].Rotation.multVec(App.Vector(0, 0, 1))
-            exit_direction_world = -forward
-
-        exit_direction_world.normalize()
+        exit_direction_world = self._compute_tangent_direction(
+            end_lcs_list, reverse=True
+        )
 
         # Calculate entry direction
-        if len(start_lcs_list) >= 2:
-            entry_directions = []
-            for i in range(len(start_lcs_list) - 1):
-                direction = start_lcs_list[i + 1].Base - start_lcs_list[i].Base
-                if direction.Length > 1e-6:
-                    direction.normalize()
-                    entry_directions.append(direction)
-            if entry_directions:
-                forward_direction = App.Vector(
-                    sum(d.x for d in entry_directions) / len(entry_directions),
-                    sum(d.y for d in entry_directions) / len(entry_directions),
-                    sum(d.z for d in entry_directions) / len(entry_directions)
-                )
-                forward_direction.normalize()
-                entry_direction_world = -forward_direction
-            else:
-                forward = start_lcs_list[0].Rotation.multVec(App.Vector(0, 0, 1))
-                entry_direction_world = -forward
-        else:
-            forward = start_lcs_list[0].Rotation.multVec(App.Vector(0, 0, 1))
-            entry_direction_world = -forward
+        entry_direction_world = self._compute_tangent_direction(
+            start_lcs_list, reverse=True
+        )
 
-        entry_direction_world.normalize()
+        # --- 2A: Angle threshold check ---
+        closing_angle_deg = math.degrees(
+            (-exit_direction_world).getAngle(-entry_direction_world)
+        )
+        max_closing_angle = parameters.get('max_closing_angle', 90.0)
+
+        if closing_angle_deg > max_closing_angle:
+            logger.warning(
+                f"Closing angle ({closing_angle_deg:.1f}) exceeds threshold "
+                f"({max_closing_angle:.1f}). The closing curve may be too tight. "
+                f"Consider adding helper segments (entry_helper_length / "
+                f"exit_helper_length) or inserting intermediate segments to "
+                f"reduce the angular gap."
+            )
+        else:
+            logger.debug(
+                f"Closing angle: {closing_angle_deg:.1f} "
+                f"(threshold: {max_closing_angle:.1f})"
+            )
+
+        # --- 2B: Helper segment extensions ---
+        exit_helper_length = parameters.get('exit_helper_length')
+        entry_helper_length = parameters.get('entry_helper_length')
+
+        if exit_helper_length and float(exit_helper_length) > 0:
+            ext = float(exit_helper_length)
+            P0_world = P0_world + (-exit_direction_world) * ext
+            logger.debug(f"Applied exit helper extension of {ext:.3f}")
+
+        if entry_helper_length and float(entry_helper_length) > 0:
+            ext = float(entry_helper_length)
+            P3_world = P3_world + (-entry_direction_world) * ext
+            logger.debug(f"Applied entry helper extension of {ext:.3f}")
 
         gap_distance = P0_world.distanceToPoint(P3_world)
 
@@ -609,270 +700,263 @@ class Curves:
         logger.debug(f"entry_direction: {entry_direction_world}")
         logger.debug(f"Gap distance: {gap_distance:.3f}")
 
-        # Get minimum radius constraint
+        # Radius constraints
         cylinder_radius = parameters.get('cylinder_radius', 1.0)
         safety_factor = 4.0
         min_radius = cylinder_radius * safety_factor
+        construction_radius = min_radius * 2
 
-        # Use LARGER radius for arc construction (more gentle curves)
-        construction_radius = min_radius * 2  # 8× cylinder radius instead of 4×
+        logger.debug(
+            f"Minimum safe radius: {min_radius:.3f}, "
+            f"using construction radius: {construction_radius:.3f}"
+        )
 
-        logger.debug(f"Minimum safe radius: {min_radius:.3f}, using construction radius: {construction_radius:.3f}")
+        return {
+            'P0': P0_world,
+            'P3': P3_world,
+            'exit_direction': exit_direction_world,
+            'entry_direction': entry_direction_world,
+            'num_points': num_points,
+            'construction_radius': construction_radius,
+            'min_radius': min_radius,
+            'gap_distance': gap_distance,
+        }
 
-        # Direction from P0 toward P3
-        to_target = P3_world - P0_world
-        to_target.normalize()
+    def _compute_tangent_direction(self, lcs_list, reverse=False):
+        """Compute averaged tangent direction from a list of LCS placements."""
+        import FreeCAD as App
 
-        # Calculate turn angles
-        exit_turn_angle = math.degrees(exit_direction_world.getAngle(to_target))
-        entry_turn_angle = math.degrees((-to_target).getAngle(entry_direction_world))
+        if len(lcs_list) >= 2:
+            directions = []
+            for i in range(len(lcs_list) - 1):
+                direction = lcs_list[i + 1].Base - lcs_list[i].Base
+                if direction.Length > 1e-6:
+                    direction.normalize()
+                    directions.append(direction)
+            if directions:
+                avg = App.Vector(
+                    sum(d.x for d in directions) / len(directions),
+                    sum(d.y for d in directions) / len(directions),
+                    sum(d.z for d in directions) / len(directions)
+                )
+                avg.normalize()
+                return -avg if reverse else avg
 
-        logger.debug(f"Exit turn needed: {exit_turn_angle:.1f}°")
-        logger.debug(f"Entry turn needed: {entry_turn_angle:.1f}°")
+        forward = lcs_list[-1 if reverse else 0].Rotation.multVec(
+            App.Vector(0, 0, 1)
+        )
+        return -forward if reverse else forward
 
-        # Build the curve from geometric pieces
-        curve_points_world = []
+    def _build_exit_arc(self, P0, exit_direction, to_target,
+                        construction_radius, num_points, exit_turn_angle):
+        """
+        Build the exit arc from P0 turning toward the target direction.
 
-        # STEP 1: Exit arc (if turn needed)
-        if exit_turn_angle > 5:  # Need to turn
-            exit_arc_points = self._create_circular_arc(
-                P0_world,
-                exit_direction_world,
-                to_target,
+        Returns:
+            (points_to_add, P1_world, dir1_world) where points_to_add
+            excludes the last arc point to avoid duplication.
+        """
+        if exit_turn_angle > 5:
+            arc_points = self._create_circular_arc(
+                P0, exit_direction, to_target,
                 construction_radius,
-                int(num_points * exit_turn_angle / 360)  # Proportional sampling
+                max(2, int(num_points * exit_turn_angle / 360))
             )
-            # Add all but the last point (to avoid duplicate at connection)
-            curve_points_world.extend(exit_arc_points[:-1])
-            P1_world = exit_arc_points[-1]
-            dir1_world = to_target
-            logger.debug(f"Exit arc: {len(exit_arc_points) - 1} points added, turning {exit_turn_angle:.1f}°")
+            points_to_add = arc_points[:-1]
+            P1 = arc_points[-1]
+            dir1 = to_target
+            logger.debug(
+                f"Exit arc: {len(points_to_add)} points added, "
+                f"turning {exit_turn_angle:.1f}"
+            )
         else:
-            # No turn needed, start at P0
-            curve_points_world.append(P0_world)
-            P1_world = P0_world
-            dir1_world = exit_direction_world
+            points_to_add = [P0]
+            P1 = P0
+            dir1 = exit_direction
             logger.debug("Exit arc: skipped (small angle)")
 
-        # STEP 2: Entry arc (if turn needed)
+        return points_to_add, P1, dir1
+
+    def _build_entry_arc(self, P3, entry_direction, to_target,
+                         construction_radius, num_points, entry_turn_angle):
+        """
+        Build the entry arc arriving at P3 from the target direction.
+
+        Returns:
+            (entry_arc_points, P2_world, dir2_world) where entry_arc_points
+            is in forward order (approach → P3), or empty if no arc needed.
+        """
         if entry_turn_angle > 5:
-            # Build entry arc backwards from P3
-            entry_arc_points = self._create_circular_arc(
-                P3_world,
-                entry_direction_world,
-                -to_target,
+            arc_points = self._create_circular_arc(
+                P3, entry_direction, -to_target,
                 construction_radius,
-                int(num_points * entry_turn_angle / 360)
+                max(2, int(num_points * entry_turn_angle / 360))
             )
-            # Reverse so it goes from approach direction to P3
-            entry_arc_points.reverse()
-            P2_world = entry_arc_points[0]
-            dir2_world = -to_target
-            logger.debug(f"Entry arc: {len(entry_arc_points)} points, turning {entry_turn_angle:.1f}°")
+            arc_points.reverse()
+            P2 = arc_points[0]
+            dir2 = -to_target
+            logger.debug(
+                f"Entry arc: {len(arc_points)} points, "
+                f"turning {entry_turn_angle:.1f}"
+            )
         else:
-            P2_world = P3_world
-            dir2_world = entry_direction_world
-            entry_arc_points = []
+            arc_points = []
+            P2 = P3
+            dir2 = entry_direction
             logger.debug("Entry arc: skipped (small angle)")
 
-        # STEP 3: Bridge between exit and entry arcs
-        bridge_distance = P1_world.distanceToPoint(P2_world)
+        return arc_points, P2, dir2
+
+    def _build_bezier_bridge(self, P1, dir1, P2, dir2,
+                             min_radius, num_points, gap_distance):
+        """
+        Build bridge segment between exit and entry arcs.
+
+        Uses a straight line when directions are nearly parallel,
+        otherwise a Bezier-based connecting arc.
+
+        Returns list of bridge points (excluding the last point to
+        avoid duplication with the entry arc).
+        """
+        import math
+
+        bridge_distance = P1.distanceToPoint(P2)
         logger.debug(f"Bridge distance: {bridge_distance:.3f}")
 
-        if bridge_distance > 0.1:  # Need a bridge
-            # Check if directions are parallel
-            angle_between = math.degrees(dir1_world.getAngle(-dir2_world))
-            logger.debug(f"Angle between arc ends: {angle_between:.1f}°")
-
-            if angle_between < 10:  # Nearly parallel - use straight line
-                bridge_points_count = max(2, int(num_points * bridge_distance / gap_distance))
-                for i in range(bridge_points_count):
-                    t = i / (bridge_points_count - 1)
-                    point = P1_world + (P2_world - P1_world) * t
-                    # Exclude last point to avoid duplicate with entry arc
-                    if i < bridge_points_count - 1:
-                        curve_points_world.append(point)
-                logger.debug(f"Bridge: straight line, {bridge_points_count - 1} points added")
-            else:  # Need a connecting arc
-                # Use a larger radius arc for the bridge (gentler curve)
-                bridge_radius = max(min_radius * 2, bridge_distance / 2)
-                bridge_arc_points = self._create_connecting_arc(
-                    P1_world, dir1_world,
-                    P2_world, dir2_world,
-                    bridge_radius,
-                    int(num_points * 0.5)  # Use about half the points for bridge
-                )
-                # Exclude last point to avoid duplicate with entry arc
-                curve_points_world.extend(bridge_arc_points[:-1])
-                logger.debug(
-                    f"Bridge: connecting arc, radius={bridge_radius:.3f}, {len(bridge_arc_points) - 1} points added")
-        else:
+        if bridge_distance <= 0.1:
             logger.debug("Bridge: arcs already meet")
+            return []
 
-        # Add entry arc
-        if len(entry_arc_points) > 0:
-            curve_points_world.extend(entry_arc_points)
+        angle_between = math.degrees(dir1.getAngle(-dir2))
+        logger.debug(f"Angle between arc ends: {angle_between:.1f}")
+
+        if angle_between < 10:
+            # Nearly parallel - straight line
+            count = max(2, int(num_points * bridge_distance / gap_distance))
+            points = []
+            for i in range(count - 1):  # exclude last
+                t = i / (count - 1)
+                points.append(P1 + (P2 - P1) * t)
+            logger.debug(f"Bridge: straight line, {len(points)} points added")
+            return points
         else:
-            # No entry arc, just add P3
-            curve_points_world.append(P3_world)
+            # Bezier connecting arc
+            bridge_radius = max(min_radius * 2, bridge_distance / 2)
+            arc_points = self._create_connecting_arc(
+                P1, dir1, P2, dir2,
+                bridge_radius, int(num_points * 0.5)
+            )
+            result = arc_points[:-1]  # exclude last to avoid duplicate
+            logger.debug(
+                f"Bridge: connecting arc, radius={bridge_radius:.3f}, "
+                f"{len(result)} points added"
+            )
+            return result
 
-        # Calculate total curve length
-        total_curve_length = 0
-        for i in range(len(curve_points_world) - 1):
-            total_curve_length += curve_points_world[i].distanceToPoint(curve_points_world[i + 1])
+    def _create_editable_closing_curve(
+            self, P0, P3, exit_direction, entry_direction,
+            exit_turn_angle, entry_turn_angle,
+            exit_arc_points, entry_arc_points,
+            end_segment, start_segment, gap_distance):
+        """Create an editable BSpline curve in the FreeCAD document for manual editing."""
+        import FreeCAD as App
+        import Part
 
-        logger.info(
-            f"Generated geometric closing curve: length={total_curve_length:.3f}, points={len(curve_points_world)}")
+        doc = App.ActiveDocument
+        if doc is None:
+            logger.warning("No active document - cannot create editable curve")
+            return
 
-        # CREATE EDITABLE CURVE IF REQUESTED
-        create_editable = parameters.get('create_editable_curve', False)
+        curve_name = f"EDIT_Closing_{end_segment.name}_to_{start_segment.name}"
 
-        if create_editable:
+        existing = doc.getObject(curve_name)
+        if existing:
+            doc.removeObject(curve_name)
+
+        # Build control points
+        control_points = [P0]
+
+        P1_actual = P0
+        if exit_turn_angle > 5 and exit_arc_points:
+            P1_actual = exit_arc_points[-1]
+            control_points.append(P1_actual)
+
+        P2_actual = P3
+        if entry_turn_angle > 5 and entry_arc_points:
+            P2_actual = entry_arc_points[0]
+            control_points.append(P2_actual)
+
+        control_points.append(P3)
+
+        # Add 3 intermediate points between P1 and P2 for better control
+        if len(control_points) == 4:
+            P1 = control_points[1]
+            P2 = control_points[2]
+            intermediates = []
+            for i in range(1, 4):
+                t = i / 4.0
+                intermediates.append(App.Vector(
+                    P1.x + t * (P2.x - P1.x),
+                    P1.y + t * (P2.y - P1.y),
+                    P1.z + t * (P2.z - P1.z)
+                ))
+            control_points = [
+                control_points[0], control_points[1],
+                intermediates[0], intermediates[1], intermediates[2],
+                control_points[2], control_points[3]
+            ]
+            logger.debug("Added 3 intermediate points between exit and entry arcs")
+
+        logger.debug(f"Creating editable curve with {len(control_points)} control points")
+
+        # Calculate tangent vectors
+        tangent_start = exit_direction.normalize()
+        tangent_end = entry_direction.normalize()
+
+        tangent_length = (
+            (P1_actual - P0).Length if len(control_points) > 1
+            else gap_distance / 3.0
+        )
+        tangent_start = tangent_start * tangent_length
+        tangent_end = tangent_end * tangent_length
+
+        try:
+            bspline_curve = Part.BSplineCurve()
+            tangents = (
+                [tangent_start]
+                + [None] * (len(control_points) - 2)
+                + [tangent_end]
+            )
+            bspline_curve.interpolate(
+                Points=control_points,
+                PeriodicFlag=False,
+                Tolerance=0.001,
+                Parameters=None,
+                Tangents=tangents
+            )
+            edge = Part.Edge(bspline_curve)
+            bspline = doc.addObject("Part::Feature", curve_name)
+            bspline.Shape = edge
+            bspline.Label = curve_name
+            bspline.ViewObject.LineColor = (1.0, 0.0, 1.0)
+            bspline.ViewObject.LineWidth = 4.0
+
+            logger.info(f"Created smooth BSpline with tangent constraints: '{curve_name}'")
+        except Exception as e:
+            logger.warning(f"Could not create BSpline with tangent constraints: {e}")
+            logger.info("Falling back to simple Draft BSpline")
+
             import Draft
+            bspline = Draft.makeBSpline(control_points, closed=False)
+            bspline.Label = curve_name
+            bspline.ViewObject.LineColor = (1.0, 0.0, 1.0)
+            bspline.ViewObject.LineWidth = 4.0
 
-            # Get document
-            doc = App.ActiveDocument
-            if doc is None:
-                logger.warning("No active document - cannot create editable curve")
-            else:
-                # Create unique name based on segment names
-                end_seg_name = end_segment.name
-                start_seg_name = start_segment.name
-                curve_name = f"EDIT_Closing_{end_seg_name}_to_{start_seg_name}"
+        doc.recompute()
 
-                # Check if it already exists and remove it
-                existing = doc.getObject(curve_name)
-                if existing:
-                    doc.removeObject(curve_name)
-
-                # Build control points with intermediate points for better editing
-                control_points = [P0_world]
-
-                # Add exit arc end point if arc was created
-                P1_world_actual = P0_world  # Default if no arc
-                if exit_turn_angle > 5 and 'exit_arc_points' in locals() and len(exit_arc_points) > 0:
-                    P1_world_actual = exit_arc_points[-1]
-                    control_points.append(P1_world_actual)
-
-                # Add entry arc start point if arc was created
-                P2_world_actual = P3_world  # Default if no arc
-                if entry_turn_angle > 5 and 'entry_arc_points' in locals() and len(entry_arc_points) > 0:
-                    P2_world_actual = entry_arc_points[0]
-                    control_points.append(P2_world_actual)
-
-                # Add end point
-                control_points.append(P3_world)
-
-                # Add 3 intermediate points between P1 and P2 for better control
-                if len(control_points) == 4:
-                    P1 = control_points[1]
-                    P2 = control_points[2]
-
-                    intermediate_points = []
-                    for i in range(1, 4):  # Create points at 1/4, 2/4, 3/4
-                        t = i / 4.0
-                        intermediate = App.Vector(
-                            P1.x + t * (P2.x - P1.x),
-                            P1.y + t * (P2.y - P1.y),
-                            P1.z + t * (P2.z - P1.z)
-                        )
-                        intermediate_points.append(intermediate)
-
-                    # Rebuild: P0, P1, intermediate1-3, P2, P3
-                    control_points = [
-                        control_points[0],
-                        control_points[1],
-                        intermediate_points[0],
-                        intermediate_points[1],
-                        intermediate_points[2],
-                        control_points[2],
-                        control_points[3]
-                    ]
-                    logger.debug(f"Added 3 intermediate points between exit and entry arcs")
-
-                logger.debug(f"Creating editable curve with {len(control_points)} control points")
-
-                # Calculate tangent vectors at endpoints for smooth interpolation
-                tangent_start = exit_direction_world.normalize()
-                tangent_end = entry_direction_world.normalize()
-
-                # Scale tangents by approximate segment length for better curve shape
-                tangent_length = (P1_world_actual - P0_world).Length if len(control_points) > 1 else gap_distance / 3.0
-                tangent_start = tangent_start * tangent_length
-                tangent_end = tangent_end * tangent_length
-
-                # Create BSpline with tangent constraints using Part.BSplineCurve
-                try:
-                    bspline_curve = Part.BSplineCurve()
-
-                    # Build tangent list: tangent at start, None for interior points, tangent at end
-                    tangents = [tangent_start] + [None] * (len(control_points) - 2) + [tangent_end]
-
-                    # Interpolate through points with tangent constraints
-                    bspline_curve.interpolate(
-                        Points=control_points,
-                        PeriodicFlag=False,
-                        Tolerance=0.001,
-                        Parameters=None,  # Auto-calculate
-                        Tangents=tangents
-                    )
-
-                    # Create Part feature from curve
-                    edge = Part.Edge(bspline_curve)
-                    bspline = doc.addObject("Part::Feature", curve_name)
-                    bspline.Shape = edge
-                    bspline.Label = curve_name
-                    bspline.ViewObject.LineColor = (1.0, 0.0, 1.0)  # Magenta
-                    bspline.ViewObject.LineWidth = 4.0
-
-                    logger.info(f"✏️  Created smooth BSpline with tangent constraints: '{curve_name}'")
-                    logger.debug(f"    Tangent at start: {tangent_start}")
-                    logger.debug(f"    Tangent at end: {tangent_end}")
-
-                except Exception as e:
-                    logger.warning(f"Could not create BSpline with tangent constraints: {e}")
-                    logger.info(f"Falling back to simple Draft BSpline")
-
-                    # Fall back to Draft.makeBSpline
-                    bspline = Draft.makeBSpline(control_points, closed=False)
-                    bspline.Label = curve_name
-                    bspline.ViewObject.LineColor = (1.0, 0.0, 1.0)
-                    bspline.ViewObject.LineWidth = 4.0
-
-                doc.recompute()
-
-                logger.info(f"✏️  Created editable curve: '{curve_name}' with {len(control_points)} control points")
-                logger.info(f"    Control points breakdown:")
-                logger.info(f"    - Point 1: Exit from last segment (tangent constrained)")
-                if len(control_points) >= 7:
-                    logger.info(f"    - Point 2: End of exit arc")
-                    logger.info(f"    - Points 3-5: Bridge section (freely adjustable)")
-                    logger.info(f"    - Point 6: Start of entry arc")
-                    logger.info(f"    - Point 7: Entry to first segment (tangent constrained)")
-                logger.info(f"    To edit:")
-                logger.info(f"    1. Select '{curve_name}' in the tree")
-                logger.info(f"    2. Use Draft → Modify → Edit (or press E key)")
-                logger.info(f"    3. Drag the {len(control_points)} control points to adjust shape")
-                logger.info(f"    4. Interior points can be moved freely while endpoints maintain tangency")
-                logger.info(f"    5. Press ESC or click 'Close' when done")
-                logger.info(f"    6. In YAML: set workflow_mode: 'second_pass'")
-                logger.info(f"    7. In YAML: add use_edited_curve: '{curve_name}'")
-                logger.info(f"    8. Re-run the workflow")
-
-        # Transform to local coordinates
-        last_wafer = end_wafers[-1]
-        last_lcs2_world = end_segment.base_placement.multiply(last_wafer.lcs2)
-        placement_inv = last_lcs2_world.inverse()
-
-        points_local = []
-        for point_world in curve_points_world:
-            point_local = placement_inv.multVec(point_world)
-            points_local.append([point_local.x, point_local.y, point_local.z])
-
-        logger.debug(f"Curve start (local): {points_local[0]}")
-        logger.debug(f"Curve end (local): {points_local[-1]}")
-
-        return np.array(points_local)
+        logger.info(f"Created editable curve: '{curve_name}' with {len(control_points)} control points")
+        logger.info(f"  To use: set workflow_mode: 'second_pass' and "
+                     f"use_edited_curve: '{curve_name}' in YAML")
 
     def _create_circular_arc(self, start_point, start_direction, end_direction, radius, num_points):
         """

@@ -417,6 +417,9 @@ class Driver:
                 "cylinder_radius": float(wafer_settings.get("cylinder_diameter", 2.0)) / 2.0,
                 "use_edited_curve": operation.get("use_edited_curve"),
                 "create_editable_curve": operation.get("create_editable_curve", workflow_mode == "first_pass"),
+                "max_closing_angle": operation.get("max_closing_angle", 90.0),
+                "entry_helper_length": operation.get("entry_helper_length"),
+                "exit_helper_length": operation.get("exit_helper_length"),
             },
         }
 
