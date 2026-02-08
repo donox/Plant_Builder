@@ -319,16 +319,33 @@ class Curves:
         return p
 
     def _generate_sinusoidal(self, length: float = 50.0, amplitude: float = 5.0,
-                             frequency: float = 2.0, points: int = 100,
+                             frequency=2.0, points: int = 100,
                              axis: str = 'x') -> List[List[float]]:
-        """Generate a sinusoidal curve."""
-        # logger.debug(f"Generating sinusoidal: length={length}, amplitude={amplitude}, freq={frequency}")
+        """
+        Generate a sinusoidal curve.
+
+        Args:
+            length: Length along the primary axis
+            amplitude: Wave amplitude
+            frequency: Either a single frequency or a list of frequencies
+                       (superposition of sine waves)
+            points: Number of points to generate
+            axis: Primary axis ('x', 'y', or 'z')
+        """
+        # Normalize frequency to a list
+        if isinstance(frequency, (int, float)):
+            frequencies = [float(frequency)]
+        else:
+            frequencies = [float(f) for f in frequency]
 
         curve_points = []
         for i in range(points):
             t = i / (points - 1)
             primary_coord = t * length
-            sine_value = amplitude * math.sin(frequency * 2 * math.pi * t)
+            # Sum of sine waves for each frequency
+            sine_value = amplitude * sum(
+                math.sin(freq * 2 * math.pi * t) for freq in frequencies
+            ) / len(frequencies)
 
             if axis.lower() == 'x':
                 curve_points.append([primary_coord, sine_value, 0])
