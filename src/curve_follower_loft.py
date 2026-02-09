@@ -136,17 +136,19 @@ class CurveFollowerLoft:
         logger.info(f"Spine curve created, length: {self.spine_curve.Length:.3f}")
         return self.spine_curve
 
-    def chord_distance_sampler(self, spine_edge, max_chord_deviation):
+    def chord_distance_sampler(self, spine_edge, max_chord_length, max_chord_deviation=None):
         """
-        Sample points along curve using maximum chord deviation
+        Sample points along curve using chord length and optional deviation limits.
 
-        Places sample points such that the maximum perpendicular distance
-        from the chord (straight line between points) to the curve does not
-        exceed the target deviation.
+        Places sample points such that:
+        - The 3D distance between consecutive points does not exceed max_chord_length
+        - If max_chord_deviation is set, the perpendicular deviation from chord
+          to curve does not exceed that value either (adaptive: tighter on curves)
 
         Args:
             spine_edge: Part.Edge representing the spine
-            max_chord_deviation: Maximum allowed deviation from chord to curve
+            max_chord_length: Maximum allowed 3D distance between consecutive points
+            max_chord_deviation: Optional max perpendicular deviation from chord to curve
 
         Returns:
             List of parameters along the curve
@@ -155,12 +157,18 @@ class CurveFollowerLoft:
         first_param = curve.FirstParameter
         last_param = curve.LastParameter
 
-        # logger.debug(f"Chord deviation sampling: max_deviation={max_chord_deviation:.3f}")
-
         params = [first_param]
         current_param = first_param
+        current_point = curve.value(current_param)
+
+        convergence_threshold = (last_param - first_param) / 10000
 
         while current_param < last_param:
+            # If remaining range is below convergence threshold, snap to end
+            if (last_param - current_param) < convergence_threshold:
+                params.append(last_param)
+                break
+
             param_low = current_param
             param_high = last_param
             best_param = current_param
@@ -172,24 +180,38 @@ class CurveFollowerLoft:
                     best_param = last_param
                     break
 
-                max_deviation = self._calculate_max_chord_deviation(
-                    curve, current_param, test_param
-                )
+                test_point = curve.value(test_param)
+                chord_length = (test_point - current_point).Length
 
-                if max_deviation <= max_chord_deviation:
+                # Check chord length constraint
+                accept = chord_length <= max_chord_length
+
+                # Additionally check deviation constraint if specified
+                if accept and max_chord_deviation is not None:
+                    deviation = self._calculate_max_chord_deviation(
+                        curve, current_param, test_param
+                    )
+                    accept = deviation <= max_chord_deviation
+
+                if accept:
                     best_param = test_param
                     param_low = test_param
                 else:
                     param_high = test_param
 
-                if abs(param_high - param_low) < (last_param - first_param) / 10000:
+                if abs(param_high - param_low) < convergence_threshold:
                     break
 
             if best_param <= current_param:
                 best_param = min(current_param + (last_param - first_param) / 100, last_param)
 
+            # Snap to end if close enough
+            if (last_param - best_param) < convergence_threshold:
+                best_param = last_param
+
             params.append(best_param)
             current_param = best_param
+            current_point = curve.value(current_param)
 
             if best_param >= last_param:
                 break
@@ -197,8 +219,117 @@ class CurveFollowerLoft:
         if params[-1] < last_param:
             params[-1] = last_param
 
-        # logger.debug(f"Sampled {len(params)} points")
         return params
+
+    def _estimate_curvature(self, curve, param, delta_fraction=0.001):
+        """
+        Estimate curvature κ at a parameter using tangent angle change.
+
+        κ ≈ |ΔT| / Δs where ΔT is the change in unit tangent direction
+        and Δs is the arc length over a small parameter interval.
+
+        Args:
+            curve: The B-spline curve
+            param: Parameter at which to estimate curvature
+            delta_fraction: Fraction of total parameter range for finite difference
+
+        Returns:
+            Estimated curvature (1/radius_of_curvature)
+        """
+        param_range = curve.LastParameter - curve.FirstParameter
+        delta = param_range * delta_fraction
+
+        p0 = max(curve.FirstParameter, param - delta / 2)
+        p1 = min(curve.LastParameter, p0 + delta)
+        if p1 - p0 < 1e-15:
+            return 0.0
+
+        t0 = App.Vector(*curve.tangent(p0)[0])
+        t1 = App.Vector(*curve.tangent(p1)[0])
+        t0.normalize()
+        t1.normalize()
+
+        dt = t1 - t0
+        angle = dt.Length  # for small angles, |ΔT| ≈ angle in radians
+
+        # Arc length over [p0, p1]
+        edge_segment = Part.Edge(curve, p0, p1)
+        ds = edge_segment.Length
+
+        if ds < 1e-15:
+            return 0.0
+
+        return angle / ds
+
+    def check_curvature_compatibility(self, spine_edge, cylinder_radius, max_chord_length,
+                                       min_inner_chord=0.25):
+        """
+        Check if the curve's curvature is compatible with the cylinder diameter
+        by verifying that wafer inner chord stays above a minimum.
+
+        The inner (concave-side) height of a wafer is approximately:
+            inner_chord ≈ L × (1 - r × κ)
+        where L is chord length, r is cylinder radius, κ is local curvature.
+
+        At peak curvature κ_max, the best-case inner chord (using max chord length)
+        must meet the minimum: max_chord × (1 - r × κ_max) ≥ min_inner_chord.
+
+        Args:
+            spine_edge: Part.Edge representing the spine
+            cylinder_radius: Radius of the cylinder
+            max_chord_length: Maximum chord length (after max_wafer_count adjustment)
+            min_inner_chord: Minimum acceptable inner chord width (default 0.25)
+        """
+        curve = spine_edge.Curve
+        first_param = curve.FirstParameter
+        last_param = curve.LastParameter
+        num_samples = 200
+
+        max_kappa = 0.0
+        max_kappa_param = first_param
+
+        for i in range(num_samples + 1):
+            param = first_param + (last_param - first_param) * i / num_samples
+            kappa = self._estimate_curvature(curve, param)
+            if kappa > max_kappa:
+                max_kappa = kappa
+                max_kappa_param = param
+
+        if max_kappa < 1e-10:
+            return  # Straight or nearly straight — no issues
+
+        min_radius_of_curvature = 1.0 / max_kappa
+        rk = cylinder_radius * max_kappa
+        best_inner_chord = max_chord_length * (1.0 - rk)
+
+        if rk >= 1.0 or best_inner_chord < min_inner_chord:
+            problem_point = curve.value(max_kappa_param)
+            # Compute the max κ that would be compatible
+            # max_chord * (1 - r*κ) >= min_inner → κ <= (1 - min_inner/max_chord) / r
+            max_compatible_kappa = (1.0 - min_inner_chord / max_chord_length) / cylinder_radius
+            min_compatible_radius = 1.0 / max_compatible_kappa if max_compatible_kappa > 0 else float('inf')
+
+            raise RuntimeError(
+                f"Curve curvature is incompatible with cylinder diameter.\n"
+                f"  Peak curvature κ = {max_kappa:.4f} "
+                f"(radius of curvature = {min_radius_of_curvature:.3f})\n"
+                f"  Cylinder radius: {cylinder_radius:.3f}\n"
+                f"  Best inner chord at peak: {best_inner_chord:.3f} "
+                f"(minimum required: {min_inner_chord:.3f})\n"
+                f"  Tightest bend at: ({problem_point.x:.2f}, {problem_point.y:.2f}, "
+                f"{problem_point.z:.2f})\n"
+                f"\n"
+                f"Suggestions:\n"
+                f"  - Reduce the curve amplitude (decreases peak curvature)\n"
+                f"  - Increase the curve length/scale (spreads the bend)\n"
+                f"  - Use a lower frequency (gentler curves)\n"
+                f"  - Need radius of curvature >= {min_compatible_radius:.2f} "
+                f"(currently {min_radius_of_curvature:.3f})"
+            )
+
+        logger.info(f"Curvature check passed: inner chord {best_inner_chord:.3f} "
+                     f">= min {min_inner_chord:.3f} "
+                     f"(κ_max={max_kappa:.4f}, R_min={min_radius_of_curvature:.3f})")
 
     def _calculate_max_chord_deviation(self, curve, param_start, param_end, num_samples=20):
         """
@@ -351,6 +482,25 @@ class CurveFollowerLoft:
         # logger.debug(f"Generated {len(points)} curve points with transformations and segments applied")
 
         self.generator.create_spine_from_points(points)
+
+        target_chord = wafer_settings.get('max_chord', 0.5)
+        max_wafer_count = wafer_settings.get('max_wafer_count', None)
+        min_inner_chord = wafer_settings.get('min_inner_chord', 0.25)
+
+        # Compute effective max_chord_length (may be adjusted by max_wafer_count)
+        spine_length = self.generator.spine_curve.Length
+        max_chord_length = target_chord
+        if max_wafer_count:
+            min_chord_for_limit = spine_length / max_wafer_count
+            if min_chord_for_limit > max_chord_length:
+                max_chord_length = min_chord_for_limit
+
+        # Check curvature compatibility before expensive loft creation
+        self.check_curvature_compatibility(
+            self.generator.spine_curve, cylinder_radius,
+            max_chord_length, min_inner_chord
+        )
+
         self.generator.create_loft_along_spine(self)
 
         if self.generator.loft is None:
@@ -358,17 +508,16 @@ class CurveFollowerLoft:
 
         logger.info(f"Loft created successfully, volume: {self.generator.loft.Volume:.4f}")
 
-        target_chord = wafer_settings.get('max_chord', 0.5)
-        max_wafer_count = wafer_settings.get('max_wafer_count', None)
-
         def limited_sampler(spine):
-            params = self.chord_distance_sampler(spine, target_chord)
+            chord_limit = target_chord
+            if max_wafer_count:
+                min_chord_for_limit = spine.Length / max_wafer_count
+                if min_chord_for_limit > chord_limit:
+                    logger.info(f"Adjusting max_chord_length from {chord_limit:.4f} to "
+                                f"{min_chord_for_limit:.4f} to fit {max_wafer_count} wafers")
+                    chord_limit = min_chord_for_limit
 
-            if max_wafer_count and len(params) > max_wafer_count + 1:
-                # logger.debug(f"Limiting to {max_wafer_count} wafers (from {len(params) - 1} total samples)")
-                params = params[:max_wafer_count + 1]
-
-            return params
+            return self.chord_distance_sampler(spine, chord_limit, target_chord)
 
         self.generator.sample_points_along_loft(limited_sampler)
 

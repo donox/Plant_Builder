@@ -318,9 +318,9 @@ class Curves:
         logger.debug(f"Generated trefoil with {len(p)} points")
         return p
 
-    def _generate_sinusoidal(self, length: float = 50.0, amplitude: float = 5.0,
-                             frequency=2.0, points: int = 100,
-                             axis: str = 'x') -> List[List[float]]:
+    def _generate_sinusoidal(self, length=50.0, amplitude=5.0,
+                             frequency=2.0, points=100,
+                             axis='x', **kwargs) -> List[List[float]]:
         """
         Generate a sinusoidal curve.
 
@@ -332,6 +332,11 @@ class Curves:
             points: Number of points to generate
             axis: Primary axis ('x', 'y', or 'z')
         """
+        # Defensive casts for all numeric parameters
+        length = float(length)
+        amplitude = float(amplitude)
+        points = int(points)
+
         # Normalize frequency to a list
         if isinstance(frequency, (int, float)):
             frequencies = [float(frequency)]

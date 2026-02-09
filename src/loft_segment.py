@@ -83,6 +83,9 @@ class LoftSegment:
             logger.info(f"Generated {len(self.wafer_list)} wafers for segment {self.name}")
             return self.wafer_list
 
+        except RuntimeError as e:
+            logger.error(f"Segment '{self.name}': {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to generate wafers for segment {self.name}: {e}", exc_info=True)
             raise
@@ -151,16 +154,36 @@ class LoftSegment:
             wafer_settings=self.wafer_settings,
         )
         generator.create_spine_from_points(points_local)
-        generator.create_loft_along_spine(self.follower)
-        # Sampling strategy: reuse the limited_sampler logic inside CurveFollowerLoft. [file:1]
+
+        cylinder_radius = self.wafer_settings.get("cylinder_diameter", 1.875) / 2.0
         target_chord = self.wafer_settings.get("max_chord", 0.5)
         max_filler_wafer_count = self.wafer_settings.get("max_wafer_count", None)
+        min_inner_chord = self.wafer_settings.get("min_inner_chord", 0.25)
+
+        # Compute effective max_chord_length (may be adjusted by max_wafer_count)
+        spine_length = generator.spine_curve.Length
+        max_chord_length = target_chord
+        if max_filler_wafer_count:
+            min_chord_for_limit = spine_length / max_filler_wafer_count
+            if min_chord_for_limit > max_chord_length:
+                max_chord_length = min_chord_for_limit
+
+        # Check curvature compatibility before expensive loft creation
+        self.follower.check_curvature_compatibility(
+            generator.spine_curve, cylinder_radius,
+            max_chord_length, min_inner_chord
+        )
+
+        generator.create_loft_along_spine(self.follower)
 
         def limited_sampler(spine_edge):
-            params = self.follower.chord_distance_sampler(spine_edge, target_chord)
-            if max_filler_wafer_count and len(params) > max_filler_wafer_count + 1:
-                params = params[: max_filler_wafer_count + 1]
-            return params
+            chord_limit = target_chord
+            if max_filler_wafer_count:
+                min_chord_for_limit = spine_edge.Length / max_filler_wafer_count
+                if min_chord_for_limit > chord_limit:
+                    chord_limit = min_chord_for_limit
+
+            return self.follower.chord_distance_sampler(spine_edge, chord_limit, target_chord)
 
         generator.sample_points_along_loft(limited_sampler)
         generator.calculate_cutting_planes()

@@ -92,9 +92,12 @@ class LoftWaferGenerator:
         profiles = []
         spine_edge = Part.Edge(self.spine)
 
+        first_param = self.spine.FirstParameter
+        last_param = self.spine.LastParameter
+
         for i in range(num_profiles):
-            # Calculate parameter along spine (0.0 to 1.0)
-            u = i / (num_profiles - 1) if num_profiles > 1 else 0.0
+            # Calculate parameter along spine's actual range
+            u = first_param + (last_param - first_param) * (i / (num_profiles - 1)) if num_profiles > 1 else first_param
 
             # Get point and tangent at this parameter
             point = self.spine.value(u)
@@ -278,6 +281,7 @@ class LoftWaferGenerator:
         sample_params = chord_distance_algorithm(self.spine_curve)
 
         curve = self.spine_curve.Curve
+
         self.sample_points = []
 
         for param in sample_params:
@@ -419,7 +423,7 @@ class LoftWaferGenerator:
         wafer_data_list = []
         chord_vectors = []
 
-        min_chord_threshold = self.radius * 0.01
+        min_chord_threshold = float(self.wafer_settings.get('min_height', self.radius * 0.01))
         min_volume_threshold = 0.001
 
         def get_face_at_position(solid, target_point, tolerance=0.5):
@@ -513,20 +517,40 @@ class LoftWaferGenerator:
             logger.warning(f"No ellipse/circle edge found on face at {center}")
             return None
 
-        for i in range(len(self.cutting_planes) - 1):
-            plane1 = self.cutting_planes[i]
-            plane2 = self.cutting_planes[i + 1]
+        start = 0
+        wafer_index = 0
+        while start < len(self.cutting_planes) - 1:
+            end = start + 1
 
+            plane1 = self.cutting_planes[start]
+            plane2 = self.cutting_planes[end]
+            center1 = plane1['point']
+            center2 = plane2['point']
+            chord_vector = center2 - center1
+            chord_length = chord_vector.Length
 
-            try:
-                center1 = plane1['point']
+            # Coalesce: advance end pointer until chord exceeds threshold
+            coalesced = 0
+            while chord_length < min_chord_threshold and end < len(self.cutting_planes) - 1:
+                end += 1
+                coalesced += 1
+                plane2 = self.cutting_planes[end]
                 center2 = plane2['point']
                 chord_vector = center2 - center1
                 chord_length = chord_vector.Length
 
-                if chord_length < min_chord_threshold:
-                    logger.info(f"Wafer {i} stopped (chord {chord_length:.4f} below threshold)")
-                    break
+            if coalesced > 0:
+                logger.info(f"Wafer {wafer_index}: coalesced {coalesced} planes "
+                            f"(planes {start}-{end}, chord {chord_length:.4f})")
+
+            if chord_length < min_chord_threshold:
+                logger.info(f"Wafer {wafer_index}: skipping final segment "
+                            f"(chord {chord_length:.4f} below threshold {min_chord_threshold:.4f})")
+                break
+
+            i = wafer_index
+
+            try:
 
                 chord_direction = App.Vector(chord_vector.x, chord_vector.y, chord_vector.z)
                 chord_direction.normalize()
@@ -557,8 +581,12 @@ class LoftWaferGenerator:
 
                 if wafer.Volume > 1e-6:
                     if wafer.Volume < min_volume_threshold:
-                        logger.info(f"Wafer {i} stopped (volume {wafer.Volume:.6f} below threshold)")
-                        break
+                        logger.info(f"Wafer {i}: skipping (volume {wafer.Volume:.6f} below threshold)")
+                        chord_vectors.append(chord_vector)
+                        wafer_data_list.append(None)
+                        start = end
+                        wafer_index += 1
+                        continue
 
                     chord_vectors.append(chord_vector)
 
@@ -572,6 +600,8 @@ class LoftWaferGenerator:
                     if actual_ellipse1 is None or actual_ellipse2 is None:
                         logger.error(f"Wafer {i} failed to extract ellipse geometry")
                         wafer_data_list.append(None)
+                        start = end
+                        wafer_index += 1
                         continue
 
                     # Use actual geometry for the wafer data
@@ -595,11 +625,16 @@ class LoftWaferGenerator:
                     })
                 else:
                     logger.warning(f"Wafer {i} failed (zero volume)")
+                    chord_vectors.append(chord_vector)
                     wafer_data_list.append(None)
 
             except Exception as e:
                 logger.error(f"Wafer {i} error: {e}", exc_info=True)
+                chord_vectors.append(chord_vector)
                 wafer_data_list.append(None)
+
+            start = end
+            wafer_index += 1
 
         # Rotation angle calculation remains the same...
 
@@ -828,13 +863,13 @@ class LoftWaferGenerator:
         self.wafers = []
 
         for i, wafer_data in enumerate(wafer_data_list):
-            plane1 = self.cutting_planes[i]
-            plane2 = self.cutting_planes[i + 1]
-
             # Skip degenerate wafers (None from generate_all_wafers_by_slicing)
             if wafer_data is None:
                 logger.debug(f"Skipping degenerate wafer {i}")
                 continue  # ← Don't add to wafer list at all
+
+            plane1 = wafer_data['plane1']
+            plane2 = wafer_data['plane2']
 
             solid = wafer_data['solid']
             geometry = wafer_data['geometry']

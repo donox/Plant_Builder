@@ -154,6 +154,9 @@ class Driver:
 
             try:
                 self._execute_operation(operation)
+            except RuntimeError as e:
+                logger.error(f"Operation failed: {e}")
+                raise
             except Exception as e:
                 logger.error(f"Operation failed: {e}")
                 import traceback
