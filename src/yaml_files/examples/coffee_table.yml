@@ -48,7 +48,7 @@ workflow:
   curve_spec:
     type: sinusoidal
     parameters:
-      length: 10.0
+      length: 20.0
       amplitude: 10
       frequency: 0.5
       points: 40

@@ -10,6 +10,7 @@ Orchestrates the build workflow by:
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Any, Dict, Optional
 
@@ -852,9 +853,13 @@ class Driver:
             bbox_x = bbox_y = bbox_z = bbox_volume = 0.0
             bbox_center = (0, 0, 0)
 
-        # Now write to file (replace lines 896-899):
+        # Now write to file
         f.write(f"SEGMENT: {segment.name}\n")
         f.write("=" * 90 + "\n\n")
+
+        # Write parameter settings
+        self._write_segment_parameters(f, segment)
+
         f.write(f"Wafer count: {wafer_count}\n")
         f.write(f"Total volume: {total_volume:.4f}\n")
         f.write(f"Bounding box (X × Y × Z): {bbox_x:.2f} × {bbox_y:.2f} × {bbox_z:.2f}\n")
@@ -863,10 +868,51 @@ class Driver:
         f.write(f"Packing efficiency: {(total_volume / bbox_volume * 100):.1f}%\n\n")
         f.write("-" * 90 + "\n\n")
 
+        # Compute initial_offset: angle from world +Z to first wafer's major
+        # axis in the cross-section plane (saw-table coordinate system).
+        initial_offset = 0.0
+        for wafer in segment.wafer_list:
+            if getattr(wafer, "wafer", None) is None:
+                continue
+            geom0 = wafer.geometry or {}
+            chord_vec = geom0.get("chord_vector")
+            ellipse1 = geom0.get("ellipse1")
+            if chord_vec is not None and ellipse1 is not None:
+                major_axis = ellipse1.get("major_axis_vector")
+                if major_axis is not None:
+                    chord_dir = App.Vector(chord_vec.x, chord_vec.y, chord_vec.z)
+                    chord_dir.normalize()
+                    # Project world +Z onto cross-section plane (perpendicular to chord)
+                    z_up = App.Vector(0, 0, 1)
+                    z_dot = z_up.dot(chord_dir)
+                    up_proj = z_up - chord_dir * z_dot
+                    if up_proj.Length < 1e-6:
+                        # Chord is near-vertical, fall back to +X as "up"
+                        x_right = App.Vector(1, 0, 0)
+                        x_dot = x_right.dot(chord_dir)
+                        up_proj = x_right - chord_dir * x_dot
+                    up_proj.normalize()
+                    # "right" = chord × up (clockwise from up looking along chord)
+                    right_proj = chord_dir.cross(up_proj)
+                    right_proj.normalize()
+                    # Project major axis onto cross-section
+                    ma = App.Vector(major_axis.x, major_axis.y, major_axis.z)
+                    ma_dot = ma.dot(chord_dir)
+                    major_proj = ma - chord_dir * ma_dot
+                    if major_proj.Length > 1e-6:
+                        major_proj.normalize()
+                        initial_offset = math.degrees(
+                            math.atan2(major_proj.dot(right_proj), major_proj.dot(up_proj))
+                        )
+            break  # only need the first valid wafer
+
+        logger.info("Cylinder° initial_offset from +Z to first major axis: %.1f°", initial_offset)
+
         f.write("CUTTING INSTRUCTIONS:\n")
         f.write("  Blade° = Tilt saw blade from vertical\n")
         f.write("  Rot° = Incremental twist at this wafer\n")
-        f.write("  Cylinder° = Absolute rotation to set before cutting\n")
+        f.write("  Cylinder° = Absolute rotation from top (0°=12 o'clock, CW looking toward blade)\n")
+        f.write(f"  Cylinder° initial offset: {initial_offset:.1f}°\n")
         f.write("  Cumulative = Total cylinder length used (mark and cut)\n\n")
 
         f.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<7} {'Rot°':<6} {'Cylinder°':<10} ")
@@ -897,6 +943,7 @@ class Driver:
                     cylinder_angle = (cumulative_rotation + 180.0) % 360.0
                 else:
                     cylinder_angle = cumulative_rotation % 360.0
+                cylinder_angle = (cylinder_angle + initial_offset) % 360.0
 
             cumulative_length += chord_length
 
@@ -912,6 +959,33 @@ class Driver:
         f.write(f"Total cylinder length required: {self._format_fractional_inches(cumulative_length)}\n")
         f.write(f"  ({cumulative_length:.3f} inches = {cumulative_length * 25.4:.1f} mm)\n\n")
 
+    def _write_segment_parameters(self, f, segment):
+        """Write curve and wafer parameter settings for a segment."""
+        # Curve spec
+        curve_spec = getattr(segment, "curve_spec", None) or {}
+        curve_type = curve_spec.get("type", "unknown")
+        curve_params = curve_spec.get("parameters", {})
+
+        f.write(f"Curve type: {curve_type}\n")
+        if curve_params:
+            f.write("Curve parameters:\n")
+            for key, value in curve_params.items():
+                f.write(f"  {key}: {value}\n")
+        f.write("\n")
+
+        # Wafer settings
+        ws = getattr(segment, "wafer_settings", None)
+        if ws is not None:
+            f.write("Wafer settings:\n")
+            f.write(f"  cylinder_diameter: {ws.cylinder_diameter}\n")
+            f.write(f"  max_chord: {ws.max_chord}\n")
+            f.write(f"  min_height: {ws.min_height}\n")
+            f.write(f"  min_inner_chord: {ws.min_inner_chord}\n")
+            f.write(f"  profile_density: {ws.profile_density}\n")
+            if ws.max_wafer_count is not None:
+                f.write(f"  max_wafer_count: {ws.max_wafer_count}\n")
+        f.write("\n")
+
     def _write_cut_list_definitions(self, cuts_file):
         """Write column definitions to cutting list"""
         cuts_file.write("=" * 90 + "\n")
@@ -926,6 +1000,7 @@ class Driver:
         cuts_file.write("Rot°:       Rotation angle - the incremental twist of the curve at this wafer\n")
         cuts_file.write("            This controls the Z-rise and torsion of the structure\n\n")
         cuts_file.write("Cylinder°:  Absolute rotational position of cylinder for this cut\n")
+        cuts_file.write("            Saw-table coords: 0°=top (12 o'clock), CW looking toward blade\n")
         cuts_file.write("            Includes 180° flip between wafers plus accumulated rotation\n")
         cuts_file.write("            Rotate cylinder to this angle before making the cut\n\n")
         cuts_file.write("Collin°:    Collinearity angle - exterior angle between consecutive chord vectors\n")
