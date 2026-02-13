@@ -150,15 +150,15 @@ class LoftSegment:
         # Create a spine for the LoftWaferGenerator just as generate_loft_wafers would.
         # This assumes LoftWaferGenerator.create_spine_from_points matches our points. [file:3]
         generator = LoftWaferGenerator(
-            cylinder_radius=self.wafer_settings.get("cylinder_diameter", 1.875) / 2.0,
+            cylinder_radius=self.wafer_settings.cylinder_radius,
             wafer_settings=self.wafer_settings,
         )
         generator.create_spine_from_points(points_local)
 
-        cylinder_radius = self.wafer_settings.get("cylinder_diameter", 1.875) / 2.0
-        target_chord = self.wafer_settings.get("max_chord", 0.5)
-        max_filler_wafer_count = self.wafer_settings.get("max_wafer_count", None)
-        min_inner_chord = self.wafer_settings.get("min_inner_chord", 0.25)
+        cylinder_radius = self.wafer_settings.cylinder_radius
+        target_chord = self.wafer_settings.max_chord
+        max_filler_wafer_count = self.wafer_settings.max_wafer_count
+        min_inner_chord = self.wafer_settings.min_inner_chord
 
         # Compute effective max_chord_length (may be adjusted by max_wafer_count)
         spine_length = generator.spine_curve.Length

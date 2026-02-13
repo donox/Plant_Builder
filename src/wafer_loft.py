@@ -12,6 +12,7 @@ import FreeCAD as App
 import Part
 import math
 from core.logging_setup import get_logger
+from core.wafer_settings import WaferSettings
 
 logger = get_logger(__name__)
 
@@ -55,7 +56,7 @@ class LoftWaferGenerator:
             wafer_settings: Dictionary with wafer configuration (optional)
         """
         self.cylinder_radius = cylinder_radius
-        self.wafer_settings = wafer_settings if wafer_settings else {}
+        self.wafer_settings = wafer_settings if wafer_settings is not None else WaferSettings()
         self.spine_curve = None
         self.loft = None
         self.sample_points = []
@@ -144,7 +145,7 @@ class LoftWaferGenerator:
 
             # Calculate number of profiles based on spine length
             # Read profile_density from wafer_settings
-            profiles_per_unit = self.wafer_settings.get('profile_density', 0.89)
+            profiles_per_unit = self.wafer_settings.profile_density
             num_profiles = max(10, int(spine_length * profiles_per_unit))
 
             logger.debug(f"Auto-calculated {num_profiles} profiles ({profiles_per_unit:.2f} per unit)")
@@ -423,7 +424,7 @@ class LoftWaferGenerator:
         wafer_data_list = []
         chord_vectors = []
 
-        min_chord_threshold = float(self.wafer_settings.get('min_height', self.radius * 0.01))
+        min_chord_threshold = float(self.wafer_settings.min_height)
         min_volume_threshold = 0.001
 
         def get_face_at_position(solid, target_point, tolerance=0.5):

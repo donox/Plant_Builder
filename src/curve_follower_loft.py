@@ -17,6 +17,7 @@ import curves
 from wafer_loft import LoftWaferGenerator, simple_chord_distance_sampler
 from core.logging_setup import get_logger
 from core.core_utils import is_identity_placement
+from core.wafer_settings import WaferSettings
 
 logger = get_logger(__name__)
 
@@ -34,7 +35,7 @@ class CurveFollowerLoft:
         self.curve_points = []
         self.spine_curve = None
         self.generator = None
-        self.wafer_settings = wafer_settings or {}
+        self.wafer_settings = wafer_settings if wafer_settings is not None else WaferSettings()
         # logger.debug("CurveFollowerLoft initialized")
 
     def load_curve_from_file(self, filename):
@@ -455,8 +456,7 @@ class CurveFollowerLoft:
         """
         self.wafer_settings = wafer_settings
 
-        cylinder_diameter = wafer_settings.get('cylinder_diameter', 1.875)
-        cylinder_radius = cylinder_diameter / 2.0
+        cylinder_radius = wafer_settings.cylinder_radius
 
         self.generator = LoftWaferGenerator(wafer_settings=wafer_settings , cylinder_radius=cylinder_radius)
         # logger.debug(f"Created LoftWaferGenerator with radius {cylinder_radius:.3f}")
@@ -483,9 +483,9 @@ class CurveFollowerLoft:
 
         self.generator.create_spine_from_points(points)
 
-        target_chord = wafer_settings.get('max_chord', 0.5)
-        max_wafer_count = wafer_settings.get('max_wafer_count', None)
-        min_inner_chord = wafer_settings.get('min_inner_chord', 0.25)
+        target_chord = wafer_settings.max_chord
+        max_wafer_count = wafer_settings.max_wafer_count
+        min_inner_chord = wafer_settings.min_inner_chord
 
         # Compute effective max_chord_length (may be adjusted by max_wafer_count)
         spine_length = self.generator.spine_curve.Length

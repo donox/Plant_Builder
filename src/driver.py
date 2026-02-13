@@ -17,6 +17,7 @@ import FreeCAD as App
 
 from config.loader import load_config
 from core.logging_setup import get_logger
+from core.wafer_settings import WaferSettings
 from curves import Curves
 from core.metadata import apply_metadata
 
@@ -406,7 +407,7 @@ class Driver:
         first_segment = self.segment_list[0]
         last_segment = self.segment_list[-1]
 
-        wafer_settings = operation.get("wafer_settings", {}) or {}
+        wafer_settings = WaferSettings.from_dict(operation.get("wafer_settings", {}) or {})
         segment_settings = operation.get("segment_settings", {}) or {}
 
         curve_spec = {
@@ -417,7 +418,7 @@ class Driver:
                 "num_lcs_per_end": operation.get("num_lcs_per_end", 3),
                 "tension": operation.get("tension", 0.5),
                 "points": operation.get("points", 50),
-                "cylinder_radius": float(wafer_settings.get("cylinder_diameter", 2.0)) / 2.0,
+                "cylinder_radius": wafer_settings.cylinder_radius,
                 "use_edited_curve": operation.get("use_edited_curve"),
                 "create_editable_curve": operation.get("create_editable_curve", workflow_mode == "first_pass"),
                 "max_closing_angle": operation.get("max_closing_angle", 90.0),
@@ -504,7 +505,7 @@ class Driver:
             doc=self.doc,
             name=segment_name,
             curve_spec={"type": "reconstructed"},
-            wafer_settings={"cylinder_diameter": 2.0},
+            wafer_settings=WaferSettings(),
             segment_settings={},
             base_placement=part_obj.Placement,
             connection_spec={},
@@ -666,7 +667,7 @@ class Driver:
     def _build_curve_follower_segment(self, operation):
         segment_name = operation.get("name", "segment")
         curve_spec = operation.get("curve_spec", {}) or {}
-        wafer_settings = operation.get("wafer_settings", {}) or {}
+        wafer_settings = WaferSettings.from_dict(operation.get("wafer_settings", {}) or {})
         segment_settings = operation.get("segment_settings", {}) or {}
         connection_spec = operation.get("connection", {}) or {}
 
