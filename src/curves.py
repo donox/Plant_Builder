@@ -746,28 +746,7 @@ class Curves:
 
     def _compute_tangent_direction(self, lcs_list, reverse=False):
         """Compute averaged tangent direction from a list of LCS placements."""
-        import FreeCAD as App
-
-        if len(lcs_list) >= 2:
-            directions = []
-            for i in range(len(lcs_list) - 1):
-                direction = lcs_list[i + 1].Base - lcs_list[i].Base
-                if direction.Length > 1e-6:
-                    direction.normalize()
-                    directions.append(direction)
-            if directions:
-                avg = App.Vector(
-                    sum(d.x for d in directions) / len(directions),
-                    sum(d.y for d in directions) / len(directions),
-                    sum(d.z for d in directions) / len(directions)
-                )
-                avg.normalize()
-                return -avg if reverse else avg
-
-        forward = lcs_list[-1 if reverse else 0].Rotation.multVec(
-            App.Vector(0, 0, 1)
-        )
-        return -forward if reverse else forward
+        return compute_tangent_direction(lcs_list, reverse=reverse)
 
     def _build_exit_arc(self, P0, exit_direction, to_target,
                         construction_radius, num_points, exit_turn_angle):
@@ -1088,6 +1067,38 @@ class Curves:
             'current_points': len(self.transformed_curve),
             'message': 'Curve sampling is adequate'
         }
+
+def compute_tangent_direction(lcs_list, reverse=False):
+    """Compute averaged tangent direction from a list of LCS placements.
+
+    Args:
+        lcs_list: List of App.Placement objects representing local coordinate systems.
+        reverse: If True, reverse the computed direction.
+
+    Returns:
+        App.Vector: Normalized tangent direction.
+    """
+    if len(lcs_list) >= 2:
+        directions = []
+        for i in range(len(lcs_list) - 1):
+            direction = lcs_list[i + 1].Base - lcs_list[i].Base
+            if direction.Length > 1e-6:
+                direction.normalize()
+                directions.append(direction)
+        if directions:
+            avg = App.Vector(
+                sum(d.x for d in directions) / len(directions),
+                sum(d.y for d in directions) / len(directions),
+                sum(d.z for d in directions) / len(directions)
+            )
+            avg.normalize()
+            return -avg if reverse else avg
+
+    forward = lcs_list[-1 if reverse else 0].Rotation.multVec(
+        App.Vector(0, 0, 1)
+    )
+    return -forward if reverse else forward
+
 
 def generate_woodcut_trefoil(slices=180, **parameters):
     """

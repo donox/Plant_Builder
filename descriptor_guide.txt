@@ -93,11 +93,11 @@ Settings that affect the entire build process:
 
 Workflow modes:
   null (or omitted) - Single run: executes all operations normally
-  "first_pass"      - Generates segments; close_loop creates an editable
-                      BSpline curve and stops for manual editing
-  "second_pass"     - Skips all operations except close_loop; reconstructs
-                      segments from existing document objects; uses the
-                      edited curve from first_pass
+  "first_pass"      - Generates segments; close_curve/close_loop creates
+                      an editable BSpline curve and stops for manual editing
+  "second_pass"     - Skips all operations except close_curve/close_loop;
+                      reconstructs segments from existing document objects;
+                      uses the edited curve from first_pass
 
 4. OUTPUT FILES
 ---------------
@@ -183,25 +183,48 @@ Build a segment that follows a mathematical curve:
       rotate_segment: 0.0         # Post-build rotation (degrees)
       add_curve_vertices: false   # Add visual points along curve path
 
-CLOSE LOOP
-----------
-Create a closing segment that connects the last segment back to the first,
-using Bezier interpolation with curvature continuity:
+CLOSE CURVE
+-----------
+Close an open multi-segment curve by generating a tangent-constrained
+B-spline that bridges the gap between the last segment's exit and the
+first segment's entry. All segments plus the closing B-spline are
+combined into a single periodic (closed) composite curve, and wafers
+are built on it — triggering the automatic is_closed gap-closing logic.
 
-  - operation: "close_loop"
-    name: "closing_segment"
-    num_lcs_per_end: 3            # LCS points per end for curvature match
-    tension: 0.5                  # Bezier tension parameter
-    points: 50                    # Points for closing curve
-    use_edited_curve: null        # FreeCAD label of edited curve (second_pass)
-    create_editable_curve: false  # Create editable BSpline (first_pass)
+  - operation: "close_curve"
+    name: "ClosedResult"          # Label for composite curve + wafer segment
+    max_closing_angle: 90         # Max turning angle (degrees); abort if exceeded
+    points: 50                    # Sampling density for closing B-spline
+    num_lcs_per_end: 3            # Wafers to average for tangent direction
+    sampling:
+      per_segment: 100            # Points per segment for composite curve
     wafer_settings:
       cylinder_diameter: 2.25
+      min_height: 1.0
+      max_chord: 2.5
     segment_settings:
-      show_lcs: true
+      show_lcs: false
+      build_segment: true
 
-In first_pass mode, creates an editable curve and stops. In second_pass
-mode, uses the edited curve specified by use_edited_curve.
+How it works:
+  1. Extracts the exit point (last wafer's lcs2) and entry point (first
+     wafer's lcs1) in world coordinates.
+  2. Computes exit/entry tangent directions by averaging positions from
+     the last/first few wafers (controlled by num_lcs_per_end).
+  3. Checks that neither turning angle (exit tangent vs gap direction,
+     entry tangent vs gap direction) exceeds max_closing_angle. If it
+     does, logs an error with the measured angles and positions, and
+     returns without generating anything.
+  4. Generates a B-spline closing curve with tangent constraints at both
+     endpoints for smooth curvature continuity.
+  5. Combines all segment curves + closing B-spline into a single
+     periodic BSpline (smooth tangent wrap-around at the junction).
+  6. Builds wafers on the composite closed curve using the existing_curve
+     pipeline, which detects the closed curve and closes the last wafer
+     gap automatically.
+
+The "close_loop" operation name is accepted as an alias for backward
+compatibility.
 
 EXPORT CURVE
 ------------
@@ -221,23 +244,6 @@ FreeCAD BSpline object:
 The exported curve joins segment points in world coordinates, removing
 duplicate points at junctions. Creates a Part::Feature with a green
 BSpline curve.
-
-TEST BEZIER CLOSING
--------------------
-Run a Bezier closing test for development/debugging:
-
-  - operation: "test_bezier_closing"
-    num_end_points: 3
-    num_start_points: 3
-    separation: 10.0
-    tension: 0.5
-    curvature_weight: 0.2
-    cylinder_radius: 1.0
-    seed: null                    # Random seed (null = random)
-    use_explicit_points: false
-    end_points: null              # Explicit point list (optional)
-    start_points: null            # Explicit point list (optional)
-
 
 AVAILABLE CURVE TYPES
 =====================
@@ -579,6 +585,21 @@ workflow:
     segments: [base, Curve Left]
     sampling:
       per_segment: 100
+
+  - operation: close_curve
+    name: ClosedShape
+    description: Close the multi-segment curve
+    max_closing_angle: 90
+    points: 50
+    num_lcs_per_end: 3
+    sampling:
+      per_segment: 100
+    wafer_settings:
+      cylinder_diameter: ${cylinder_diameter}
+      min_height: 1.0
+      max_chord: 2.5
+    segment_settings:
+      show_lcs: false
 
 
 ================================================================================

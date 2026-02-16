@@ -19,7 +19,7 @@ import FreeCAD as App
 from config.loader import load_config
 from core.logging_setup import get_logger
 from core.wafer_settings import WaferSettings
-from curves import Curves
+from curves import Curves, compute_tangent_direction
 from core.metadata import apply_metadata
 
 
@@ -147,8 +147,8 @@ class Driver:
             operation_type = operation.get("operation")
             description = operation.get("description", operation_type)
 
-            # Second pass: skip everything but close_loop
-            if workflow_mode == "second_pass" and operation_type != "close_loop":
+            # Second pass: skip everything but close_curve / close_loop
+            if workflow_mode == "second_pass" and operation_type not in ("close_loop", "close_curve"):
                 logger.debug(f"⏭️  Skipping '{description}' (second pass mode)")
                 continue
 
@@ -183,8 +183,8 @@ class Driver:
             self._execute_build_segment(operation)
         elif operation_type == "set_position":
             self._execute_set_position(operation)
-        elif operation_type == "close_loop":
-            self._close_loop(operation)
+        elif operation_type in ("close_curve", "close_loop"):
+            self._close_curve(operation)
         elif operation_type == "export_curve":
             self._execute_export_curve(operation)
         else:
@@ -193,6 +193,76 @@ class Driver:
     # -------------------------------------------------------------------------
     # Operations
     # -------------------------------------------------------------------------
+
+    def _combine_segment_curves(self, segments, points_per_segment):
+        """Regenerate and combine curve points from multiple segments into world-coordinate list.
+
+        Args:
+            segments: List of LoftSegment instances (in order).
+            points_per_segment: Number of points to sample per segment.
+
+        Returns:
+            List of App.Vector in world coordinates.
+        """
+        all_points_world: list[App.Vector] = []
+
+        for idx, segment in enumerate(segments):
+            if not segment.curve_spec:
+                raise ValueError(
+                    f"Segment '{segment.name}' has no curve_spec."
+                )
+
+            curve_spec = segment.curve_spec
+            curve_type = curve_spec.get("type")
+
+            if curve_type == "existing_curve":
+                logger.info(
+                    f"Skipping segment '{segment.name}' "
+                    f"(type {curve_type}) for parametric sampling."
+                )
+                continue
+
+            # Use the Curves class to generate the transformed curve points.
+            curves_instance = Curves(self.doc, curve_spec)
+            points_array = curves_instance.get_curve_points()
+
+            if points_array is None or len(points_array) == 0:
+                raise ValueError(
+                    f"Curves returned no points for segment '{segment.name}'."
+                )
+
+            total_pts = len(points_array)
+            if total_pts <= points_per_segment:
+                indices = range(total_pts)
+            else:
+                indices = [
+                    int(round(i * (total_pts - 1) / (points_per_segment - 1)))
+                    for i in range(points_per_segment)
+                ]
+
+            segment_points_local: list[App.Vector] = []
+            for i in indices:
+                p = points_array[i]
+                segment_points_local.append(App.Vector(float(p[0]), float(p[1]), float(p[2])))
+
+            segment_points_world = segment.transform_curve_points(segment_points_local)
+
+            # Avoid duplicating the join point between consecutive segments
+            if all_points_world and segment_points_world:
+                last_global = all_points_world[-1]
+                first_new = segment_points_world[0]
+                if (last_global.sub(first_new)).Length <= 1e-6:
+                    segment_points_world = segment_points_world[1:]
+
+            all_points_world.extend(segment_points_world)
+
+            logger.info(
+                f"Segment '{segment.name}' contributed "
+                f"{len(segment_points_world)} world points "
+                f"(source points: {total_pts})."
+            )
+
+        return all_points_world
 
     def _execute_export_curve(self, operation: Dict[str, Any]) -> None:
         """
@@ -251,69 +321,8 @@ class Driver:
                 )
             ordered_segments.append(match)
 
-        all_points_world: list[App.Vector] = []
-
-        # 2) For each segment, regenerate its curve points in local coordinates
-        #    via Curves + curve_spec, then map to world using segment.base_placement. [file:2][file:7]
-        for idx, segment in enumerate(ordered_segments):
-            if not segment.curve_spec:
-                raise ValueError(
-                    f"export_curve: segment '{segment.name}' has no curve_spec."
-                )
-
-            curve_spec = segment.curve_spec
-            curve_type = curve_spec.get("type")
-
-            if curve_type == "existing_curve":
-                logger.info(
-                    f"export_curve: skipping segment '{segment.name}' "
-                    f"(type {curve_type}) for parametric sampling."
-                )
-                continue
-
-            # Use the Curves class to generate the transformed curve points.
-            curves_instance = Curves(self.doc, curve_spec)
-            points_array = curves_instance.get_curve_points()  # numpy array (N, 3). [file:2]
-
-            if points_array is None or len(points_array) == 0:
-                raise ValueError(
-                    f"export_curve: Curves returned no points for segment '{segment.name}'."
-                )
-
-            # Resample / thin to points_per_segment, using simple index-based sampling
-            # for v1. This keeps behavior predictable and easy to adjust later.
-            total_pts = len(points_array)
-            if total_pts <= points_per_segment:
-                indices = range(total_pts)
-            else:
-                # Evenly distributed indices from 0 .. total_pts-1
-                indices = [
-                    int(round(i * (total_pts - 1) / (points_per_segment - 1)))
-                    for i in range(points_per_segment)
-                ]
-
-            segment_points_local: list[App.Vector] = []
-            for i in indices:
-                p = points_array[i]
-                segment_points_local.append(App.Vector(float(p[0]), float(p[1]), float(p[2])))
-
-            # Transform to world coordinates using the segment's base_placement. [file:7]
-            segment_points_world = segment.transform_curve_points(segment_points_local)
-
-            # Avoid duplicating the join point between consecutive segments
-            if all_points_world and segment_points_world:
-                last_global = all_points_world[-1]
-                first_new = segment_points_world[0]
-                if (last_global.sub(first_new)).Length <= 1e-6:
-                    segment_points_world = segment_points_world[1:]
-
-            all_points_world.extend(segment_points_world)
-
-            logger.info(
-                f"export_curve: segment '{segment.name}' contributed "
-                f"{len(segment_points_world)} world points "
-                f"(source points: {total_pts})."
-            )
+        # 2) Combine all segment curves into world-coordinate points.
+        all_points_world = self._combine_segment_curves(ordered_segments, points_per_segment)
 
         if len(all_points_world) < 2:
             raise ValueError(
@@ -360,141 +369,216 @@ class Driver:
         )
 
 
-    def _close_loop(self, operation):
+    def _close_curve(self, operation):
         """
-        Create a closing segment that connects the last segment back to the first.
-        Uses multiple LCS from each segment for smooth curvature continuity.
+        Close an open multi-segment curve by generating a B-spline closing
+        curve constrained by endpoint tangent directions, combining all segments
+        into a single composite closed curve, and building wafers on it.
+
+        The composite curve triggers the is_closed gap-closing logic in
+        generate_all_wafers_by_slicing().
         """
-        workflow_mode = self.global_settings.get("workflow_mode", None)
+        import Part
 
-        if workflow_mode == "second_pass":
-            objects_to_remove = []
-            for obj in self.doc.Objects:
-                if "closing_segment" in obj.Label:
-                    if obj.Label.startswith("EDIT_"):
-                        logger.debug(f"Preserving editable curve: {obj.Label}")
-                        continue
-                    objects_to_remove.append(obj.Name)
-
-            if objects_to_remove:
-                logger.info(f"Removing {len(objects_to_remove)} old closing segment objects")
-                for obj_name in objects_to_remove:
-                    try:
-                        self.doc.removeObject(obj_name)
-                    except Exception:
-                        pass
-                self.doc.recompute()
-
-            logger.info("Second pass mode: Looking for existing segments in document")
-
-            segment_parts = []
-            for obj in self.doc.Objects:
-                if "_Part" in obj.Label and "closing_segment" not in obj.Label:
-                    segment_parts.append(obj)
-
-            if len(segment_parts) < 2:
-                raise ValueError(
-                    f"Second pass mode requires at least 2 existing segments. Found: {len(segment_parts)}"
-                )
-
-            first_segment = self._reconstruct_segment_from_part(segment_parts[0])
-            last_segment = self._reconstruct_segment_from_part(segment_parts[-1])
-            self.segment_list = [first_segment, last_segment]
-        else:
-            if len(self.segment_list) < 2:
-                logger.warning("Need at least 2 segments to close a loop")
-                return
+        if len(self.segment_list) < 1:
+            logger.warning("Need at least 1 segment to close a curve")
+            return
 
         first_segment = self.segment_list[0]
         last_segment = self.segment_list[-1]
 
         wafer_settings = WaferSettings.from_dict(operation.get("wafer_settings", {}) or {})
         segment_settings = operation.get("segment_settings", {}) or {}
+        num_lcs_per_end = int(operation.get("num_lcs_per_end", 3))
+        closing_points_count = int(operation.get("points", 50))
+        max_closing_angle = float(operation.get("max_closing_angle", 90.0))
+        sampling_cfg = operation.get("sampling", {})
+        points_per_segment = int(sampling_cfg.get("per_segment", 100))
+        curve_name = operation.get("name", "ClosedCurve")
 
-        curve_spec = {
-            "type": "closing_curve",
-            "parameters": {
-                "start_segment": first_segment,
-                "end_segment": last_segment,
-                "num_lcs_per_end": operation.get("num_lcs_per_end", 3),
-                "tension": operation.get("tension", 0.5),
-                "points": operation.get("points", 50),
-                "cylinder_radius": wafer_settings.cylinder_radius,
-                "use_edited_curve": operation.get("use_edited_curve"),
-                "create_editable_curve": operation.get("create_editable_curve", workflow_mode == "first_pass"),
-                "max_closing_angle": operation.get("max_closing_angle", 90.0),
-                "entry_helper_length": operation.get("entry_helper_length"),
-                "exit_helper_length": operation.get("exit_helper_length"),
-            },
-        }
+        # ------------------------------------------------------------------
+        # 1) Extract endpoint geometry from first and last segments
+        # ------------------------------------------------------------------
+        # Exit point P0 = last segment's last wafer's lcs2 (world coords)
+        last_wafers = last_segment.wafer_list
+        first_wafers = first_segment.wafer_list
 
-        use_edited_curve = operation.get("use_edited_curve")
+        if not last_wafers or not first_wafers:
+            raise ValueError("First and last segments must have wafers to close curve")
 
-        if use_edited_curve:
-            last_wafer = last_segment.wafer_list[-1]
-            base_placement_for_closing = last_segment.base_placement.multiply(last_wafer.lcs2)
-            logger.info(f"Edited curve mode - placing segment at exit LCS: {base_placement_for_closing.Base}")
+        P0 = last_segment.base_placement.multiply(last_wafers[-1].lcs2).Base
+        P1 = first_segment.base_placement.multiply(first_wafers[0].lcs1).Base
+
+        # Exit tangent T0: averaged direction from last few wafers' lcs2 positions
+        num_exit = min(num_lcs_per_end, len(last_wafers))
+        exit_lcs_list = []
+        for i in range(num_exit):
+            wafer_idx = -(num_exit - i)
+            wafer = last_wafers[wafer_idx]
+            if wafer.lcs2:
+                exit_lcs_list.append(last_segment.base_placement.multiply(wafer.lcs2))
+
+        # Entry tangent T1: averaged direction from first few wafers' lcs1 positions
+        num_entry = min(num_lcs_per_end, len(first_wafers))
+        entry_lcs_list = []
+        for i in range(num_entry):
+            wafer = first_wafers[i]
+            if wafer.lcs1:
+                entry_lcs_list.append(first_segment.base_placement.multiply(wafer.lcs1))
+
+        if len(exit_lcs_list) < 1 or len(entry_lcs_list) < 1:
+            raise ValueError("Need at least 1 LCS per end to compute tangent directions")
+
+        T0 = compute_tangent_direction(exit_lcs_list, reverse=False)  # forward at exit (away from segment)
+        T1 = compute_tangent_direction(entry_lcs_list, reverse=False)  # forward at entry (into first segment)
+
+        logger.info(f"Closing curve: P0={P0}, P1={P1}")
+        logger.info(f"  Exit tangent T0={T0}")
+        logger.info(f"  Entry tangent T1={T1}")
+
+        # ------------------------------------------------------------------
+        # 2) Angular separation check
+        # ------------------------------------------------------------------
+        gap_vec = P1 - P0
+        gap_distance = gap_vec.Length
+        if gap_distance < 1e-6:
+            logger.info("Endpoints already coincide, gap distance ~0")
+            gap_dir = T0
         else:
-            base_placement_for_closing = App.Placement()
+            gap_dir = App.Vector(gap_vec)
+            gap_dir.normalize()
 
+        exit_turn_angle = math.degrees(T0.getAngle(gap_dir))
+        entry_turn_angle = math.degrees(T1.getAngle(gap_dir))
+        max_turn = max(exit_turn_angle, entry_turn_angle)
+
+        logger.info(
+            f"  Exit turn angle: {exit_turn_angle:.1f} deg, "
+            f"Entry turn angle: {entry_turn_angle:.1f} deg"
+        )
+
+        if max_turn > max_closing_angle:
+            logger.error(
+                f"Closing angle too large: max turning angle = {max_turn:.1f} deg "
+                f"(limit = {max_closing_angle:.1f} deg). "
+                f"P0={P0}, P1={P1}, gap={gap_distance:.3f}. "
+                f"Add/modify segments to bring endpoints into range."
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # 3) Generate closing B-spline
+        # ------------------------------------------------------------------
+        # Scale tangent magnitudes proportional to gap distance for smooth shape
+        tangent_scale = gap_distance / 3.0 if gap_distance > 1e-6 else 1.0
+        T0_scaled = App.Vector(T0.x * tangent_scale, T0.y * tangent_scale, T0.z * tangent_scale)
+        # T1 points forward into first segment = the direction the BSpline should arrive at P1
+        T1_scaled = App.Vector(T1.x * tangent_scale, T1.y * tangent_scale, T1.z * tangent_scale)
+
+        bspline = Part.BSplineCurve()
+        bspline.interpolate(
+            Points=[P0, P1],
+            Tangents=[T0_scaled, T1_scaled],
+            TangentFlags=[True, True],
+        )
+
+        # Sample the closing B-spline into N points
+        closing_points = []
+        for i in range(closing_points_count):
+            u = i / max(1, closing_points_count - 1)
+            param = bspline.FirstParameter + u * (bspline.LastParameter - bspline.FirstParameter)
+            closing_points.append(bspline.value(param))
+
+        closing_length = sum(
+            closing_points[i].distanceToPoint(closing_points[i + 1])
+            for i in range(len(closing_points) - 1)
+        )
+        logger.info(
+            f"  Closing B-spline: {len(closing_points)} points, "
+            f"length={closing_length:.3f}, gap={gap_distance:.3f}"
+        )
+
+        # ------------------------------------------------------------------
+        # 4) Combine all segments + closing curve into composite closed BSpline
+        # ------------------------------------------------------------------
+        all_points_world = self._combine_segment_curves(self.segment_list, points_per_segment)
+
+        if len(all_points_world) < 2:
+            raise ValueError("Composite curve has fewer than 2 points from segments")
+
+        # Append closing curve points (skip first if it duplicates last segment point)
+        if closing_points:
+            if (all_points_world[-1].sub(closing_points[0])).Length <= 1e-6:
+                closing_points = closing_points[1:]
+            all_points_world.extend(closing_points)
+
+        # Remove duplicate endpoint if closing curve lands on the start point
+        if len(all_points_world) > 2:
+            if (all_points_world[-1].sub(all_points_world[0])).Length <= 1e-3:
+                all_points_world = all_points_world[:-1]
+
+        logger.info(f"  Composite curve: {len(all_points_world)} total points")
+
+        # Build a periodic (closed) BSpline so tangent continuity is maintained
+        # at the junction between the closing curve and the first segment.
+        composite_bspline = Part.BSplineCurve()
+        composite_bspline.interpolate(all_points_world, PeriodicFlag=True)
+        composite_wire = Part.Wire([composite_bspline.toShape()])
+
+        doc = self.doc
+        if doc is None:
+            raise ValueError("driver.doc is None; cannot create curve object.")
+
+        # Remove existing object with same label
+        for obj in doc.Objects:
+            if obj.Label == curve_name:
+                try:
+                    doc.removeObject(obj.Name)
+                except Exception:
+                    pass
+
+        curve_obj = doc.addObject("Part::Feature", "ClosedCurve")
+        curve_obj.Label = curve_name
+        curve_obj.Shape = composite_wire
+
+        if hasattr(curve_obj, "ViewObject"):
+            curve_obj.ViewObject.LineColor = (0.0, 1.0, 0.0)
+            curve_obj.ViewObject.LineWidth = 3.0
+
+        doc.recompute()
+
+        # ------------------------------------------------------------------
+        # 5) Build wafers on the composite closed curve
+        # ------------------------------------------------------------------
+        # Create a new LoftSegment using the existing_curve type to build
+        # wafers from the composite wire.
         from loft_segment import LoftSegment
 
+        composite_curve_spec = {
+            "type": "existing_curve",
+            "from_label": curve_name,
+            "num_samples": len(all_points_world),
+        }
+
         closing_segment = LoftSegment(
-            doc=self.doc,
-            name=operation.get("name", "closing_segment"),
-            curve_spec=curve_spec,
+            doc=doc,
+            name=f"{curve_name}_wafers",
+            curve_spec=composite_curve_spec,
             wafer_settings=wafer_settings,
             segment_settings=segment_settings,
-            base_placement=base_placement_for_closing,
+            base_placement=App.Placement(),
             connection_spec={},
         )
 
         closing_segment.generate_wafers()
-
-        if workflow_mode == "first_pass":
-            logger.info("⏸️  FIRST PASS COMPLETE")
-            logger.info("    1. Edit the created curve using FreeCAD tools")
-            logger.info("    2. Change workflow_mode to 'second_pass' in YAML")
-            logger.info("    3. Add use_edited_curve parameter to close_loop operation")
-            logger.info("    4. Re-run the workflow")
-            return
-
-        closing_segment.visualize(self.doc)
-
-        used_edited_curve = operation.get("use_edited_curve") is not None
-
-        if not used_edited_curve:
-            adjusted_placement = self._align_segment_to_previous(closing_segment, last_segment)
-
-            local_rotation = App.Rotation(App.Vector(0, 1, 0), 180)
-            adjusted_placement = App.Placement(
-                adjusted_placement.Base,
-                adjusted_placement.Rotation.multiply(local_rotation),
-            )
-
-            part_name = f"{closing_segment.name}_Part"
-            part_obj = self.doc.getObject(part_name)
-
-            if part_obj:
-                part_obj.Placement = adjusted_placement
-                closing_segment.base_placement = adjusted_placement
-            else:
-                logger.warning(f"Could not find Part object: {part_name}")
-        else:
-            logger.info("Using edited curve - skipping alignment (wafers already in correct position)")
+        closing_segment.visualize(doc)
 
         self.segment_list.append(closing_segment)
 
-        end_placement = closing_segment.get_end_placement()
-        start_placement = first_segment.get_start_placement()
-
-        gap = end_placement.Base.distanceToPoint(start_placement.Base)
-        logger.info(f"Loop closure gap: {gap:.3f}")
-
-        if gap > 1.0:
-            logger.warning(f"Large closure gap detected: {gap:.3f} - loop may not be properly closed")
-
-        logger.info("✓ Closing segment created with curvature continuity")
+        logger.info(
+            f"close_curve: created '{curve_name}' with "
+            f"{len(closing_segment.wafer_list)} wafers on composite closed curve"
+        )
 
     def _reconstruct_segment_from_part(self, part_obj):
         from loft_segment import LoftSegment
