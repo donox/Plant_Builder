@@ -518,41 +518,19 @@ class LoftWaferGenerator:
             logger.warning(f"No ellipse/circle edge found on face at {center}")
             return None
 
-        start = 0
-        wafer_index = 0
-        while start < len(self.cutting_planes) - 1:
-            end = start + 1
+        def slice_wafer(plane1, plane2, wafer_label):
+            """Slice a single wafer between two cutting planes.
 
-            plane1 = self.cutting_planes[start]
-            plane2 = self.cutting_planes[end]
+            Returns (wafer_data_or_None, chord_vector).
+            wafer_data is a dict with 'solid', 'geometry', 'plane1', 'plane2'
+            or None if the wafer is degenerate.
+            """
             center1 = plane1['point']
             center2 = plane2['point']
             chord_vector = center2 - center1
             chord_length = chord_vector.Length
 
-            # Coalesce: advance end pointer until chord exceeds threshold
-            coalesced = 0
-            while chord_length < min_chord_threshold and end < len(self.cutting_planes) - 1:
-                end += 1
-                coalesced += 1
-                plane2 = self.cutting_planes[end]
-                center2 = plane2['point']
-                chord_vector = center2 - center1
-                chord_length = chord_vector.Length
-
-            if coalesced > 0:
-                logger.info(f"Wafer {wafer_index}: coalesced {coalesced} planes "
-                            f"(planes {start}-{end}, chord {chord_length:.4f})")
-
-            if chord_length < min_chord_threshold:
-                logger.info(f"Wafer {wafer_index}: skipping final segment "
-                            f"(chord {chord_length:.4f} below threshold {min_chord_threshold:.4f})")
-                break
-
-            i = wafer_index
-
             try:
-
                 chord_direction = App.Vector(chord_vector.x, chord_vector.y, chord_vector.z)
                 chord_direction.normalize()
 
@@ -582,14 +560,8 @@ class LoftWaferGenerator:
 
                 if wafer.Volume > 1e-6:
                     if wafer.Volume < min_volume_threshold:
-                        logger.info(f"Wafer {i}: skipping (volume {wafer.Volume:.6f} below threshold)")
-                        chord_vectors.append(chord_vector)
-                        wafer_data_list.append(None)
-                        start = end
-                        wafer_index += 1
-                        continue
-
-                    chord_vectors.append(chord_vector)
+                        logger.info(f"Wafer {wafer_label}: skipping (volume {wafer.Volume:.6f} below threshold)")
+                        return None, chord_vector
 
                     # Extract ACTUAL ellipse geometry from the wafer faces
                     actual_face1 = get_face_at_position(wafer, center1)
@@ -599,17 +571,12 @@ class LoftWaferGenerator:
                     actual_ellipse2 = get_ellipse_from_face(actual_face2, center2)
 
                     if actual_ellipse1 is None or actual_ellipse2 is None:
-                        logger.error(f"Wafer {i} failed to extract ellipse geometry")
-                        wafer_data_list.append(None)
-                        start = end
-                        wafer_index += 1
-                        continue
+                        logger.error(f"Wafer {wafer_label} failed to extract ellipse geometry")
+                        return None, chord_vector
 
-                    # Use actual geometry for the wafer data
-                    # First calculate the full geometry including lift_angle
                     full_geometry = self._calculate_basic_geometry(plane1, plane2, chord_vector)
                     geometry = {
-                        **full_geometry,  # Include lift_angle_deg and other calculated values
+                        **full_geometry,
                         'chord_vector': chord_vector,
                         'chord_length': chord_length,
                         'ellipse1': actual_ellipse1,
@@ -618,21 +585,116 @@ class LoftWaferGenerator:
                         'rotation_angle_deg': 0.0,
                     }
 
-                    wafer_data_list.append({
+                    return {
                         'solid': wafer,
                         'geometry': geometry,
                         'plane1': plane1,
                         'plane2': plane2
-                    })
+                    }, chord_vector
                 else:
-                    logger.warning(f"Wafer {i} failed (zero volume)")
-                    chord_vectors.append(chord_vector)
-                    wafer_data_list.append(None)
+                    logger.warning(f"Wafer {wafer_label} failed (zero volume)")
+                    return None, chord_vector
 
             except Exception as e:
-                logger.error(f"Wafer {i} error: {e}", exc_info=True)
-                chord_vectors.append(chord_vector)
-                wafer_data_list.append(None)
+                logger.error(f"Wafer {wafer_label} error: {e}", exc_info=True)
+                return None, chord_vector
+
+        # Detect closed curve: first and last cutting planes co-located
+        first_pt = self.cutting_planes[0]['point']
+        last_pt = self.cutting_planes[-1]['point']
+        is_closed = (last_pt - first_pt).Length < min_chord_threshold
+        if is_closed:
+            logger.info("Closed curve detected — will close the last wafer gap")
+
+        max_chord = float(self.wafer_settings.max_chord)
+
+        start = 0
+        wafer_index = 0
+        while start < len(self.cutting_planes) - 1:
+            end = start + 1
+
+            plane1 = self.cutting_planes[start]
+            plane2 = self.cutting_planes[end]
+            center1 = plane1['point']
+            center2 = plane2['point']
+            chord_vector = center2 - center1
+            chord_length = chord_vector.Length
+
+            # Coalesce: advance end pointer until chord exceeds threshold
+            coalesced = 0
+            while chord_length < min_chord_threshold and end < len(self.cutting_planes) - 1:
+                end += 1
+                coalesced += 1
+                plane2 = self.cutting_planes[end]
+                center2 = plane2['point']
+                chord_vector = center2 - center1
+                chord_length = chord_vector.Length
+
+            if coalesced > 0:
+                logger.info(f"Wafer {wafer_index}: coalesced {coalesced} planes "
+                            f"(planes {start}-{end}, chord {chord_length:.4f})")
+
+            if chord_length < min_chord_threshold:
+                if is_closed and len(wafer_data_list) > 0:
+                    # Close the gap: extend the last wafer to meet cutting_planes[0]
+                    closure_plane = self.cutting_planes[0]
+                    last_wafer = wafer_data_list[-1]
+                    if last_wafer is not None:
+                        extend_plane1 = last_wafer['plane1']
+                        extended_chord = (closure_plane['point'] - extend_plane1['point']).Length
+
+                        if extended_chord <= max_chord:
+                            # Case A: extend the last wafer to the closure plane
+                            logger.info(f"Closing curve: extending last wafer to plane[0] "
+                                        f"(extended chord {extended_chord:.4f})")
+                            wafer_data_list.pop()
+                            chord_vectors.pop()
+                            data, cv = slice_wafer(extend_plane1, closure_plane, f"{wafer_index - 1}*")
+                            wafer_data_list.append(data)
+                            chord_vectors.append(cv)
+                        else:
+                            # Case B: split into two wafers via midpoint on the spine
+                            logger.info(f"Closing curve: splitting into two wafers "
+                                        f"(extended chord {extended_chord:.4f} > max_chord {max_chord:.4f})")
+                            wafer_data_list.pop()
+                            chord_vectors.pop()
+
+                            # Find midpoint parameter on the spine.
+                            # cutting_planes[-1] is co-located with cutting_planes[0],
+                            # so the arc from param_a to the closure runs to the last plane's parameter.
+                            param_a = extend_plane1['parameter']
+                            param_end = self.cutting_planes[-1]['parameter']
+                            param_mid = (param_a + param_end) / 2.0
+                            curve = self.spine_curve.Curve
+
+                            mid_point = curve.value(param_mid)
+                            mid_tangent = curve.tangent(param_mid)[0]
+                            mid_tangent.normalize()
+                            mid_plane = {
+                                'point': mid_point,
+                                'normal': mid_tangent,
+                                'parameter': param_mid
+                            }
+
+                            # First half: last wafer's plane1 to midpoint
+                            data1, cv1 = slice_wafer(extend_plane1, mid_plane, f"{wafer_index - 1}*")
+                            wafer_data_list.append(data1)
+                            chord_vectors.append(cv1)
+
+                            # Second half: midpoint to closure plane
+                            data2, cv2 = slice_wafer(mid_plane, closure_plane, f"{wafer_index}*")
+                            wafer_data_list.append(data2)
+                            chord_vectors.append(cv2)
+                    else:
+                        logger.warning("Closing curve: last wafer was None, cannot extend")
+                else:
+                    logger.info(f"Wafer {wafer_index}: skipping final segment "
+                                f"(chord {chord_length:.4f} below threshold {min_chord_threshold:.4f})")
+                break
+
+            data, cv = slice_wafer(plane1, plane2, wafer_index)
+            chord_vectors.append(cv)
+            wafer_data_list.append(data)
 
             start = end
             wafer_index += 1
