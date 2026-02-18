@@ -369,6 +369,7 @@ The custom function must return a list of [x, y, z] coordinate lists.
 
 
 CURVE TRANSFORMATIONS
+
 =====================
 
 Transformations are applied to curves in the order listed, after curve
