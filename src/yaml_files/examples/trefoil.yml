@@ -1,44 +1,35 @@
 include:
 - base/defaults.yml
-
 params:
   out_dir: /home/don/Documents/Temp/FreeCAD/
   cuts_file: trefoil_cutting_list.txt
   place_file: trefoil_placement_list.txt
   trace_file: build_trace.log
-
   project_name: Demonstrate Trefoil
   version: '1.0'
   created: '2025-12-13'
   description: Trefoil example
-
   cylinder_diameter: 2.25
   profile_density: 0.5
   min_height: 1.0
   max_chord: 2.5
-
-
   min_inner_chord: 0.15
-
 metadata:
   project_name: ${project_name}
   version: ${version}
   created: ${created}
   description: ${description}
-
 output_files:
   working_directory: ${out_dir}
   cuts_file: ${cuts_file}
   place_file: ${place_file}
   trace_file: ${trace_file}
-
 workflow:
 - operation: remove_objects
   description: Clean up any existing objects
   keep_patterns:
   - helix.*
   - .*Metadata.*
-
 - operation: build_segment
   segment_type: curve_follower
   name: Trefoil
@@ -52,8 +43,8 @@ workflow:
       q: 3
       points: 300
       smooth_factor: 0.75
-      jitter: 0.00
-      optimize_spacing: True
+      jitter: 0.0
+      optimize_spacing: true
       scale_z: 1.0
   wafer_settings:
     cylinder_diameter: ${cylinder_diameter}

@@ -640,8 +640,6 @@ class Driver:
             dummy = Wafer(
                 solid=None,
                 index=0,
-                plane1=None,
-                plane2=None,
                 geometry=None,
                 lcs1=part_obj.Placement,
                 lcs2=App.Placement(

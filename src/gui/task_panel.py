@@ -100,6 +100,13 @@ class PlantBuilderPanel:
         self.btn_build.clicked.connect(self._run_build)
         action_row.addWidget(self.btn_build)
 
+        self.btn_validate = QtWidgets.QPushButton("Validate")
+        self.btn_validate.setEnabled(False)
+        self.btn_validate.setMinimumHeight(32)
+        self.btn_validate.setToolTip("Check config for errors before building")
+        self.btn_validate.clicked.connect(self._on_validate_clicked)
+        action_row.addWidget(self.btn_validate)
+
         self.btn_edit = QtWidgets.QPushButton("Edit Config")
         self.btn_edit.setEnabled(False)
         self.btn_edit.setMinimumHeight(32)
@@ -150,6 +157,9 @@ class PlantBuilderPanel:
 
         self._txt_log = QtWidgets.QTextEdit()
         self._txt_log.setReadOnly(True)
+        self._txt_log.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
         self._txt_log.setMinimumHeight(160)
         mono_font = QtGui.QFont("Monospace")
         mono_font.setStyleHint(QtGui.QFont.TypeWriter)
@@ -161,6 +171,10 @@ class PlantBuilderPanel:
         btn_clear = QtWidgets.QPushButton("Clear")
         btn_clear.clicked.connect(self._txt_log.clear)
         log_btn_row.addWidget(btn_clear)
+        btn_copy_log = QtWidgets.QPushButton("Copy All")
+        btn_copy_log.setToolTip("Copy all log text to clipboard")
+        btn_copy_log.clicked.connect(self._copy_log)
+        log_btn_row.addWidget(btn_copy_log)
         btn_open_log = QtWidgets.QPushButton("Open log file\u2026")
         btn_open_log.clicked.connect(self._open_log_file)
         log_btn_row.addWidget(btn_open_log)
@@ -218,6 +232,7 @@ class PlantBuilderPanel:
         if path is None:
             self.selected_path = None
             self.btn_build.setEnabled(False)
+            self.btn_validate.setEnabled(False)
             self.btn_edit.setEnabled(False)
             self._clear_summary()
             self._set_status("Select a project to begin")
@@ -284,8 +299,9 @@ class PlantBuilderPanel:
         self._display_wafer_settings(build_segments, cfg)
 
         self.btn_build.setEnabled(True)
+        self.btn_validate.setEnabled(True)
         self.btn_edit.setEnabled(True)
-        self._set_status("Ready to build")
+        self._run_validation(loaded)
 
     def _display_wafer_settings(self, build_segments, cfg):
         if not build_segments:
@@ -324,6 +340,54 @@ class PlantBuilderPanel:
         self.lbl_cylinder.setText("-")
         self.lbl_min_height.setText("-")
         self.lbl_max_chord.setText("-")
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def _run_validation(self, loaded_config, *, explicit=False):
+        from gui.validator import validate_config
+        issues = validate_config(loaded_config)
+
+        errors   = [i for i in issues if i.level == "error"]
+        warnings = [i for i in issues if i.level == "warning"]
+
+        if errors:
+            self.btn_build.setEnabled(False)
+            self._set_status(
+                f"Config has {len(errors)} error(s), {len(warnings)} warning(s) — see log",
+                error=True)
+            self.btn_toggle_log.setChecked(True)
+            self._toggle_log_pane(True)
+            for issue in issues:
+                levelno = logging.ERROR if issue.level == "error" else logging.WARNING
+                self._append_log(str(issue), levelno)
+        elif warnings:
+            self.btn_build.setEnabled(True)
+            self._set_status(
+                f"Config has {len(warnings)} warning(s) — see log",
+                warning=True)
+            self.btn_toggle_log.setChecked(True)
+            self._toggle_log_pane(True)
+            for issue in issues:
+                self._append_log(str(issue), logging.WARNING)
+        else:
+            self.btn_build.setEnabled(True)
+            self._set_status("Ready to build")
+            if explicit:
+                self.btn_toggle_log.setChecked(True)
+                self._toggle_log_pane(True)
+                self._append_log("Validation passed — no issues found.", logging.INFO)
+
+    def _on_validate_clicked(self):
+        if not self.selected_path:
+            return
+        try:
+            loaded = load_config(self.selected_path, yaml_base_dir=_YAML_BASE_DIR)
+        except Exception as exc:
+            self._set_status(f"Failed to load config: {exc}", error=True)
+            return
+        self._run_validation(loaded, explicit=True)
 
     # ------------------------------------------------------------------
     # Config editor
@@ -433,6 +497,9 @@ class PlantBuilderPanel:
         self.btn_toggle_log.setText("\u25bc Log Output" if checked else "\u25b6 Log Output")
         self._log_pane_widget.setVisible(checked)
 
+    def _copy_log(self):
+        QtWidgets.QApplication.clipboard().setText(self._txt_log.toPlainText())
+
     def _open_log_file(self):
         import pathlib
         log_path = pathlib.Path.home() / ".plantbuilder" / "plantbuilder.log"
@@ -442,11 +509,14 @@ class PlantBuilderPanel:
     # Status helpers
     # ------------------------------------------------------------------
 
-    def _set_status(self, text: str, *, error: bool = False, success: bool = False):
+    def _set_status(self, text: str, *, error: bool = False, success: bool = False,
+                    warning: bool = False):
         self.lbl_status.setText(text)
         if error:
             self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
         elif success:
             self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+        elif warning:
+            self.lbl_status.setStyleSheet("color: #b36b00; font-weight: bold;")
         else:
             self.lbl_status.setStyleSheet("")
