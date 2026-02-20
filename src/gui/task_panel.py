@@ -5,6 +5,7 @@ project, viewing its summary, and running the build workflow.
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import traceback
 
@@ -28,8 +29,10 @@ class PlantBuilderPanel:
         self.form = QtWidgets.QWidget()
         self.form.setWindowTitle("PlantBuilder")
         self.selected_path: str | None = None
+        self._log_handler = None
         self._build_ui()
         self._populate_dropdown()
+        self._install_log_handler()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -126,6 +129,46 @@ class PlantBuilderPanel:
         self.progress.hide()
         layout.addWidget(self.progress)
 
+        # --- Log section ---
+        log_header_row = QtWidgets.QHBoxLayout()
+        self.btn_toggle_log = QtWidgets.QPushButton("\u25b6 Log Output")
+        self.btn_toggle_log.setCheckable(True)
+        self.btn_toggle_log.setChecked(False)
+        self.btn_toggle_log.setFlat(True)
+        font = self.btn_toggle_log.font()
+        font.setBold(True)
+        self.btn_toggle_log.setFont(font)
+        self.btn_toggle_log.toggled.connect(self._toggle_log_pane)
+        log_header_row.addWidget(self.btn_toggle_log)
+        log_header_row.addStretch()
+        layout.addLayout(log_header_row)
+
+        self._log_pane_widget = QtWidgets.QWidget()
+        self._log_pane_widget.setVisible(False)
+        log_pane_layout = QtWidgets.QVBoxLayout(self._log_pane_widget)
+        log_pane_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._txt_log = QtWidgets.QTextEdit()
+        self._txt_log.setReadOnly(True)
+        self._txt_log.setMinimumHeight(160)
+        mono_font = QtGui.QFont("Monospace")
+        mono_font.setStyleHint(QtGui.QFont.TypeWriter)
+        mono_font.setPointSize(8)
+        self._txt_log.setFont(mono_font)
+        log_pane_layout.addWidget(self._txt_log)
+
+        log_btn_row = QtWidgets.QHBoxLayout()
+        btn_clear = QtWidgets.QPushButton("Clear")
+        btn_clear.clicked.connect(self._txt_log.clear)
+        log_btn_row.addWidget(btn_clear)
+        btn_open_log = QtWidgets.QPushButton("Open log file\u2026")
+        btn_open_log.clicked.connect(self._open_log_file)
+        log_btn_row.addWidget(btn_open_log)
+        log_btn_row.addStretch()
+        log_pane_layout.addLayout(log_btn_row)
+
+        layout.addWidget(self._log_pane_widget)
+
         layout.addStretch()
 
     @staticmethod
@@ -145,6 +188,7 @@ class PlantBuilderPanel:
 
     def reject(self):
         """Close button — dismiss the panel."""
+        self._remove_log_handler()
         import FreeCADGui
         FreeCADGui.Control.closeDialog()
 
@@ -323,6 +367,9 @@ class PlantBuilderPanel:
         self.combo.setEnabled(False)
         self.btn_browse.setEnabled(False)
 
+        self.btn_toggle_log.setChecked(True)
+        self._toggle_log_pane(True)
+
         self._set_status("Building\u2026")
         self.progress.show()
         self.progress.setRange(0, 0)  # indeterminate spinner
@@ -348,6 +395,48 @@ class PlantBuilderPanel:
             self.btn_build.setEnabled(True)
             self.combo.setEnabled(True)
             self.btn_browse.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Log panel helpers
+    # ------------------------------------------------------------------
+
+    _LEVEL_COLORS = {
+        logging.ERROR: "#cc0000",
+        logging.WARNING: "#b36b00",
+        25: "#5500aa",          # COORD level (purple)
+        logging.DEBUG: "#888888",
+    }
+
+    def _install_log_handler(self):
+        from gui.log_handler import QtLogHandler
+        self._log_handler = QtLogHandler()
+        self._log_handler.log_record_emitted.connect(self._append_log)
+        logging.getLogger().addHandler(self._log_handler)
+
+    def _remove_log_handler(self):
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler = None
+
+    def _append_log(self, msg: str, levelno: int):
+        color = self._LEVEL_COLORS.get(levelno)
+        escaped = (msg.replace("&", "&amp;")
+                      .replace("<", "&lt;")
+                      .replace(">", "&gt;"))
+        html = f'<span style="color:{color}">{escaped}</span>' if color else escaped
+        self._txt_log.append(html)
+        sb = self._txt_log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        QtWidgets.QApplication.processEvents()
+
+    def _toggle_log_pane(self, checked: bool):
+        self.btn_toggle_log.setText("\u25bc Log Output" if checked else "\u25b6 Log Output")
+        self._log_pane_widget.setVisible(checked)
+
+    def _open_log_file(self):
+        import pathlib
+        log_path = pathlib.Path.home() / ".plantbuilder" / "plantbuilder.log"
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(log_path)))
 
     # ------------------------------------------------------------------
     # Status helpers
