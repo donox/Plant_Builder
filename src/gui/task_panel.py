@@ -50,6 +50,8 @@ class PlantBuilderPanel:
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
         self.combo.currentIndexChanged.connect(self._on_selection_changed)
+        self.combo.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.combo.customContextMenuRequested.connect(self._on_combo_context_menu)
         file_row.addWidget(self.combo)
         self.btn_browse = QtWidgets.QPushButton("Browse\u2026")
         self.btn_browse.setToolTip("Open a .yml project file from disk")
@@ -211,9 +213,17 @@ class PlantBuilderPanel:
     # ------------------------------------------------------------------
 
     def _populate_dropdown(self):
+        from gui.recent_files import load_recent
         self.combo.blockSignals(True)
         self.combo.clear()
         self.combo.addItem("-- select a project --", None)
+
+        recents = load_recent()
+        if recents:
+            self.combo.insertSeparator(self.combo.count())
+            for path in recents:
+                self.combo.addItem(os.path.basename(path), path)
+            self.combo.insertSeparator(self.combo.count())
 
         yml_files = sorted(glob.glob(os.path.join(_EXAMPLES_DIR, "*.yml")))
         for path in yml_files:
@@ -238,6 +248,23 @@ class PlantBuilderPanel:
             self._set_status("Select a project to begin")
             return
         self._load_summary(path)
+
+    def _on_combo_context_menu(self, pos):
+        from gui.recent_files import load_recent, clear_recent
+        menu = QtWidgets.QMenu(self.combo)
+        act_clear = menu.addAction("Clear recent files")
+        act_clear.setEnabled(bool(load_recent()))
+        act = menu.exec_(self.combo.mapToGlobal(pos))
+        if act == act_clear:
+            clear_recent()
+            current = self.selected_path
+            self._populate_dropdown()
+            if current:
+                idx = self.combo.findData(current)
+                if idx != -1:
+                    self.combo.blockSignals(True)
+                    self.combo.setCurrentIndex(idx)
+                    self.combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Browse for external YAML
@@ -297,6 +324,9 @@ class PlantBuilderPanel:
 
         # Wafer settings — use first build_segment's settings
         self._display_wafer_settings(build_segments, cfg)
+
+        from gui.recent_files import push_recent
+        push_recent(path)
 
         self.btn_build.setEnabled(True)
         self.btn_validate.setEnabled(True)
@@ -447,6 +477,8 @@ class PlantBuilderPanel:
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self._set_status("Build completed successfully", success=True)
+            from gui.recent_files import push_recent
+            push_recent(self.selected_path)
 
         except Exception as exc:
             self.progress.setRange(0, 1)
