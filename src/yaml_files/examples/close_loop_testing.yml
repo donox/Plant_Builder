@@ -13,7 +13,6 @@ global_settings:
   relocate_segments: true
   workflow_mode: first_pass
   print_cuts: true
-  print_place: true
   show_lcs: true
   temp_file: "temp_construction.dat"
 
@@ -21,7 +20,6 @@ global_settings:
 output_files:
   working_directory: "/home/don/Documents/Temp/FreeCAD/"
   cuts_file: "cutting_list.txt"
-  place_file: "placement_list.txt"
   trace_file: "build_trace.log"
 
 # Workflow definition - operations executed in order

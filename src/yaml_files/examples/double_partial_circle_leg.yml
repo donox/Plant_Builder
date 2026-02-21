@@ -36,7 +36,7 @@ workflow:
 - operation: build_segment
   segment_type: curve_follower
   name: base
-  description: Vertical base columnr
+  description: Vertical base column
   curve_spec:
     type: spiral
     parameters:

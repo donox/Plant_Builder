@@ -28,7 +28,6 @@ _NEW_CONFIG_TEMPLATE = {
         "project_name": "New Project",
         "out_dir": "",
         "cuts_file": "cutting_list.txt",
-        "place_file": "placement_list.txt",
         "trace_file": "build_trace.log",
     },
     "metadata": {
@@ -37,7 +36,6 @@ _NEW_CONFIG_TEMPLATE = {
     "output_files": {
         "working_directory": "${out_dir}",
         "cuts_file": "${cuts_file}",
-        "place_file": "${place_file}",
         "trace_file": "${trace_file}",
     },
     "workflow": [

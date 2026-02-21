@@ -4,7 +4,6 @@ include:
 params:
   out_dir: /home/don/Documents/Temp/FreeCAD/
   cuts_file: cutting_list_coffee_table.txt
-  place_file: placement_list_coffee_table.txt
   trace_file: build_trace.log
 
   project_name: Legs for a Glass Top Coffee Table
@@ -24,13 +23,9 @@ metadata:
   created: ${created}
   description: ${description}
 
-global_settings:
-  print_place: false
-
 output_files:
   working_directory: ${out_dir}
   cuts_file: ${cuts_file}
-  place_file: ${place_file}
   trace_file: ${trace_file}
   show_lcs_in_cutlist: false
 

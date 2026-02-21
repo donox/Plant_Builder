@@ -3,7 +3,6 @@ include:
 params:
   out_dir: /home/don/Documents/Temp/FreeCAD/
   cuts_file: trefoil_cutting_list.txt
-  place_file: trefoil_placement_list.txt
   trace_file: build_trace.log
   project_name: Demonstrate Trefoil
   version: '1.0'
@@ -22,7 +21,6 @@ metadata:
 output_files:
   working_directory: ${out_dir}
   cuts_file: ${cuts_file}
-  place_file: ${place_file}
   trace_file: ${trace_file}
 workflow:
 - operation: remove_objects

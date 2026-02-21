@@ -107,9 +107,6 @@ class ProjectTab(QtWidgets.QWidget):
         self.txt_cuts_file = QtWidgets.QLineEdit()
         out_form.addRow("Cuts file:", self.txt_cuts_file)
 
-        self.txt_place_file = QtWidgets.QLineEdit()
-        out_form.addRow("Place file:", self.txt_place_file)
-
         self.txt_trace_file = QtWidgets.QLineEdit()
         out_form.addRow("Trace file:", self.txt_trace_file)
 
@@ -185,7 +182,6 @@ class ProjectTab(QtWidgets.QWidget):
         self._raw_output_files = raw_of
         self.txt_working_dir.setText(str(res_of.get("working_directory", "")))
         self.txt_cuts_file.setText(str(res_of.get("cuts_file", "")))
-        self.txt_place_file.setText(str(res_of.get("place_file", "")))
         self.txt_trace_file.setText(str(res_of.get("trace_file", "")))
 
     def collect(self) -> Dict[str, Any]:
@@ -235,7 +231,6 @@ class ProjectTab(QtWidgets.QWidget):
             {
                 "working_directory": self.txt_working_dir.text(),
                 "cuts_file": self.txt_cuts_file.text(),
-                "place_file": self.txt_place_file.text(),
                 "trace_file": self.txt_trace_file.text(),
             },
             params,

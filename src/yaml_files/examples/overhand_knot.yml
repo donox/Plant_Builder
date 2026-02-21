@@ -13,7 +13,6 @@ params:
   # Output location + filenames
   out_dir: "/home/don/Documents/Temp/FreeCAD/"
   cuts_file: "cutting_list_overhand_knot.txt"
-  place_file: "placement_list_overhand_knot.txt"
   trace_file: "build_trace.log"
 
   # Common geometry parameters
@@ -38,7 +37,6 @@ metadata:
 output_files:
   working_directory: "${out_dir}"
   cuts_file: "${cuts_file}"
-  place_file: "${place_file}"
   trace_file: "${trace_file}"
 
 workflow:

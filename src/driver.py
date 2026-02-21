@@ -1131,8 +1131,3 @@ class Driver:
             return f'{whole} {num}/{den}"'
         return f'{num}/{den}"'
 
-    def _format_placement(self, placement):
-        pos = placement.Base
-        rot = placement.Rotation
-        angles = rot.toEuler()
-        return f"Pos=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f}), Rot=({angles[0]:.1f},{angles[1]:.1f},{angles[2]:.1f})"

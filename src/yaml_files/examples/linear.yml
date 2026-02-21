@@ -10,7 +10,6 @@ params:
 
   out_dir: "${ENV:HOME}/Documents/Temp/FreeCAD"
   cuts_file: "cutting_list_linear.txt"
-  place_file: "placement_list_linear.txt"
   trace_file: "build_trace.log"
 
   cylinder_diameter: 1.75
@@ -28,7 +27,6 @@ metadata:
 output_files:
   working_directory: "${out_dir}"
   cuts_file: "${cuts_file}"
-  place_file: "${place_file}"
   trace_file: "${trace_file}"
 
 workflow:

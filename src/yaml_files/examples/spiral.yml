@@ -7,7 +7,6 @@ params:
 
   out_dir: /home/don/Documents/Temp/FreeCAD/
   cuts_file: spiral_cutting_list.txt
-  place_file: spiral_placement_list.txt
   trace_file: build_trace.log
 
 metadata:

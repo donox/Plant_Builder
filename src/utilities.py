@@ -6,16 +6,6 @@ from core.logging_setup import get_logger
 logger = get_logger(__name__)
 
 
-def print_placement(plc):
-    """Print a placement as a numpy array."""
-    ary = np.array(plc.Matrix.A)  # one dimensional numpy array
-    res = ""
-    for i in range(4):
-        for j in range(4):
-            res += f"\t{np.round(ary[i*4+j], 3):>6.3f}"
-        res += "\n"
-    return res
-
 
 def squared_distance(place1, place2):
     """Return square of distance between two Placements"""
