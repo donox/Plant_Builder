@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="8" fill="#e8f5e9"/>
+  <!-- Stem -->
+  <line x1="32" y1="56" x2="32" y2="18" stroke="#2e7d32" stroke-width="4" stroke-linecap="round"/>
+  <!-- Left branch -->
+  <line x1="32" y1="40" x2="18" y2="30" stroke="#2e7d32" stroke-width="3" stroke-linecap="round"/>
+  <!-- Right branch -->
+  <line x1="32" y1="30" x2="46" y2="20" stroke="#2e7d32" stroke-width="3" stroke-linecap="round"/>
+  <!-- Left leaf -->
+  <ellipse cx="13" cy="27" rx="9" ry="5.5" fill="#43a047" transform="rotate(-35 13 27)"/>
+  <!-- Right leaf -->
+  <ellipse cx="50" cy="17" rx="9" ry="5.5" fill="#66bb6a" transform="rotate(-35 50 17)"/>
+  <!-- Top leaf -->
+  <ellipse cx="32" cy="11" rx="7" ry="10" fill="#4caf50"/>
+</svg>
