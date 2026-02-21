@@ -30,6 +30,7 @@ class PlantBuilderPanel:
         self.form.setWindowTitle("PlantBuilder")
         self.selected_path: str | None = None
         self._log_handler = None
+        self._apply_saved_log_level()
         self._build_ui()
         self._populate_dropdown()
         self._install_log_handler()
@@ -42,7 +43,16 @@ class PlantBuilderPanel:
         layout = QtWidgets.QVBoxLayout(self.form)
 
         # --- Project File section ---
-        layout.addWidget(self._make_heading("Project File"))
+        pf_header = QtWidgets.QHBoxLayout()
+        pf_header.addWidget(self._make_heading("Project File"))
+        pf_header.addStretch()
+        btn_prefs = QtWidgets.QPushButton("\u2699")
+        btn_prefs.setFixedSize(26, 26)
+        btn_prefs.setFlat(True)
+        btn_prefs.setToolTip("Preferences")
+        btn_prefs.clicked.connect(self._open_preferences)
+        pf_header.addWidget(btn_prefs)
+        layout.addLayout(pf_header)
 
         file_row = QtWidgets.QHBoxLayout()
         self.combo = QtWidgets.QComboBox()
@@ -225,13 +235,48 @@ class PlantBuilderPanel:
                 self.combo.addItem(os.path.basename(path), path)
             self.combo.insertSeparator(self.combo.count())
 
-        yml_files = sorted(glob.glob(os.path.join(_EXAMPLES_DIR, "*.yml")))
+        yml_files = sorted(glob.glob(os.path.join(self._get_examples_dir(), "*.yml")))
         for path in yml_files:
             self.combo.addItem(os.path.basename(path), path)
 
         self.combo.blockSignals(False)
         self.combo.setCurrentIndex(0)
         self._clear_summary()
+
+    # ------------------------------------------------------------------
+    # Preferences
+    # ------------------------------------------------------------------
+
+    def _apply_saved_log_level(self):
+        try:
+            from gui.preferences_dialog import load_prefs, apply_log_level
+            apply_log_level(load_prefs().get("log_level", "INFO"))
+        except Exception:
+            pass
+
+    def _get_examples_dir(self) -> str:
+        try:
+            from gui.preferences_dialog import load_prefs
+            d = load_prefs().get("examples_dir", "").strip()
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        return _EXAMPLES_DIR
+
+    def _open_preferences(self):
+        from gui.preferences_dialog import PreferencesDialog
+        dlg = PreferencesDialog(parent=self.form)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            # Refresh dropdown in case examples directory changed
+            current = self.selected_path
+            self._populate_dropdown()
+            if current:
+                idx = self.combo.findData(current)
+                if idx != -1:
+                    self.combo.blockSignals(True)
+                    self.combo.setCurrentIndex(idx)
+                    self.combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Selection change
