@@ -108,6 +108,7 @@ class WaferSettingsForm(QtWidgets.QGroupBox):
         form = QtWidgets.QFormLayout(self)
         self._widgets: Dict[str, QtWidgets.QWidget] = {}
         self._param_refs: Dict[str, str] = {}
+        self._resolved_values: Dict[str, Any] = {}
         self._raw_data: dict = {}
 
         for name, typ, default, label in self._FIELDS:
@@ -131,12 +132,14 @@ class WaferSettingsForm(QtWidgets.QGroupBox):
     def populate(self, raw: dict, resolved: dict):
         self._raw_data = dict(raw)
         self._param_refs.clear()
+        self._resolved_values.clear()
         for name, typ, default, _label in self._FIELDS:
             raw_val = raw.get(name)
             res_val = resolved.get(name, default)
             ref = _is_param_ref(raw_val)
             if ref:
                 self._param_refs[name] = ref
+                self._resolved_values[name] = res_val
                 val = res_val
             else:
                 val = raw_val if raw_val is not None else res_val
@@ -155,7 +158,16 @@ class WaferSettingsForm(QtWidgets.QGroupBox):
             val = w.value()
             ref = self._param_refs.get(name)
             if ref is not None:
-                out[name] = "${" + ref + "}"
+                resolved_num = self._resolved_values.get(name)
+                same = resolved_num is not None and val == type(val)(resolved_num)
+                if same:
+                    out[name] = "${" + ref + "}"
+                elif name == "max_wafer_count":
+                    out[name] = int(val)
+                elif typ is float:
+                    out[name] = float(val)
+                else:
+                    out[name] = int(val)
             elif name == "max_wafer_count":
                 if val > 0:
                     out[name] = int(val)
@@ -217,6 +229,7 @@ class CurveParameterForm(QtWidgets.QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._widgets: Dict[str, QtWidgets.QWidget] = {}
         self._param_refs: Dict[str, str] = {}
+        self._resolved_values: Dict[str, Any] = {}
         self._curve_type: str = ""
 
     def rebuild(self, curve_type: str, raw_params: dict = None, resolved_params: dict = None):
@@ -224,6 +237,7 @@ class CurveParameterForm(QtWidgets.QWidget):
         self._clear()
         self._curve_type = curve_type
         self._param_refs.clear()
+        self._resolved_values.clear()
         raw_params = raw_params or {}
         resolved_params = resolved_params or {}
 
@@ -234,6 +248,7 @@ class CurveParameterForm(QtWidgets.QWidget):
             ref = _is_param_ref(raw_val)
             if ref:
                 self._param_refs[name] = ref
+                self._resolved_values[name] = res_val
                 val = res_val
             else:
                 val = raw_val if raw_val is not None else res_val
@@ -251,7 +266,23 @@ class CurveParameterForm(QtWidgets.QWidget):
                 continue
             ref = self._param_refs.get(name)
             if ref is not None:
-                out[name] = "${" + ref + "}"
+                resolved_val = self._resolved_values.get(name)
+                if isinstance(typ_or_choices, list):
+                    same = w.currentText() == str(resolved_val)
+                elif typ_or_choices is bool:
+                    same = w.isChecked() == bool(resolved_val)
+                elif typ_or_choices is int:
+                    same = resolved_val is not None and w.value() == int(resolved_val)
+                else:
+                    same = resolved_val is not None and w.value() == float(resolved_val)
+                if same:
+                    out[name] = "${" + ref + "}"
+                elif isinstance(typ_or_choices, list):
+                    out[name] = w.currentText()
+                elif typ_or_choices is bool:
+                    out[name] = w.isChecked()
+                else:
+                    out[name] = w.value()
             elif isinstance(typ_or_choices, list):
                 out[name] = w.currentText()
             elif typ_or_choices is bool:
@@ -295,6 +326,94 @@ class CurveParameterForm(QtWidgets.QWidget):
         w.setRange(-99999.0, 99999.0)
         w.setValue(float(value))
         return w
+
+
+# =========================================================================
+# Curve segment (start/end fraction) form
+# =========================================================================
+
+class CurveSegmentForm(QtWidgets.QGroupBox):
+    """Optional start/end fraction selector — sits inside the Curve group.
+
+    The group box is checkable; when unchecked the segment key is omitted
+    entirely from the collected curve_spec.  Handles ${param} references
+    the same way WaferSettingsForm does.
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget = None):
+        super().__init__("Segment selection (optional)", parent)
+        self.setCheckable(True)
+        self.setChecked(False)
+        self._param_refs: Dict[str, str] = {}
+        self._resolved_values: Dict[str, float] = {}
+        self._raw_segment: dict = {}
+
+        form = QtWidgets.QFormLayout(self)
+
+        self.spin_start = QtWidgets.QDoubleSpinBox()
+        self.spin_start.setRange(0.0, 1.0)
+        self.spin_start.setDecimals(3)
+        self.spin_start.setSingleStep(0.05)
+        self.spin_start.setValue(0.0)
+        form.addRow("Start fraction:", self.spin_start)
+
+        self.spin_end = QtWidgets.QDoubleSpinBox()
+        self.spin_end.setRange(0.0, 1.0)
+        self.spin_end.setDecimals(3)
+        self.spin_end.setSingleStep(0.05)
+        self.spin_end.setValue(1.0)
+        form.addRow("End fraction:", self.spin_end)
+
+    def populate(self, raw_segment: Optional[dict],
+                 resolved_segment: Optional[dict] = None):
+        self._param_refs.clear()
+        self._resolved_values.clear()
+        self._raw_segment = {}
+        if not raw_segment:
+            self.setChecked(False)
+            self.spin_start.setValue(0.0)
+            self.spin_end.setValue(1.0)
+            return
+
+        self.setChecked(True)
+        self._raw_segment = dict(raw_segment)
+        resolved_segment = resolved_segment or raw_segment
+
+        for field, spin, default in (
+            ("start_fraction", self.spin_start, 0.0),
+            ("end_fraction",   self.spin_end,   1.0),
+        ):
+            raw_val = raw_segment.get(field)
+            ref = _is_param_ref(raw_val)
+            if ref:
+                self._param_refs[field] = ref
+                res_val = (resolved_segment or {}).get(field, default)
+                try:
+                    val = float(res_val)
+                except (TypeError, ValueError):
+                    val = default
+                self._resolved_values[field] = val
+            else:
+                val = float(raw_val) if raw_val is not None else default
+            spin.setValue(val)
+
+    def collect(self) -> Optional[dict]:
+        """Returns the segment dict when enabled, None when disabled."""
+        if not self.isChecked():
+            return None
+        out = dict(self._raw_segment)  # preserve unknown keys
+        for field, spin in (("start_fraction", self.spin_start),
+                            ("end_fraction",   self.spin_end)):
+            ref = self._param_refs.get(field)
+            if ref is not None:
+                resolved_num = self._resolved_values.get(field)
+                if resolved_num is not None and spin.value() == resolved_num:
+                    out[field] = "${" + ref + "}"
+                else:
+                    out[field] = spin.value()
+            else:
+                out[field] = spin.value()
+        return out
 
 
 # =========================================================================
@@ -481,6 +600,9 @@ class BuildSegmentEditor(QtWidgets.QWidget):
         self.curve_params_form = CurveParameterForm()
         curve_lay.addWidget(self.curve_params_form)
 
+        self.curve_segment_form = CurveSegmentForm()
+        curve_lay.addWidget(self.curve_segment_form)
+
         lay.addWidget(self.curve_grp)
 
         self.cmb_curve_type.currentTextChanged.connect(self._on_curve_type_changed)
@@ -507,6 +629,7 @@ class BuildSegmentEditor(QtWidgets.QWidget):
 
     def _on_curve_type_changed(self, curve_type: str):
         self.curve_params_form.rebuild(curve_type)
+        self.curve_segment_form.populate(None)  # reset to unchecked on type change
 
     def populate(self, raw: dict, resolved: dict = None):
         resolved = resolved or raw
@@ -541,6 +664,8 @@ class BuildSegmentEditor(QtWidgets.QWidget):
         res_params = res_cs.get("parameters", {}) or {}
         self.curve_params_form.rebuild(curve_type, raw_params, res_params)
 
+        self.curve_segment_form.populate(raw_cs.get("segment"), res_cs.get("segment"))
+
         # Wafer settings
         self.wafer_form.populate(
             raw.get("wafer_settings", {}) or {},
@@ -565,6 +690,11 @@ class BuildSegmentEditor(QtWidgets.QWidget):
         raw_cs = dict(self._raw_op.get("curve_spec", {}) or {})
         raw_cs["type"] = curve_type
         raw_cs["parameters"] = self.curve_params_form.collect()
+        segment = self.curve_segment_form.collect()
+        if segment is not None:
+            raw_cs["segment"] = segment
+        else:
+            raw_cs.pop("segment", None)
         out["curve_spec"] = raw_cs
 
         out["wafer_settings"] = self.wafer_form.collect()
