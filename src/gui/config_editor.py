@@ -17,7 +17,7 @@ from gui.workflow_tab import WorkflowTab
 
 
 # Directory containing packaged base YAML files
-_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 _YAML_BASE_DIR = os.path.join(_SRC_DIR, "yaml_files", "base")
 _EXAMPLES_DIR = os.path.join(_SRC_DIR, "yaml_files", "examples")
 
@@ -119,8 +119,8 @@ class ConfigEditorDialog(QtWidgets.QDialog):
         """Load an existing config file and populate both tabs."""
         from config.loader import load_config, _read_yaml
 
-        self._config_path = path
-        self.lbl_path.setText(path)
+        self._config_path = os.path.realpath(path)
+        self.lbl_path.setText(self._config_path)
 
         try:
             # 1) Read raw YAML (unresolved, preserves ${param} refs)
@@ -224,9 +224,9 @@ class ConfigEditorDialog(QtWidgets.QDialog):
         if not (path.endswith(".yml") or path.endswith(".yaml")):
             path += ".yml"
 
-        self._config_path = path
-        self.lbl_path.setText(path)
-        self._write_yaml(path)
+        self._config_path = os.path.realpath(path)
+        self.lbl_path.setText(self._config_path)
+        self._write_yaml(self._config_path)
 
     def _write_yaml(self, path: str):
         config = self._collect_config()

@@ -17,7 +17,7 @@ from core.logging_setup import get_logger
 logger = get_logger(__name__)
 
 # Directories relative to this file
-_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 _EXAMPLES_DIR = os.path.join(_SRC_DIR, "yaml_files", "examples")
 _YAML_BASE_DIR = os.path.join(_SRC_DIR, "yaml_files", "base")
 
@@ -337,7 +337,7 @@ class PlantBuilderPanel:
     # ------------------------------------------------------------------
 
     def _load_summary(self, path: str):
-        self.selected_path = path
+        self.selected_path = os.path.realpath(path)
         try:
             loaded = load_config(path, yaml_base_dir=_YAML_BASE_DIR)
             cfg = loaded.data
