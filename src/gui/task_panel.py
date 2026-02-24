@@ -30,6 +30,7 @@ class PlantBuilderPanel:
         self.form.setWindowTitle("PlantBuilder")
         self.selected_path: str | None = None
         self._log_handler = None
+        self._last_cuts_file = None
         self._apply_saved_log_level()
         self._build_ui()
         self._populate_dropdown()
@@ -133,6 +134,17 @@ class PlantBuilderPanel:
         action_row.addWidget(self.btn_new_config)
 
         layout.addLayout(action_row)
+
+        # --- Build from Cut List ---
+        rebuild_row = QtWidgets.QHBoxLayout()
+        self.btn_rebuild = QtWidgets.QPushButton("Build from Cut List")
+        self.btn_rebuild.setMinimumHeight(32)
+        self.btn_rebuild.setToolTip(
+            "Reconstruct 3D structure from an existing cut list .txt file"
+        )
+        self.btn_rebuild.clicked.connect(self._on_rebuild_from_cut_list)
+        rebuild_row.addWidget(self.btn_rebuild)
+        layout.addLayout(rebuild_row)
 
         # --- Status section ---
         layout.addWidget(self._make_heading("Status"))
@@ -519,6 +531,14 @@ class PlantBuilderPanel:
             driver.load_configuration(self.selected_path)
             driver.workflow()
 
+            # Track the generated cuts file so "Build from Cut List" defaults to it
+            cuts_file = driver.output_files.get("cuts_file")
+            if cuts_file:
+                if not os.path.isabs(cuts_file):
+                    base_dir = driver.output_files.get("working_directory", "")
+                    cuts_file = os.path.join(base_dir, cuts_file)
+                self._last_cuts_file = cuts_file
+
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self._set_status("Build completed successfully", success=True)
@@ -536,6 +556,50 @@ class PlantBuilderPanel:
             self.btn_build.setEnabled(True)
             self.combo.setEnabled(True)
             self.btn_browse.setEnabled(True)
+
+    # ------------------------------------------------------------------
+    # Build from Cut List
+    # ------------------------------------------------------------------
+
+    def _on_rebuild_from_cut_list(self):
+        """Open a file dialog and reconstruct 3D geometry from a cut list."""
+        start_dir = (
+            os.path.dirname(self._last_cuts_file) if self._last_cuts_file
+            else os.path.expanduser("~/Documents")
+        )
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self.form,
+            "Select Cut List",
+            start_dir,
+            "Cut Lists (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+
+        import FreeCAD as App
+        import FreeCADGui as Gui
+
+        self._set_status("Reconstructing\u2026")
+        self.progress.show()
+        self.progress.setRange(0, 0)
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            from cut_list_reconstruction import reconstruct_and_visualize
+            reconstruct_and_visualize(App, Gui, path)
+            self.progress.setRange(0, 1)
+            self.progress.setValue(1)
+            self._set_status(
+                f"Reconstruction complete: {os.path.basename(path)}",
+                success=True,
+            )
+        except Exception as exc:
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
+            self._set_status(f"Reconstruction failed: {exc}", error=True)
+            QtWidgets.QMessageBox.critical(
+                self.form, "Reconstruction Error", str(exc)
+            )
 
     # ------------------------------------------------------------------
     # Log panel helpers

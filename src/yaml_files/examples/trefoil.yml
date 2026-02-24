@@ -50,8 +50,10 @@ workflow:
     max_chord: ${max_chord}
     min_inner_chord: ${min_inner_chord}
     profile_density: ${profile_density}
+    max_wafer_count: 50
+    max_wafers: 2
   segment_settings:
-    show_lcs: false
+    show_lcs: true
     build_segment: true
     rotate_segment: 0.0
     add_curve_vertices: false

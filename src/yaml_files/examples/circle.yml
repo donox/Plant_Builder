@@ -13,7 +13,7 @@ params:
   knot_scale: 1.5
   knot_points: 100
   knot_increment: 1.0
-  knot_start_fraction
+  knot_start_fraction: 0.0
   knot_end_fraction: 1.0
   wafer_min_height: 0.5
   wafer_max_chord: 0.2
