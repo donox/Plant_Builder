@@ -301,7 +301,13 @@ class LoftWaferGenerator:
 
     def calculate_cutting_planes(self):
         """
-        Create cutting planes perpendicular to spine at each sample point
+        Create cutting planes at each sample point using Convention B:
+        chord-bisector normals for interior junctions.
+
+        Interior cutting planes use the bisector of the two adjacent chord
+        directions so that both neighbouring wafers see a symmetric (equal
+        blade-angle) interface.  The first and last planes still use the spine
+        tangent because there is only one adjacent chord at the end-caps.
 
         Returns:
             List of cutting plane data dictionaries
@@ -309,11 +315,38 @@ class LoftWaferGenerator:
 
         self.cutting_planes = []
 
-        for sample in self.sample_points:
+        pts    = [s['point']    for s in self.sample_points]
+        params = [s['parameter'] for s in self.sample_points]
+        n      = len(pts)
+
+        # First plane: no prior chord, fall back to spine tangent
+        self.cutting_planes.append({
+            'point':     pts[0],
+            'normal':    self.sample_points[0]['tangent'],
+            'parameter': params[0]
+        })
+
+        for i in range(1, n - 1):
+            d_prev = App.Vector(pts[i] - pts[i - 1])
+            d_prev.normalize()
+            d_next = App.Vector(pts[i + 1] - pts[i])
+            d_next.normalize()
+            bisector = d_prev + d_next
+            if bisector.Length < 1e-9:
+                bisector = App.Vector(d_prev)   # 180° turn: use incoming chord
+            bisector.normalize()
             self.cutting_planes.append({
-                'point': sample['point'],
-                'normal': sample['tangent'],
-                'parameter': sample['parameter']
+                'point':     pts[i],
+                'normal':    bisector,
+                'parameter': params[i]
+            })
+
+        # Last plane: no following chord, fall back to spine tangent
+        if n > 1:
+            self.cutting_planes.append({
+                'point':     pts[-1],
+                'normal':    self.sample_points[-1]['tangent'],
+                'parameter': params[-1]
             })
 
         logger.info(f"{len(self.cutting_planes)} cutting planes created")

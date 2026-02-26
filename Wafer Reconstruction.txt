@@ -1,0 +1,247 @@
+================================================================================
+WAFER RECONSTRUCTION SPECIFICATION
+================================================================================
+
+OVERVIEW
+--------
+A structure is built by assembling a sequence of cylinder sections called
+wafers.  Each wafer is cut from a cylinder by two oblique plane cuts that
+form its entry and exit faces.  Wafers are constructed independently from
+the cut list and then assembled by aligning the mating elliptical faces
+using reference marks.
+
+No global coordinate system is required.  The shape of the assembled
+structure emerges entirely from the geometry of the individual wafers and
+the mark-alignment assembly rule.
+
+
+TERMINOLOGY
+-----------
+Cylinder axis   The axis of the cylinder from which a wafer is sawed.
+                In each wafer's local frame, this is the Z direction,
+                pointing from entry face (Z = 0) to exit face (Z = L).
+
+Blade angle (θ) The tilt of the cutting plane from perpendicular to the
+                cylinder axis, in degrees.  θ = 0° produces a flat circle;
+                larger θ produces a more elongated ellipse.
+
+Major-axis       The direction in the cylinder cross-section plane (XY)
+direction (M)   oriented so that the +M endpoint of the major axis is the
+                MARKED (outward-protruding) endpoint on each face.  On the
+                entry face the +M endpoint protrudes toward the entry side
+                (Z < 0); on the exit face the +M' endpoint protrudes toward
+                the exit side (Z > L).  Thus M points AWAY from Z = 0 on
+                the exit face, not toward it.  All measurements of Rot° are
+                rotations about Z within this cross-section plane.
+
+Mark            A physical reference point on the major axis of each
+                elliptical face, used to establish assembly alignment.
+                Defined precisely in the ELLIPSE GEOMETRY section.
+
+
+CUT LIST STRUCTURE
+------------------
+Each row in the cut list defines a single cut (one saw pass through the
+cylinder).  One cut simultaneously creates:
+
+    - the EXIT face of wafer i
+    - the ENTRY face of wafer i + 1
+
+Each row contains these columns used for reconstruction:
+
+    Length   The distance along the cylinder axis from the preceding cut
+             to this cut.  This is the nominal length of the wafer whose
+             exit face this cut defines (center-to-center along Z).
+             Note: the physical cutting jig contacts the highest point of
+             the preceding ellipse, not its center, so the jig reading
+             differs from this center-to-center value by R·tan(θ_prev).
+             The original build must account for this offset; for
+             reconstruction purposes the center-to-center definition is
+             correct.
+
+    Blade°   The blade angle θ of this cut.  Blade° is always ≥ 0.  At
+             S-curve inflection points where the tilt direction reverses,
+             the reversal is encoded in Rot° as an offset of approximately
+             180° rather than by a sign change in Blade°.  This is
+             equivalent to what the Cylinder° "180° offset" convention
+             handles during physical sawing.
+
+    Rot°     The rotation of the exit major-axis direction relative to the
+             entry major-axis direction within this wafer, measured in
+             degrees around the cylinder axis (Z).
+
+The Cylinder° column is a physical sawing guide and is NOT used for
+reconstruction.
+
+Open curve:  An implicit row 0 with Blade° = 0 exists, defining the entry
+             face of the first wafer as a flat circle.
+
+Closed curve: The cut list wraps around.  Row N defines the exit face of
+              wafer N and also the entry face of wafer 1.
+
+
+ELLIPSE GEOMETRY
+----------------
+A cut with blade angle θ through a cylinder of radius R produces an
+ellipse with:
+
+    Minor semi-axis:  R
+                      in the direction perpendicular to M within the cut
+                      plane (call this direction N_minor = Z × M)
+
+    Major semi-axis:  R / cos(θ)
+                      in the direction M within the cut plane
+
+M is defined such that the +M endpoint of the major axis is the MARKED
+endpoint on both faces:
+
+    Entry face:
+        The +M endpoint of the major axis lies at Z < 0, on the side
+        closer to the beginning (entry end) of the cylinder.
+        MARK this endpoint.
+
+    Exit face:
+        The +M (or +M') endpoint of the major axis lies at Z > L, on the
+        side farther from the beginning of the cylinder.
+        MARK this endpoint.
+
+The entry and exit faces tilt AWAY from each other: the marked (+M)
+endpoint of the entry face extends toward −Z while the marked (+M')
+endpoint of the exit face extends toward +Z.  The wafer is thicker on the
+marked side and thinner on the opposite side.
+
+Concretely, in the local (M, Z) cross-section plane:
+
+    Entry face at Z = 0:   z(x) = −x · tan(θ_entry)
+    Exit face  at Z = L:   z(x) = L + x · tan(θ_exit)
+
+where x is the coordinate along M (or M').  The "negative blade angle"
+description for the exit face means the exit tilt is in the opposite Z
+direction from the entry tilt: both send the +M endpoint outward from
+the wafer (entry toward −Z, exit toward +Z).
+
+
+LINEAR SEGMENTS
+---------------
+A structure may contain straight (linear) sections as well as curved
+ones.  The boundary between a curved segment and a linear segment, or
+between two linear segments, is treated as the end of an open curve:
+the joining face is a flat circle (Blade° = 0) and no Rot° is required.
+Within a linear segment all wafers are straight prisms (Blade° = 0 on
+both faces, Rot° = 0).
+
+
+CONSTRUCTING A SINGLE WAFER
+----------------------------
+Wafer i is defined by row i−1 (entry) and row i (exit).
+
+Given:
+    θ_entry = Blade° from row i−1
+    θ_exit  = Blade° from row i
+    L       = Length from row i
+    Rot     = Rot° from row i
+    R       = cylinder radius (from the cut list header)
+
+Step 1 — Local frame
+    Set the cylinder axis to Z, with Z = 0 at the entry face center and
+    Z = L at the exit face center.  Choose an arbitrary initial major-axis
+    direction M in the XY plane.
+
+Step 2 — Entry ellipse (at Z = 0)
+    The cutting plane dips toward the entry side (−Z) as you move in the
+    +M direction (z = −x·tan(θ_entry) in the M–Z cross-section).
+    Outward normal pointing toward the entry side (approximately −Z):
+
+        n_entry = −cos(θ_entry)·Z − sin(θ_entry)·M
+
+    θ specifies the magnitude of the tilt; M specifies its direction in
+    the XY plane.  Both are required to fully define the plane orientation.
+
+    Minor semi-axis = R  (in direction Z × M, normalised)
+    Major semi-axis = R / cos(θ_entry)  (in direction M)
+    Mark: the +M endpoint of the major axis (at lower Z, toward entry).
+
+Step 3 — Exit ellipse (at Z = L)
+    Exit major-axis direction:  M' = M rotated by Rot° around Z.
+    The cutting plane rises toward the exit side (+Z) as you move in
+    the +M' direction (z = L + x·tan(θ_exit) in the M'–Z cross-section).
+    Outward normal pointing toward the exit side (approximately +Z):
+
+        n_exit = cos(θ_exit)·Z − sin(θ_exit)·M'
+
+    Minor semi-axis = R  (in direction Z × M', normalised)
+    Major semi-axis = R / cos(θ_exit)  (in direction M')
+    Mark: the +M' endpoint of the major axis (at higher Z, toward exit).
+
+Step 4 — Solid
+    The wafer is a portion of a STRAIGHT cylinder (axis along Z, radius
+    R) bounded by the two oblique cutting planes.  Construct it by
+    creating a cylinder long enough to extend beyond both cutting planes
+    and intersecting it with the two half-spaces defined by n_entry and
+    n_exit.  Do NOT use a loft between the two ellipses: a loft produces
+    a curved or tapered solid, not the correct straight-walled cylinder
+    section.
+
+
+FIRST AND LAST WAFERS
+---------------------
+Open curve — first wafer (wafer 1):
+    Entry face:  flat circle, radius R, no tilt (θ = 0).
+                 No mark is needed; the entry circle imposes no rotational
+                 constraint.
+    Exit face:   constructed from row 1 as described above.
+    M:           arbitrary (the starting major-axis direction is a free
+                 parameter; it determines the global orientation of the
+                 entire assembled structure).
+
+Open curve — last wafer (wafer N):
+    Entry face:  constructed from row N−1 as described above.
+    Exit face:   flat circle, radius R, no tilt (θ = 0).
+
+Closed curve:
+    All wafers are constructed identically using the wraparound:
+        Wafer 1  — entry from row N, exit from row 1.
+        Wafer i  — entry from row i−1, exit from row i.
+        Wafer N  — entry from row N−1, exit from row N.
+    There is no implicit row 0 and no special first or last case.
+
+
+ASSEMBLY
+--------
+The mating faces of adjacent wafers (exit of wafer i and entry of wafer
+i+1) are always congruent ellipses: they share the same blade angle θ_i,
+the same cylinder radius R, and therefore the same dimensions.
+
+To join wafer i+1 to wafer i:
+
+    1. Face alignment
+       Orient wafer i+1 so that its entry face points toward the exit
+       face of wafer i (flip if necessary).
+
+    2. Center alignment
+       Translate wafer i+1 until the center of its entry ellipse
+       coincides with the center of the exit ellipse of wafer i.
+
+    3. Mark alignment
+       Rotate wafer i+1 about the shared face normal (perpendicular to
+       the mating ellipses) until the mark on its entry ellipse coincides
+       with the mark on the exit ellipse of wafer i.
+
+Steps 2 and 3 together uniquely determine the position and orientation of
+each wafer relative to its neighbour.  The marks encode the major-axis
+direction of cut i on both mating faces; aligning them ensures that the
+accumulated Rot° rotations reproduce the intended 3D shape.
+
+
+NOTES
+-----
+Cylinder° column:
+    Not used for reconstruction.  It is a physical sawing aid that
+    encodes the absolute workpiece orientation on the saw table, including
+    a 180° flip convention for alternating wafers.  The mark-alignment
+    assembly rule above implicitly handles what Cylinder° addresses during
+    sawing.
+
+Initial offset (cut list header):
+    Not used for reconstruction.  It is part of the Cylinder° sawing
+    guidance system.
