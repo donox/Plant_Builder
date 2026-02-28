@@ -88,6 +88,9 @@ def parse_cut_list(filepath: str) -> list:
                 'name': seg_name,
                 'cylinder_diameter': 2.0,
                 'initial_offset': 0.0,
+                'curve_type': '',
+                'closed': True,          # default: closed curve
+                'initial_blade_deg': None,  # entry blade of wafer 0 (closed only)
                 'rows': [],
             }
             in_wafer_settings = False
@@ -95,6 +98,34 @@ def parse_cut_list(filepath: str) -> list:
             continue
 
         if current_seg is None:
+            continue
+
+        # ── Curve type (heuristic open/closed from type name) ───────────
+        if stripped.startswith('Curve type:'):
+            ct = stripped.split(':', 1)[1].strip().lower()
+            current_seg['curve_type'] = ct
+            # Known explicitly-open curve types; everything else defaults closed.
+            # Overridden if 'Curve closed:' line is also present.
+            _OPEN_TYPES = {
+                'bezier', 'bspline', 'b_spline', 'sinusoidal', 'linear',
+                'line', 'open', 'open_curve', 'helical_arc',
+            }
+            current_seg['closed'] = ct not in _OPEN_TYPES
+            continue
+
+        # ── Curve closed (explicit, takes priority over type heuristic) ─
+        if stripped.startswith('Curve closed:'):
+            val = stripped.split(':', 1)[1].strip().lower()
+            current_seg['closed'] = val in ('true', 'yes', '1')
+            continue
+
+        # ── Initial blade (entry blade of wafer 0, closed curves only) ─
+        if stripped.startswith('Initial blade:'):
+            try:
+                val = stripped.split(':', 1)[1].strip().rstrip('°').strip()
+                current_seg['initial_blade_deg'] = float(val)
+            except (ValueError, IndexError):
+                pass
             continue
 
         # ── Wafer settings block ────────────────────────────────────────
@@ -192,8 +223,12 @@ def parse_cut_list(filepath: str) -> list:
 
     logger.info("Parsed %d segment(s) from %s", len(segments), filepath)
     for seg in segments:
-        logger.info("  Segment '%s': %d rows, diameter=%.3f",
-                    seg['name'], len(seg['rows']), seg['cylinder_diameter'])
+        ibd = seg.get('initial_blade_deg')
+        ibd_str = f"{ibd:.3f}°" if ibd is not None else "not set"
+        logger.info("  Segment '%s': %d rows, diameter=%.3f, curve_type='%s', "
+                    "closed=%s, initial_blade=%s",
+                    seg['name'], len(seg['rows']), seg['cylinder_diameter'],
+                    seg.get('curve_type', '?'), seg.get('closed', True), ibd_str)
 
     return segments
 
@@ -345,23 +380,47 @@ def reconstruct_segment(segment_data: dict, max_wafers=None) -> list:
     All plane1/plane2 positions and normals are stored in the reconstruction's
     local frame (origin at the first wafer entry center, initial direction +Z).
     """
-    radius = segment_data['cylinder_diameter'] / 2.0
-    rows   = segment_data['rows']
+    radius   = segment_data['cylinder_diameter'] / 2.0
+    all_rows = segment_data['rows']
+    closed   = segment_data.get('closed', True)
+
+    # ── Initial joint state ───────────────────────────────────────────────────
+    # Starting position: origin.  Initial M direction: +X (arbitrary; determines
+    # the global orientation of the entire assembled structure).
+    #
+    # For a CLOSED curve the entry of wafer 0 comes from the LAST row (wraparound).
+    # Placing wafer 0 at the identity (origin, no rotation) requires:
+    #   F_world  = (sin(te), 0, cos(te))        — T_entry direction for wafer 0
+    #   mk_exit  = (R, 0, −R·tan(te))           — entry mark position of wafer 0
+    # This generalises the open-curve case where te = 0.
+    #
+    # For an OPEN curve an implicit flat-circle cut (Blade° = 0) precedes wafer 0.
+    if closed and all_rows:
+        theta_entry_deg = segment_data.get('initial_blade_deg')
+        if theta_entry_deg is None:
+            theta_entry_deg = all_rows[-1]['blade_deg']
+            logger.warning("No 'Initial blade' in cut list; using last row blade (%.3f°) — may be inaccurate",
+                           theta_entry_deg)
+        else:
+            logger.info("Closed curve: theta_entry_0=%.3f° (from 'Initial blade' field)",
+                        theta_entry_deg)
+        te0     = math.radians(theta_entry_deg)
+        tan_e0  = math.tan(te0) if abs(te0) < math.radians(89.9) else 1e6
+        F_world = App.Vector(math.sin(te0), 0.0,  math.cos(te0))
+        mk_exit = App.Vector(radius,        0.0, -radius * tan_e0)
+    else:
+        theta_entry_deg = 0.0
+        F_world = App.Vector(0.0, 0.0, 1.0)
+        mk_exit = App.Vector(radius, 0.0, 0.0)
+        logger.info("Open curve: theta_entry_0=0° (implicit flat-circle entry)")
+
+    joint_pos = App.Vector(0.0, 0.0, 0.0)
+    wafers    = []
+
+    rows = all_rows
     if max_wafers is not None:
         rows = rows[:max_wafers]
         logger.info("reconstruct_segment: limiting to first %d wafer(s)", max_wafers)
-
-    wafers = []
-
-    # ── Initial joint state (implicit flat-circle cut 0 for open curve) ──────
-    # Starting position: origin.  Direction of travel: +Z.
-    # Initial M direction: +X (arbitrary; determines global orientation).
-    # Exit "mark" of the implicit cut 0 = origin + radius * M_dir = (R, 0, 0).
-    joint_pos   = App.Vector(0.0, 0.0, 0.0)
-    F_world     = App.Vector(0.0, 0.0, 1.0)   # outward exit normal of preceding cut
-    mk_exit     = App.Vector(radius, 0.0, 0.0) # preceding exit mark position
-
-    theta_entry_deg = 0.0   # blade angle of entry cut (0 = implicit flat circle)
 
     for i, row in enumerate(rows):
         theta_exit_deg = row['blade_deg']

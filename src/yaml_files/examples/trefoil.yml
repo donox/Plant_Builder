@@ -57,3 +57,4 @@ workflow:
     build_segment: true
     rotate_segment: 0.0
     add_curve_vertices: false
+    closed: true

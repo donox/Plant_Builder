@@ -990,14 +990,40 @@ class Driver:
 
         logger.info("Cylinder° initial_offset from +Z to first major axis: %.1f°", initial_offset)
 
+        # Compute initial blade for closed curves: angle between the inward entry
+        # normal of wafer 0 and its chord direction = theta_entry of cutting plane 0.
+        # This is the Convention B bisector angle at spine position 0 and is needed
+        # by the reconstructor as the entry blade of the first wafer.
+        closed = bool((getattr(segment, 'segment_settings', None) or {}).get('closed', True))
+        initial_blade_deg = None
+        if closed:
+            for wafer in segment.wafer_list:
+                if getattr(wafer, 'wafer', None) is None:
+                    continue
+                p1 = getattr(wafer, 'plane1', None)
+                p2 = getattr(wafer, 'plane2', None)
+                if p1 is not None and p2 is not None:
+                    chord = App.Vector(p2['point']) - App.Vector(p1['point'])
+                    if chord.Length > 1e-6:
+                        chord.normalize()
+                        T_entry = App.Vector(p1['normal'])
+                        cos_a = max(-1.0, min(1.0, T_entry.dot(chord)))
+                        initial_blade_deg = math.degrees(math.acos(cos_a))
+                break  # only need the first valid wafer
+
+        if initial_blade_deg is not None:
+            logger.info("Initial blade° (entry of wafer 0): %.3f°", initial_blade_deg)
+
         f.write("CUTTING INSTRUCTIONS:\n")
         f.write("  Blade° = Tilt saw blade from vertical\n")
         f.write("  Rot° = Incremental twist at this wafer\n")
         f.write("  Cylinder° = Absolute rotation from top (0°=12 o'clock, CW looking toward blade)\n")
         f.write(f"  Cylinder° initial offset: {initial_offset:.1f}°\n")
+        if closed and initial_blade_deg is not None:
+            f.write(f"  Initial blade: {initial_blade_deg:.3f}°\n")
         f.write("  Cumulative = Total cylinder length used (mark and cut)\n\n")
 
-        f.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<7} {'Rot°':<6} {'Cylinder°':<10} ")
+        f.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<8} {'Rot°':<9} {'Cylinder°':<10} ")
         f.write(f"{'Collin°':<10} {'Azimuth°':<10} {'Cumulative':<12} {'Done':<6}\n")
         f.write("-" * 90 + "\n")
 
@@ -1033,7 +1059,7 @@ class Driver:
             cumul_str = self._format_fractional_inches(cumulative_length)
 
             f.write(
-                f"{i + 1:<4} {length_str:<10} {blade_angle:<7.1f} {rotation:<6.0f} {cylinder_angle:<10.0f} "
+                f"{i + 1:<4} {length_str:<10} {blade_angle:<8.3f} {rotation:<9.3f} {cylinder_angle:<10.0f} "
                 f"{collinearity:<10.4f} {azimuth:<10.2f} {cumul_str:<12} {'[ ]':<6}\n"
             )
 
@@ -1048,7 +1074,9 @@ class Driver:
         curve_type = curve_spec.get("type", "unknown")
         curve_params = curve_spec.get("parameters", {})
 
+        closed = bool((getattr(segment, 'segment_settings', None) or {}).get('closed', True))
         f.write(f"Curve type: {curve_type}\n")
+        f.write(f"Curve closed: {'true' if closed else 'false'}\n")
         if curve_params:
             f.write("Curve parameters:\n")
             for key, value in curve_params.items():
