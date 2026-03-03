@@ -1,235 +1,371 @@
-# Error Management --- Reconstruction Analysis Plan (Phase 1)
+# Error Analysis Plan: Reconstruction vs. Original (Phase 1)
 
-## 1. Purpose
+## 1. Current State
 
-PlantBuilder generates:
+The tooling as of 2026-03-03 provides:
 
-1.  An original FreeCAD structure composed of sequential wafer solids.
-2.  A cut list derived from that structure.
-3.  A reconstructed structure built solely from the cut list.
+**Reconstruction pipeline (`cut_list_reconstruction.py`):**
+- `reconstruct_and_visualize()` parses a cut list `.txt` file, builds each wafer in its local frame (`Z = cylinder axis, M = X = (1,0,0)`), and assembles by the mark-alignment rule from `Wafer Reconstruction.txt`. Returns `{seg_name: wafer_list}`.
+- `align_reconstruction_to_wafer(doc, seg_name, wafer_index_1based, rec_wafers)` applies a 6DOF (or 5DOF) rigid placement to the reconstruction Part so that a specified wafer's entry ellipse coincides with the original's. When LCS objects are present, the alignment is exact including M-axis spin. Without LCS, only the face normal (5DOF) is constrained.
+- `report_exit_ellipse_discrepancy(doc, seg_name, wafer_index_1based, rec_wafers)` computes, for the same wafer after alignment: centroid distance (total/axial/lateral), normal angle, major-axis spin, and Blade° comparison.
 
-The reconstructed structure currently deviates from the original and
-does not close properly in closed-loop cases (e.g., trefoil).
+**Results table (`task_panel.py`, `_results_table`):**
+- Columns: `Wfr | Seg | Aln | Ctrd mm | Axl mm | Lat mm | Nrm° | Spin° | Bld°Δ`
+- Rows accumulate across multiple align+report calls without clearing, enabling multi-wafer and multi-alignment sweeps.
+- The `Aln` column records whether 6DOF (LCS) or 5DOF (face fallback) was used.
+- Color coding: amber if `Ctrd mm > 1.0` or `|Spin°| > 5°`; red if `Ctrd mm > 5.0` or `|Spin°| > 20°`.
 
-**Objective (Phase 1):**\
-Identify where and how the reconstructed geometry diverges from the
-original geometry by comparing corresponding wafers one at a time and
-quantifying cumulative drift and closure error.
+**Original builder (`wafer_loft.py`, `driver.py`, `loft_segment.py`):**
+- Convention B chord-bisector cutting planes at interior junctions; spine-tangent planes at endpoints.
+- LCS objects `LCS_{seg}_{i}_1` (entry) and `LCS_{seg}_{i}_2` (exit) per wafer: `Z = chord direction` (inward), `X = major axis of the ellipse` (flipped so `normal.dot(chord) > 0`).
+- Blade° written to cut list = `lift_angle_deg / 2.0` where `lift_angle_deg = acos(n1 · n2)`. Length written as fractional inches rounded to nearest 1/16".
+- Rot° computed from three consecutive chord vectors (cross-product polygon torsion).
 
-This phase focuses strictly on algorithmic / geometric correctness ---
-not physical build tolerances.
+---
 
-------------------------------------------------------------------------
+## 2. Candidate Sources of Variation
 
-## 2. Geometry Model
+Each candidate includes: (a) description, (b) expected signature in the results table, (c) how to test.
 
-### 2.1 Wafer Definition
+---
 
-Each wafer is a FreeCAD solid created by slicing a cylinder with two
-oblique planes.
+### A. Rounding in cut list values
 
-Each wafer consists of: - Two planar end faces (entry and exit) - One
-cylindrical side surface
+**(a) Description.**
+The builder writes Length in fractional inches rounded to nearest 1/16" (`_format_fractional_inches` in `driver.py`). Rounding error bounded by ±(1/32)" = ±0.794 mm. Blade° and Rot° written to 3 decimal places (±0.0005° error each). These values are the sole input to reconstruction; the original uses exact floating-point values internally.
 
-Wafers are not fused into a compound. They are placed independently so
-that adjacent faces coincide.
+**(b) Expected signature.**
+- `Axl mm`: Non-zero on every wafer. Bounded by ±0.794 mm. Independent per wafer (random sign, not cumulative).
+- `Nrm°`, `Spin°`: Negligible (angular rounding is ±0.0005°).
+- Pattern: `Axl mm` varies randomly per wafer within ±0.794 mm, not growing with index.
 
-------------------------------------------------------------------------
+**(c) How to test.**
+From the compare_reconstruction log, read `Len CL` and `Len Or` for each wafer. Compute `Δlen = (Len Or − Len CL) × 25.4` mm. Compare to `Axl mm` in the results table for the same wafer. If `Axl mm ≈ Δlen`, rounding explains the axial error.
 
-## 3. Reconstruction Model
+---
 
-Reconstruction follows the Wafer Reconstruction Specification:
+### B. Mark direction sign convention mismatch (LCS X-axis vs. spec +M)
 
--   Each cut list row defines a cut plane.
--   A cut defines:
-    -   The exit face of wafer *i*
-    -   The entry face of wafer *i+1*
--   Reconstruction uses:
-    -   Cylinder radius (from cut list header)
-    -   Blade°
-    -   Rot°
-    -   Length (center-to-center distance along cylinder axis)
+**(a) Description.**
+The spec defines +M as the endpoint of the major axis that protrudes toward the entry side on the entry face (lower Z in the wafer local frame). The LCS X-axis is set from OCC's `edge.Curve.XAxis`, whose sign is not guaranteed to equal the spec's +M. After extraction, `generate_wafers()` (lines 997–999 of `wafer_loft.py`) flips `major_axis` when the face normal opposes the chord direction to maintain right-hand rule, but this does not guarantee agreement with the spec's +M convention.
 
-Not used in reconstruction: - Cylinder°
+If the sign is wrong by 180°, every wafer's mark-alignment placement is rotated 180° about the face normal from where it should be. The reconstruction is self-consistent but systematically inverted relative to the original.
 
-Rules: - Blade° must be ≥ 0. - If negative blade is encountered →
-error. - If header is missing cylinder diameter: - Assume default
-diameter 2.25" (radius 1.125") - Flag as error (header missing).
+**(b) Expected signature.**
+- `Spin°`: Constant ~±180° on every wafer (even when alignment is 6DOF).
+- `Nrm°`: Near zero (face orientation unaffected by 180° spin about face normal).
+- `Ctrd mm`: Near zero axially; small lateral offset on non-symmetric wafers.
+- Pattern: Constant across all wafer indices — does not grow.
 
-------------------------------------------------------------------------
+**(c) How to test.**
+1. Use 6DOF LCS alignment. Align to wafer 1 and report wafer 1 exit. A constant ~±180° `Spin°` confirms this candidate.
+2. Cross-check: in `_get_orig_entry_frame`, verify that `lcs.XAxis.dot(spec_mark_dir) > 0`. Compute the spec +M direction from the reconstruction geom dict `entry_mark_dir` after applying the reconstruction's placement.
 
-## 4. Scope
+---
 
-### Phase 1 (This Phase)
+### C. S-curve inflection encoding (torsion reversal)
 
--   Compare original vs reconstructed wafers
--   Identify where mismatch begins
--   Quantify per-wafer error
--   Quantify cumulative drift
--   Quantify final closure gap
+**(a) Description.**
+At an S-curve inflection point, the physical direction of blade tilt reverses. The spec encodes this reversal by adding ~180° to Rot° for that cut, keeping Blade° ≥ 0. The builder computes Rot° from the chord-polygon torsion. At a true planar inflection, this torsion is near 0°, not 180°. If the builder does not explicitly detect the torsion reversal and add 180°, the reconstruction assembles subsequent wafers with the wrong orientation.
 
-### Phase 2 (Later)
+**(b) Expected signature.**
+- `Spin°`: Sudden large spike (~±180°) at the inflection wafer index k; near zero before k.
+- `Ctrd mm`: Grows monotonically from wafer k onward (accumulates after the misoriented wafer).
+- `Nrm°`: May remain near zero before k; jumps at k.
+- Pattern: Step-function error. Clean results for wafers < k; rapidly growing errors for wafers > k.
 
--   Monte Carlo simulation of physical build tolerances:
-    -   Blade variance \~0.5°
-    -   Rotation variance up to \~2°
-    -   Independent/random per cut
+**(c) How to test.**
+1. Use a sinusoidal or trefoil curve with at least one inflection. Note the inflection wafer index from the original geometry.
+2. Build the results table by aligning to wafer 1 and sweeping exits from wafer 1 to N. Identify where `Spin°` spikes.
+3. Inspect cut list Rot° at that row: should be near ±180° if the reversal was correctly encoded.
 
-Phase 2 is explicitly out of scope for now.
+---
 
-------------------------------------------------------------------------
+### D. Chord-bisector (Convention B) vs. flat-cylinder reconstruction
 
-## 5. User Workflow (FreeCAD)
+**(a) Description.**
+Convention B: interior cutting planes have normals equal to `normalize(d_prev + d_next)` (chord bisector). The reconstructor builds each wafer with the spec's per-cut Blade° applied symmetrically. On a non-circular path, the bisector angle at a junction is generally not equal to the blade angle computed from the wafer dihedral. The error is O(turning_angle) and roughly proportional to local curvature.
 
-Add a new action in the PlantBuilder Task Panel:
+**(b) Expected signature.**
+- `Nrm°`: Small non-zero, present on every interior wafer. Larger at high-curvature regions.
+- `Axl mm`: Small secondary contribution (~`R · Δθ · sin(θ)`) where Δθ is the blade angle error.
+- `Spin°`: Not directly affected by this candidate.
+- Pattern: Smooth, correlated with local curvature. Zero on a circle; grows at sinusoidal peaks.
 
-Button: **Analyze Reconstruction**
+**(c) How to test.**
+1. Build a pure circle: `Nrm°` should be near zero. Any non-zero value isolates other candidates.
+2. Build a sinusoidal curve. Plot `Nrm°` vs. wafer index and compare to a curvature profile. Correlation confirms candidate D.
 
-Preconditions: - Active document must contain exactly two top-level
-Parts: - `<Name> Part` (original) - `<Name> Reconstructed`
-(reconstructed)
+---
 
-If more than two Parts exist → error.
+### E. Length definition: chord vs. axial center-to-center
 
-Default visualization mode: **overlay**.
+**(a) Description.**
+The spec defines Length as the center-to-center distance along the cylinder axis (axial distance L). The builder writes `chord_length` = Euclidean distance between the two cutting-plane center points = `|plane2['point'] − plane1['point']|`. For a wafer with nonzero blade angles, this is larger than the axial projection by a factor of `1/cos(θ_avg)`. If the builder writes chord distance and the reconstructor uses it as the axial length L, each wafer's exit center is shifted axially by `L · (1 − cos(θ_avg)) ≈ L · θ_avg² / 2`.
 
-------------------------------------------------------------------------
+**(b) Expected signature.**
+- `Axl mm`: Systematic positive offset, proportional to `θ²` (grows with Blade°). Distinguished from rounding (candidate A) by its dependence on Blade° rather than random variation.
+- `Lat mm`: Near zero.
+- `Nrm°`: Near zero.
+- Pattern: Larger on high-blade wafers; near zero on flat-circle wafers.
 
-## 6. Analyzer Operation
+**(c) How to test.**
+For each wafer, compute `predicted_axl = L_cut_list × (1 − cos(theta_exit_deg_in_radians)) × 25.4` mm. If this matches `Axl mm`, candidate E is confirmed. Alternatively, re-run reconstruction with `L_axis = L_chord × cos(theta_avg)` and check if `Axl mm` drops to near zero.
 
-### 6.1 Step Mode
+---
 
-Analyzer operates wafer-by-wafer:
+### F. Initial blade angle for closed curves
 
-For wafer index *i*: - Highlight original wafer *i* - Highlight
-reconstructed wafer *i* - Compute comparison metrics - Output metrics to
-console - Allow Next / Previous navigation
+**(a) Description.**
+For a closed curve, wafer 0's entry face is defined by the last cut row, not an implicit flat circle. The reconstruction must know `theta_entry_0` (the blade angle of that entry face) to initialize the joint state. The builder writes `Initial blade: {value:.3f}°` to the cut list header when `closed = True`. If missing, the reconstruction falls back to `all_rows[-1]['blade_deg']` (last row's blade angle) with a warning logged.
 
-------------------------------------------------------------------------
+If `theta_entry_0` is wrong, every wafer's placement is based on an incorrect initial frame, causing errors that appear immediately on wafer 1 and grow rapidly.
 
-## 7. Per-Wafer Feature Extraction
+**(b) Expected signature.**
+- Large errors beginning on wafer 1 (unlike most candidates, which appear gradually).
+- `Nrm°` and `Spin°` large on wafer 1, growing.
+- Log output: "No 'Initial blade' in cut list; using last row blade" if the fallback is triggered.
 
-For each wafer solid (original and reconstructed):
+**(c) How to test.**
+1. Check the log for the fallback warning.
+2. Compare `Initial blade:` in the cut list header to `theta_entry_0` logged during reconstruction.
+3. Test sensitivity: modify `initial_blade_deg` by ±1° and rerun; observe how quickly the table values diverge.
 
-Extract: - Entry face - Exit face - Face centers - Face normals
+---
 
-If ellipse geometry available: - Major-axis direction - Detect sign
-ambiguity
+### G. LCS derivation accuracy and sign
 
-If major-axis / marking ambiguity cannot be resolved → error.
+**(a) Description.**
+The LCS Z-axis is set to the chord direction (after flipping if needed). The LCS X-axis is set to `major_axis` extracted from OCC's `edge.Curve.XAxis`, sign-flipped when the normal opposed the chord direction (to maintain right-hand rule). This flip ensures Z-consistency but does not guarantee the spec's +M sign convention.
 
-------------------------------------------------------------------------
+Separately: `_build_rotation_from_frame` constructs a rotation from two orthonormal pairs. If the pairs are not exactly orthogonal (floating-point), the rotation is slightly non-unitary. For typical inputs this error is < 1e-10° and negligible.
 
-## 8. Per-Wafer Comparison Metrics
+**(b) Expected signature.**
+- `Nrm°` non-zero even for the aligned wafer's own exit: indicates LCS Z-axis inaccuracy.
+- `Spin°` ≈ ±180° consistently: LCS X-axis sign is inverted (overlaps with candidate B).
+- `Aln` column: "5DOF" means LCS was absent or unusable; spin is then unconstrained.
 
-For wafer *i*, compute:
+**(c) How to test.**
+1. Check `Aln` column: "6DOF (LCS)" confirms LCS was used for full alignment.
+2. In FreeCAD console: `lcs = App.ActiveDocument.getObject("LCS_seg_0_1"); print(lcs.Placement.Rotation.multVec(App.Vector(0,0,1)))` — should match chord direction.
+3. Verify `lcs.XAxis.dot(chord_dir) ≈ 0` (X perpendicular to chord).
 
-### Entry Face
+---
 
--   Normal angular difference (degrees)
--   Center-to-center distance
+### H. Numerical floating-point accumulation
 
-### Exit Face
+**(a) Description.**
+Each wafer's placement is derived from the previous wafer's exit frame. Each step involves ~15 floating-point operations for matrix multiplication plus normalization. Over N wafers, accumulated double-precision error is O(N × 2 × 1e-15), bounded by ~3e-13 for 100 wafers. This is far below the results table's 4 decimal place resolution (0.0001 mm).
 
--   Normal angular difference (degrees)
--   Center-to-center distance
+**(b) Expected signature.**
+- `Ctrd mm` growing linearly with wafer index at sub-nanometer rates.
+- In practice: zero visible effect.
 
-If solids do not align, compare faces independently.
+**(c) How to test.**
+Build a simple circle (all equal wafers). Check `Ctrd mm` growth rate vs. index. Any growth visible to 4dp (> 0.0001 mm) is NOT due to floating-point alone.
 
-------------------------------------------------------------------------
+---
 
-## 9. Cumulative Drift Metrics
+### I. Major axis sign ambiguity in face extraction (fallback, no LCS)
 
-Up through wafer *i*:
+**(a) Description.**
+When LCS objects are absent and alignment falls back to face detection, the major axis is extracted from OCC's `edge.Curve.XAxis`, which does not guarantee a consistent sign across different wafers or sessions. If the sign is random, `Spin°` shows ±180° on some wafers but not others, with no predictable pattern.
 
--   Exit face center drift:
-    -   Vector difference
-    -   Magnitude
--   Exit face normal drift:
-    -   Angular difference
+For circular faces (Blade° = 0), no major axis is extractable, so `major_world = None` and alignment falls back to 5DOF, leaving `Spin°` unconstrained.
 
-This identifies where divergence begins and how it accumulates.
+**(b) Expected signature.**
+- `Aln` = "5DOF" for zero-blade wafers.
+- `Spin°` ≈ ±180° on some wafers and near 0° on others, with no pattern (random sign per OCC call).
+- Distinguishable from candidate B (systematic ±180°) by randomness.
 
-------------------------------------------------------------------------
+**(c) How to test.**
+1. Check `Aln` column: "5DOF" means spin is unconstrained.
+2. Rebuild the document from scratch and repeat the same alignment. If `Spin°` changes sign between sessions, OCC sign randomness is confirmed.
+3. Compare results with and without LCS: LCS rows should be consistent; face-only rows may vary.
 
-## 10. Closure Metric (Closed Curves)
+---
 
-For closed structures:
+### J. Rot° derivation accuracy (chord-polygon torsion approximation)
 
-Compute distance between: - Reconstructed final exit face center -
-Original wafer 1 entry face center
+**(a) Description.**
+The builder computes `rotation_angle_deg` (Rot°) from three consecutive chord vectors using a cross-product dihedral formula. This approximates the torsion of the chord polygon, not the torsion of the smooth curve. The approximation error is O(h²/R_curve) where h is the chord length. For chord ~6 mm and curvature radius ~50 mm, the error per wafer is ~0.04°.
 
-Phase 1 metric: - Center distance only
+This is separate from candidate C (inflection point sign reversal): candidate J produces small gradual errors at high curvature; candidate C produces a sudden large error at an inflection.
 
-Future expansion: - Normal comparison - Axis comparison
+**(b) Expected signature.**
+- `Spin°`: Small non-zero, grows with local curvature. Distinct from candidate C by being gradual, not sudden.
+- Pattern: Proportional to `(chord / R_curve)²`. Smaller with shorter chords (more wafers).
 
-------------------------------------------------------------------------
+**(c) How to test.**
+1. Build a helix (constant non-zero torsion). Compare `Spin°` per wafer to analytically expected torsion. The residual after subtracting exact torsion is the approximation error.
+2. Reduce `max_chord` and rerun. If `Spin°` drops as chord², this candidate is confirmed.
 
-## 11. Error Conditions (Phase 1)
+---
 
-Flag as errors:
+## 3. Diagnostic Procedure
 
--   Negative Blade° in cut list
--   Missing cylinder diameter in header (after default applied)
--   More than two top-level Parts
--   Non-trailing degenerate wafers
--   Unresolved axis / marking ambiguity
+Work from simplest geometry to most complex. The results table accumulates rows across runs.
 
-Degenerate wafers at the end (due to over-requested count) may be
-ignored.
+**Step 1: Baseline on a simple circle (all candidates should be near-zero).**
 
-------------------------------------------------------------------------
+Build a planar circle. Reconstruct. Align to wafer 1. Report exits for wafers 1, 2, 5, N/2, N.
 
-## 12. Outputs
+Expected: `Ctrd mm < 0.1`, `Nrm° < 0.1°`, `Spin°` consistent if LCS present.
 
-### Required: Console Output
+- Non-zero constant `Axl mm` on every wafer → candidate A (rounding).
+- `Spin° ≈ ±180°` on every wafer → candidate B or I (check `Aln` column).
+- `Ctrd mm` growing with index → investigate G or J.
+- Near-zero everywhere → clean baseline; proceed to Step 2.
 
-For each wafer:
+**Step 2: Sweep multiple alignment wafers on the circle.**
 
--   Wafer index
--   Entry:
-    -   Normal Δθ
-    -   Center ΔC
--   Exit:
-    -   Normal Δθ
-    -   Center ΔC
--   Cumulative drift (exit)
--   Final closure gap (when applicable)
+Align to wafer 1, then N/4, then N/2 in separate calls. Compare the three result rows.
 
-### Optional (Nice-to-Have)
+- `Ctrd mm` proportional to wafer index difference → systematic cumulative candidate (A, E, J).
+- `Nrm°` same for all three alignments → intrinsic per-wafer error, not cumulative.
+- `Spin°` consistently ±180° → candidate B confirmed.
 
-Small panel summary similar to measurement tool.
+**Step 3: Isolate rounding vs. length definition (candidates A and E).**
 
-Console output remains primary.
+From the compare_reconstruction log, compute `Δlen` for each wafer. Compare to `Axl mm`:
+- `Axl mm ≈ Δlen` → candidate A (rounding) explains the error.
+- `Axl mm > Δlen` and correlated with Blade° → candidate E (chord vs. axial length).
+- Compute `predicted_axl_E = L_chord × (1 − cos(theta_exit))` and compare.
 
-------------------------------------------------------------------------
+**Step 4: Chord-bisector effect (candidate D) on a sinusoidal curve.**
 
-## 13. Validation Plan
+Build a sinusoidal curve. Align to wafer 1. Report exits at curvature peaks and inflections.
 
-Test on:
+- `Nrm°` larger at peaks, smaller at inflections → candidate D confirmed.
 
-1.  Trefoil (currently failing closure)
-    -   Identify first wafer where mismatch spikes
-    -   Measure drift accumulation
-2.  Simple circle or helix (expected stable)
-    -   Regression check
+**Step 5: Inflection encoding (candidate C) on trefoil.**
 
-Acceptance Criteria:
+Build trefoil. Align to wafer 1. Sweep exits from wafer 1 to N. Look for a sudden large jump in `Spin°` at wafer k. Inspect cut list Rot° at row k — should be near ±180°. If Rot° is small there, the reversal was not encoded → candidate C confirmed.
 
--   Analyzer steps through all non-degenerate wafers
--   Mismatch origin can be identified
--   Closure gap is reported numerically
--   No silent failures
+**Step 6: Closed-curve initialization (candidate F).**
 
-------------------------------------------------------------------------
+Check cut list header for "Initial blade:" line. Compare to `theta_entry_0` in the reconstruction log. Missing line → check for fallback warning. Modify `initial_blade_deg` by ±1° and rerun to measure sensitivity.
 
-## 14. Explicit Non-Goals (Phase 1)
+**Step 7: LCS quality (candidate G).**
 
--   Naming enforcement
--   Automatic correction of ordering
--   Surface-to-surface mesh deviation metrics
--   Monte Carlo simulation
+For rows with `Aln = "6DOF (LCS)"`: any exit `Spin° ≠ 0` after exact 6DOF alignment reveals true parameter errors, not alignment artifacts. Verify LCS Z/X axes as described in candidate G.
 
-------------------------------------------------------------------------
+For rows with `Aln = "5DOF"`: `Spin°` is unconstrained — investigate candidate I or rebuild with LCS enabled.
+
+---
+
+## 4. Correction Strategies
+
+### A. Rounding in cut list values
+
+Change `_format_fractional_inches` in `driver.py` to output decimal inches with 4+ decimal places, or add a supplementary exact-value column. Update `parse_cut_list` in `cut_list_reconstruction.py` to accept decimal values.
+
+**Files**: `driver.py` `_write_lofted_segment_block`; `cut_list_reconstruction.py` `_parse_fractional_inches`.
+
+---
+
+### B. Mark direction sign convention mismatch
+
+In `generate_wafers()` (`wafer_loft.py`), after extracting `major_axis1/2`, apply a sign check to ensure the LCS X-axis points toward the spec's +M (toward the lower-Z endpoint on the entry face, toward the higher-Z endpoint on the exit face). Compute `mark_candidate = center + R × major_axis_dir`; compare its Z-component against the plane's Z to determine whether the sign needs flipping.
+
+**File**: `wafer_loft.py` `generate_wafers()`, lines 990–1028.
+
+---
+
+### C. S-curve inflection encoding
+
+In `generate_all_wafers_by_slicing()` (`wafer_loft.py`), detect torsion sign reversals: when the cross-product plane normal flips direction between consecutive chord triplets (`plane_A_normal.dot(plane_B_normal) < 0`), add 180° to the computed `rotation_angle_deg`. This encodes the M-direction reversal in Rot° rather than leaving it as an implicit sign change.
+
+**File**: `wafer_loft.py` rotation angle calculation loop (approximately lines 822–839).
+
+---
+
+### D. Convention B vs. flat-cylinder reconstruction
+
+Options (ascending complexity):
+1. **Accept the approximation**: characterize its magnitude; for typical geometry it is ~0.06° per wafer at medium curvature.
+2. **Add ExitBlade° column** to the cut list and use it in reconstruction. Requires changes to both builder and parser.
+3. **Use midpoint blade angles**: compute entry and exit blade angles for each wafer separately and use their average in reconstruction.
+
+**Files**: `driver.py` `_write_lofted_segment_block`; `cut_list_reconstruction.py` `parse_cut_list` and `reconstruct_segment`.
+
+---
+
+### E. Length definition: chord vs. axial
+
+In `_write_lofted_segment_block`, write the axial projection `L_axis = (plane2['point'] − plane1['point']).dot(chord_direction)` instead of the Euclidean chord distance. This ensures the reconstructor's L matches the spec's center-to-center axial definition.
+
+**File**: `driver.py` `_write_lofted_segment_block`, Length computation.
+
+---
+
+### F. Initial blade angle for closed curves
+
+Verify that `initial_blade_deg` written to the cut list header matches the spec's definition. Ensure the value is written with sufficient precision (increase from 3dp to 5dp for tight curves). Add explicit validation in `parse_cut_list` to require the `Curve closed:` line rather than inferring from curve type name.
+
+**Files**: `driver.py` (precision); `cut_list_reconstruction.py` `parse_cut_list`.
+
+---
+
+### G. LCS derivation accuracy
+
+If LCS X-axis sign is wrong: apply the correction from B (mark-direction sign check). If further inaccuracy is found in Z/X orthogonality: add an explicit Gram-Schmidt step after LCS construction (`x = x − z*(x·z); x = normalize(x)`).
+
+**File**: `wafer_loft.py` `generate_wafers()`.
+
+---
+
+### H. Numerical floating-point accumulation
+
+No correction needed. Negligible at double precision for all practical wafer counts (< 10,000 wafers).
+
+---
+
+### I. Major axis sign ambiguity (face extraction fallback)
+
+In `_get_orig_entry_frame` and `_get_orig_exit_frame`, after extracting `x_local` from OCC, apply the same mark-direction sign check as correction B. For circular faces (Blade° = 0), continue to return `major_world = None` (5DOF alignment is correct; report `Spin°` as "-" rather than a spurious value).
+
+**File**: `cut_list_reconstruction.py` `_get_orig_entry_frame()` and `_get_orig_exit_frame()`.
+
+---
+
+### J. Rot° derivation accuracy
+
+Replace the chord-polygon torsion approximation with a direct LCS-based computation: `rotation_angle_deg = signed_angle(lcs_{i}_1.XAxis, lcs_{i}_2.XAxis, chord_direction)`. The LCS objects are already built and stored at this point in `generate_wafers()`; the major axis vectors from the face ellipses are available in `geometry['ellipse1/2']['major_axis_vector']`.
+
+**File**: `wafer_loft.py` `generate_all_wafers_by_slicing()`, rotation angle computation loop.
+
+---
+
+## 5. Priority Ranking
+
+Based on expected impact for a typical trefoil:
+
+| Rank | Candidate | Likely Impact | Effort |
+|------|-----------|---------------|--------|
+| 1 | B — Mark direction sign | ±180° spin on all wafers | Low |
+| 2 | C — Inflection encoding | Large step error at S-curves | Medium |
+| 3 | J — Rot° approximation | Small growing spin error | Medium |
+| 4 | A — Length rounding | ±0.8 mm axial per wafer | Low |
+| 5 | E — Chord vs. axial length | Systematic axial offset | Low |
+| 6 | D — Convention B mismatch | Small normal error at curves | High |
+| 7 | F — Closed-curve initialization | Large error if triggered | Low |
+| 8 | I — OCC sign randomness | Random ±180° (fallback only) | Low |
+| 9 | G — LCS numerical accuracy | Sub-0.01° (negligible) | Low |
+| 10 | H — Floating-point accumulation | Sub-nanometer (negligible) | None |
+
+---
+
+## 6. Critical Files
+
+| File | Relevance |
+|------|-----------|
+| `src/cut_list_reconstruction.py` | Core reconstruction, alignment, and discrepancy reporting — all diagnostic procedures run through here |
+| `src/wafer_loft.py` | Original builder: cutting planes (Convention B), LCS creation, Rot°/Blade° derivation — source of B, C, D, G, J |
+| `src/driver.py` | Cut list writer: Length formatting, Blade°/Rot° output, initial blade — source of A, E, F |
+| `src/gui/task_panel.py` | Results table and alignment UI: where diagnostic sweeps are run interactively |
+| `Wafer Reconstruction.txt` | Authoritative spec: sign conventions, mark definitions, assembly rule |
+
+---
 
 End of file.

@@ -31,6 +31,11 @@ class PlantBuilderPanel:
         self.selected_path: str | None = None
         self._log_handler = None
         self._last_cuts_file = None
+        # Maps seg_name → wafer list from the most recent "Build from Cut List" run.
+        # Used by "Align Reconstruction" so it can access entry_mark_dir per wafer.
+        self._last_rec_wafers: dict = {}
+        # Accumulated rows for the error results table.
+        self._result_rows: list = []
         self._apply_saved_log_level()
         self._build_ui()
         self._populate_dropdown()
@@ -145,6 +150,75 @@ class PlantBuilderPanel:
         self.btn_rebuild.clicked.connect(self._on_rebuild_from_cut_list)
         rebuild_row.addWidget(self.btn_rebuild)
         layout.addLayout(rebuild_row)
+
+        # --- Align Reconstruction to a specific wafer's entry ellipse ---
+        align_row = QtWidgets.QHBoxLayout()
+        align_lbl = QtWidgets.QLabel("Align wafer:")
+        align_row.addWidget(align_lbl)
+        self.spin_align_wafer = QtWidgets.QSpinBox()
+        self.spin_align_wafer.setMinimum(1)
+        self.spin_align_wafer.setMaximum(9999)
+        self.spin_align_wafer.setValue(1)
+        self.spin_align_wafer.setFixedWidth(60)
+        self.spin_align_wafer.setToolTip(
+            "Wafer number (1-based) whose entry ellipse will be used for alignment"
+        )
+        align_row.addWidget(self.spin_align_wafer)
+        self.btn_align = QtWidgets.QPushButton("Align Reconstruction")
+        self.btn_align.setMinimumHeight(28)
+        self.btn_align.setToolTip(
+            "Move the reconstructed part so that the specified wafer's entry ellipse "
+            "coincides with the original's. Run 'Build from Cut List' first."
+        )
+        self.btn_align.clicked.connect(self._on_align_reconstruction)
+        align_row.addWidget(self.btn_align)
+        align_row.addStretch()
+        layout.addLayout(align_row)
+
+        # --- Error Results Table (collapsible) ---
+        results_hdr = QtWidgets.QHBoxLayout()
+        self.btn_toggle_results = QtWidgets.QPushButton("\u25b6 Error Results")
+        self.btn_toggle_results.setCheckable(True)
+        self.btn_toggle_results.setChecked(False)
+        self.btn_toggle_results.setFlat(True)
+        _rf = self.btn_toggle_results.font()
+        _rf.setBold(True)
+        self.btn_toggle_results.setFont(_rf)
+        self.btn_toggle_results.toggled.connect(self._toggle_results_pane)
+        results_hdr.addWidget(self.btn_toggle_results)
+        results_hdr.addStretch()
+        btn_clear_results = QtWidgets.QPushButton("Clear")
+        btn_clear_results.setFixedSize(48, 22)
+        btn_clear_results.clicked.connect(self._clear_results_table)
+        results_hdr.addWidget(btn_clear_results)
+        layout.addLayout(results_hdr)
+
+        self._results_pane = QtWidgets.QWidget()
+        self._results_pane.setVisible(False)
+        rp_layout = QtWidgets.QVBoxLayout(self._results_pane)
+        rp_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Column headers: Wfr | Seg | Aln | Ctrd | Axl | Lat | Nrm° | Spin° | Bld°Δ
+        _COLS = ["Wfr", "Seg", "Aln", "Ctrd\u200bmm", "Axl\u200bmm",
+                 "Lat\u200bmm", "Nrm\u00b0", "Spin\u00b0", "Bld\u00b0\u0394"]
+        self._results_table = QtWidgets.QTableWidget(0, len(_COLS))
+        self._results_table.setHorizontalHeaderLabels(_COLS)
+        self._results_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._results_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows)
+        self._results_table.setAlternatingRowColors(True)
+        self._results_table.verticalHeader().setVisible(False)
+        self._results_table.setMinimumHeight(120)
+        self._results_table.setMaximumHeight(240)
+        hh = self._results_table.horizontalHeader()
+        hh.setStretchLastSection(True)
+        mono = QtGui.QFont("Monospace")
+        mono.setStyleHint(QtGui.QFont.TypeWriter)
+        mono.setPointSize(8)
+        self._results_table.setFont(mono)
+        rp_layout.addWidget(self._results_table)
+        layout.addWidget(self._results_pane)
 
         # --- Status section ---
         layout.addWidget(self._make_heading("Status"))
@@ -586,7 +660,10 @@ class PlantBuilderPanel:
 
         try:
             from cut_list_reconstruction import reconstruct_and_visualize
-            reconstruct_and_visualize(App, Gui, path)
+            rec_result = reconstruct_and_visualize(App, Gui, path)
+            # Store wafers per segment for subsequent "Align Reconstruction" use.
+            if isinstance(rec_result, dict):
+                self._last_rec_wafers = rec_result
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self._set_status(
@@ -600,6 +677,173 @@ class PlantBuilderPanel:
             QtWidgets.QMessageBox.critical(
                 self.form, "Reconstruction Error", str(exc)
             )
+
+    # ------------------------------------------------------------------
+    # Align Reconstruction
+    # ------------------------------------------------------------------
+
+    def _on_align_reconstruction(self):
+        """Align the reconstructed part to a specified wafer's entry ellipse."""
+        import FreeCAD as App
+
+        doc = App.activeDocument()
+        if doc is None:
+            QtWidgets.QMessageBox.warning(
+                self.form, "No Document", "No active FreeCAD document found.")
+            return
+
+        if not self._last_rec_wafers:
+            QtWidgets.QMessageBox.warning(
+                self.form,
+                "No Reconstruction",
+                "No reconstruction data available.\n"
+                "Please run 'Build from Cut List' first.",
+            )
+            return
+
+        wafer_index = self.spin_align_wafer.value()
+
+        # Discover which segments are available
+        seg_names = list(self._last_rec_wafers.keys())
+        if not seg_names:
+            QtWidgets.QMessageBox.warning(
+                self.form, "No Segments", "No reconstructed segments found.")
+            return
+
+        self.btn_toggle_log.setChecked(True)
+        self._toggle_log_pane(True)
+        self._set_status(f"Aligning reconstruction to wafer {wafer_index}\u2026")
+        QtWidgets.QApplication.processEvents()
+
+        errors = []
+        successes = []
+        try:
+            from cut_list_reconstruction import (
+                align_reconstruction_to_wafer,
+                report_exit_ellipse_discrepancy,
+            )
+            for seg_name in seg_names:
+                rec_wafers = self._last_rec_wafers[seg_name]
+                try:
+                    new_pl, method = align_reconstruction_to_wafer(
+                        doc, seg_name, wafer_index, rec_wafers)
+                    successes.append(
+                        f"'{seg_name}': aligned wafer {wafer_index} [{method}]")
+                    logger.info("Align OK: %s wafer %d — %s", seg_name, wafer_index, method)
+                    # Report exit-ellipse discrepancy for the same wafer
+                    try:
+                        metrics = report_exit_ellipse_discrepancy(
+                            doc, seg_name, wafer_index, rec_wafers)
+                        self._add_result_row(
+                            seg_name, wafer_index, method, metrics)
+                    except Exception as rep_exc:
+                        logger.warning("Exit report failed for '%s': %s",
+                                       seg_name, rep_exc)
+                except ValueError as exc:
+                    errors.append(f"'{seg_name}': {exc}")
+                    logger.error("Align failed for '%s': %s", seg_name, exc)
+        except Exception as exc:
+            self._set_status(f"Alignment error: {exc}", error=True)
+            QtWidgets.QMessageBox.critical(
+                self.form, "Alignment Error", str(exc))
+            return
+
+        if errors and not successes:
+            msg = "Alignment failed:\n\n" + "\n".join(errors)
+            self._set_status(f"Alignment failed — see log", error=True)
+            QtWidgets.QMessageBox.critical(self.form, "Alignment Error", msg)
+        elif errors:
+            msg = ("Partial success:\n\n"
+                   + "\n".join(successes)
+                   + "\n\nFailed:\n"
+                   + "\n".join(errors))
+            self._set_status("Alignment partially succeeded — see log", warning=True)
+            QtWidgets.QMessageBox.warning(self.form, "Alignment Partial", msg)
+        else:
+            summary = "; ".join(successes)
+            self._set_status(
+                f"Aligned to wafer {wafer_index}: {summary}", success=True)
+
+    # ------------------------------------------------------------------
+    # Error results table helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_results_pane(self, checked: bool):
+        self.btn_toggle_results.setText(
+            "\u25bc Error Results" if checked else "\u25b6 Error Results")
+        self._results_pane.setVisible(checked)
+
+    def _clear_results_table(self):
+        self._results_table.setRowCount(0)
+        self._result_rows.clear()
+
+    def _add_result_row(self, seg_name: str, wafer_index: int,
+                        align_method: str, metrics: dict):
+        """Append one row to the error results table.
+
+        Columns: Wfr | Seg | Aln | Ctrd mm | Axl mm | Lat mm | Nrm° | Spin° | Bld°Δ
+        Rows with large centroid (>1 mm) or large spin (>5°) are highlighted.
+        """
+        dist   = metrics.get('centroid_distance')
+        axial  = metrics.get('centroid_axial')
+        lat    = metrics.get('centroid_lateral')
+        nrm    = metrics.get('normal_angle_deg')
+        spin   = metrics.get('spin_angle_deg')
+        b_orig = metrics.get('orig_blade_deg')
+        b_rec  = metrics.get('rec_blade_deg')
+
+        b_delta = ((b_orig - b_rec) if b_orig is not None and b_rec is not None
+                   else None)
+
+        aln_short = "6DOF" if "6DOF" in align_method else "5DOF"
+        seg_short = seg_name[:10]
+
+        def _fmt(v, fmt):
+            return fmt.format(v) if v is not None else "-"
+
+        values = [
+            str(wafer_index),
+            seg_short,
+            aln_short,
+            _fmt(dist,    "{:.3f}"),
+            _fmt(axial,   "{:+.3f}"),
+            _fmt(lat,     "{:.3f}"),
+            _fmt(nrm,     "{:.2f}"),
+            _fmt(spin,    "{:+.2f}"),
+            _fmt(b_delta, "{:+.3f}"),
+        ]
+
+        row = self._results_table.rowCount()
+        self._results_table.insertRow(row)
+
+        # Determine row highlight colour
+        warn = (dist is not None and dist > 1.0) or (spin is not None and abs(spin) > 5.0)
+        crit = (dist is not None and dist > 5.0) or (spin is not None and abs(spin) > 20.0)
+        if crit:
+            bg = QtGui.QColor(255, 180, 180)   # red tint
+        elif warn:
+            bg = QtGui.QColor(255, 230, 160)   # amber tint
+        else:
+            bg = None
+
+        for col, text in enumerate(values):
+            item = QtWidgets.QTableWidgetItem(text)
+            item.setTextAlignment(
+                QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            if bg is not None:
+                item.setBackground(bg)
+            self._results_table.setItem(row, col, item)
+
+        self._results_table.resizeColumnsToContents()
+        self._results_table.scrollToBottom()
+
+        # Auto-show the pane when the first row arrives
+        if row == 0:
+            self.btn_toggle_results.setChecked(True)
+            self._toggle_results_pane(True)
+
+        self._result_rows.append({'wafer': wafer_index, 'seg': seg_name,
+                                   'method': align_method, **metrics})
 
     # ------------------------------------------------------------------
     # Log panel helpers

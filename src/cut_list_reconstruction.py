@@ -484,10 +484,32 @@ def reconstruct_segment(segment_data: dict, max_wafers=None) -> list:
             plane1_rec = {'point': p1_point, 'normal': p1_norm}
             plane2_rec = {'point': p2_point, 'normal': p2_norm}
 
+            # Exit mark direction in reconstruction local frame.
+            # In the wafer's own local frame the exit mark offset from the exit
+            # center (0,0,L) is (R·cos(Rot°), R·sin(Rot°), R·tan(θ_exit)).
+            # Rotating by `rotation` maps that to rec local frame.
+            _tx_r    = math.radians(theta_exit_deg)
+            _rot_r   = math.radians(rot_deg)
+            _tan_x_g = math.tan(_tx_r) if abs(_tx_r) < math.radians(89.9) else 1e6
+            _emv = App.Vector(
+                radius * math.cos(_rot_r),
+                radius * math.sin(_rot_r),
+                radius * _tan_x_g)
+            _emv_len = _emv.Length
+            exit_mark_dir_rec = (rotation.multVec(_emv / _emv_len)
+                                 if _emv_len > 1e-9
+                                 else rotation.multVec(App.Vector(1, 0, 0)))
+
             geom = {
                 'lift_angle_deg':    2.0 * theta_exit_deg,
                 'rotation_angle_deg': rot_deg,
                 'rotation_angle_rad': math.radians(rot_deg),
+                # Entry mark direction in reconstruction local frame.
+                # Used by align_reconstruction_to_wafer for 6DOF alignment.
+                'entry_mark_dir': App.Vector(v2_w),
+                # Exit mark direction in reconstruction local frame.
+                # Used by report_exit_ellipse_discrepancy.
+                'exit_mark_dir': exit_mark_dir_rec,
             }
             wafers.append(Wafer(solid_rec, i, plane1_rec, plane2_rec, geom))
             logger.info("  Wafer %d OK: volume=%.4f", i, solid_rec.Volume)
@@ -935,6 +957,451 @@ def _add_debug_planes(doc, seg_name: str, cylinder_radius: float,
 
 
 # ---------------------------------------------------------------------------
+# Alignment: match reconstruction to original on a specific wafer's entry ellipse
+# ---------------------------------------------------------------------------
+
+def _get_orig_entry_frame(doc, seg_name: str, k: int):
+    """Return (center_world, inward_world, major_world_or_None) for original wafer k entry face.
+
+    Priority:
+    1. LCS_{seg_name}_{k}_1 — exact position + full frame (X = major axis, Z = inward normal).
+    2. Planar face analysis on Wafer_{seg_name}_{k} shape.
+
+    Raises ValueError if neither source is available or extraction fails.
+    """
+    part_pl = _get_part_placement(doc, f"{seg_name}_Part")
+
+    # ── Priority 1: LCS ──────────────────────────────────────────────────────
+    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k}_1")
+    if lcs_cands and hasattr(lcs_cands[0], 'Placement'):
+        lcs_pl = lcs_cands[0].Placement
+        center  = lcs_pl.Base
+        inward  = lcs_pl.Rotation.multVec(App.Vector(0, 0, 1))
+        major   = lcs_pl.Rotation.multVec(App.Vector(1, 0, 0))
+        logger.info("Orig wafer %d entry: using LCS_%s_%d_1", k, seg_name, k)
+        return center, inward, major
+
+    # ── Fallback: face analysis ───────────────────────────────────────────────
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    if not orig_objs:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}' not found in document "
+            f"and no LCS 'LCS_{seg_name}_{k}_1' is available.")
+
+    shape = getattr(orig_objs[0], 'Shape', None)
+    if shape is None or shape.isNull():
+        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k}' has no valid shape.")
+
+    planar = _find_planar_faces(shape)
+    if len(planar) < 2:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}': fewer than 2 planar faces found.")
+
+    fa, fb = planar[0], planar[1]
+    c_a, c_b = fa.CenterOfMass, fb.CenterOfMass
+    chord = c_b - c_a
+    if chord.Length < 1e-9:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}': degenerate chord between faces.")
+    chord_norm = App.Vector(chord)
+    chord_norm.normalize()
+
+    n_a = _face_normal(fa)
+    entry_face = fa if n_a.dot(chord_norm) < 0 else fb
+
+    center_local = entry_face.CenterOfMass
+    n_out_local  = _face_normal(entry_face)
+    n_out_local.normalize()
+
+    center_world = part_pl.multVec(center_local)
+    inward_local = App.Vector(-n_out_local.x, -n_out_local.y, -n_out_local.z)
+    inward_world = part_pl.Rotation.multVec(inward_local)
+
+    # Try to extract major axis from ellipse edge
+    major_world = None
+    for edge in entry_face.Edges:
+        if isinstance(edge.Curve, Part.Ellipse):
+            x_local = edge.Curve.XAxis
+            major_world = part_pl.Rotation.multVec(x_local)
+            break
+
+    method = "face+ellipse" if major_world is not None else "face-only (5DOF)"
+    logger.info("Orig wafer %d entry: using %s", k, method)
+    return center_world, inward_world, major_world
+
+
+def align_reconstruction_to_wafer(doc, seg_name: str, wafer_index_1based: int,
+                                   rec_wafers: list):
+    """Apply a new placement to the reconstruction Part so that the entry ellipse of
+    the specified wafer coincides with the corresponding original wafer's entry ellipse.
+
+    Parameters
+    ----------
+    wafer_index_1based : int
+        1-based wafer index (default 1 = first wafer).
+    rec_wafers : list of Wafer
+        Wafers returned by reconstruct_segment.  Must have been built with
+        'entry_mark_dir' in geometry (current implementation stores it automatically).
+
+    Returns
+    -------
+    (App.Placement, str)
+        The new placement applied to the reconstruction Part, and a description
+        of the alignment method used.
+
+    Raises
+    ------
+    ValueError
+        If any required object is missing from the document, face extraction
+        fails, or the wafer index is out of range.
+    """
+    k = wafer_index_1based - 1  # convert to 0-based
+
+    # ── Find reconstruction wafer k ───────────────────────────────────────────
+    rec_wafer = next((w for w in rec_wafers if w.index == k), None)
+    if rec_wafer is None:
+        raise ValueError(
+            f"Reconstruction wafer {wafer_index_1based} (index {k}) not found in "
+            f"rec_wafers list (may be degenerate or beyond max_wafers limit).")
+    if rec_wafer.wafer is None:
+        raise ValueError(
+            f"Reconstruction wafer {wafer_index_1based} has no geometry (degenerate).")
+
+    # ── Original entry frame ──────────────────────────────────────────────────
+    orig_center, orig_inward, orig_major = _get_orig_entry_frame(doc, seg_name, k)
+
+    # ── Reconstruction entry frame (in reconstruction local frame) ────────────
+    rec_center_local = rec_wafer.plane1['point']   # in rec local frame
+    rec_inward_local = rec_wafer.plane1['normal']   # T_entry (inward) in rec local frame
+    rec_major_local  = rec_wafer.geometry.get('entry_mark_dir')  # may be None for old data
+
+    logger.info("Aligning reconstruction to wafer %d (%s 0-based):", wafer_index_1based, k)
+    logger.info("  orig_center=%s  orig_inward=%s  orig_major=%s",
+                orig_center, orig_inward, orig_major)
+    logger.info("  rec_center=%s  rec_inward=%s  rec_major=%s",
+                rec_center_local, rec_inward_local, rec_major_local)
+
+    # ── Validate orthogonality of rec pair ────────────────────────────────────
+    if rec_major_local is not None:
+        dot_check = abs(rec_inward_local.dot(rec_major_local))
+        if dot_check > 0.01:
+            logger.warning("  rec_inward and rec_major not orthogonal (dot=%.4f); "
+                           "falling back to 5DOF", dot_check)
+            rec_major_local = None
+
+    # ── Compute rotation ──────────────────────────────────────────────────────
+    if rec_major_local is not None and orig_major is not None:
+        new_rotation = _build_rotation_from_frame(
+            rec_inward_local, rec_major_local, orig_inward, orig_major)
+        method = "6DOF (center + normal + major axis)"
+    else:
+        # 5DOF: align inward normals only; spin about the normal is unconstrained.
+        dot = max(-1.0, min(1.0, rec_inward_local.dot(orig_inward)))
+        if abs(dot - 1.0) < 1e-9:
+            new_rotation = App.Rotation()
+        elif abs(dot + 1.0) < 1e-9:
+            perp = _perp_to(orig_inward)
+            new_rotation = App.Rotation(perp, 180.0)
+        else:
+            axis = rec_inward_local.cross(orig_inward)
+            axis.normalize()
+            angle_deg = math.degrees(math.acos(dot))
+            new_rotation = App.Rotation(axis, angle_deg)
+        method = "5DOF (center + normal; major axis unavailable)"
+
+    # ── Compute translation ───────────────────────────────────────────────────
+    # new_pl.multVec(rec_center_local) == orig_center
+    # → new_pl.Base = orig_center - new_rotation.multVec(rec_center_local)
+    new_base = orig_center - new_rotation.multVec(rec_center_local)
+    new_placement = App.Placement(new_base, new_rotation)
+
+    # ── Verify: entry center error after alignment ─────────────────────────────
+    achieved_center = new_placement.multVec(rec_center_local)
+    center_err = (achieved_center - orig_center).Length
+    if center_err > 1e-4:
+        raise ValueError(
+            f"Alignment failed: entry center residual={center_err:.6f} "
+            f"(should be ~0). This may indicate a numerical issue.")
+
+    # ── Apply ─────────────────────────────────────────────────────────────────
+    rec_part_objs = doc.getObjectsByLabel(f"{seg_name}_Reconstructed")
+    if not rec_part_objs:
+        raise ValueError(
+            f"Reconstruction part '{seg_name}_Reconstructed' not found in document. "
+            f"Run 'Build from Cut List' first.")
+    rec_part_objs[0].Placement = new_placement
+    doc.recompute()
+
+    logger.info("Aligned '%s_Reconstructed' to wafer %d (%s)",
+                seg_name, wafer_index_1based, method)
+    logger.info("  New placement base: %s", new_placement.Base)
+    return new_placement, method
+
+
+# ---------------------------------------------------------------------------
+# Exit-ellipse discrepancy report
+# ---------------------------------------------------------------------------
+
+def _get_orig_exit_frame(doc, seg_name: str, k: int):
+    """Return (center_world, inward_world, major_world_or_None) for original wafer k exit face.
+
+    Priority:
+    1. LCS_{seg_name}_{k}_2 — exit LCS (X = major axis, Z = inward toward exit).
+    2. Planar face analysis on Wafer_{seg_name}_{k} shape.
+
+    Raises ValueError if neither source is available or extraction fails.
+    """
+    part_pl = _get_part_placement(doc, f"{seg_name}_Part")
+
+    # ── Priority 1: LCS ──────────────────────────────────────────────────────
+    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k}_2")
+    if lcs_cands and hasattr(lcs_cands[0], 'Placement'):
+        lcs_pl = lcs_cands[0].Placement
+        center = lcs_pl.Base
+        inward = lcs_pl.Rotation.multVec(App.Vector(0, 0, 1))
+        major  = lcs_pl.Rotation.multVec(App.Vector(1, 0, 0))
+        logger.info("Orig wafer %d exit: using LCS_%s_%d_2", k, seg_name, k)
+        return center, inward, major
+
+    # ── Fallback: face analysis ───────────────────────────────────────────────
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    if not orig_objs:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}' not found and no LCS available.")
+
+    shape = getattr(orig_objs[0], 'Shape', None)
+    if shape is None or shape.isNull():
+        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k}' has no valid shape.")
+
+    planar = _find_planar_faces(shape)
+    if len(planar) < 2:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}': fewer than 2 planar faces found.")
+
+    fa, fb = planar[0], planar[1]
+    c_a, c_b = fa.CenterOfMass, fb.CenterOfMass
+    chord = c_b - c_a
+    if chord.Length < 1e-9:
+        raise ValueError(
+            f"Original wafer 'Wafer_{seg_name}_{k}': degenerate chord between faces.")
+    chord_norm = App.Vector(chord)
+    chord_norm.normalize()
+
+    n_a = _face_normal(fa)
+    # Exit face normal points ALONG the chord direction (opposite to entry)
+    exit_face = fa if n_a.dot(chord_norm) > 0 else fb
+
+    center_local = exit_face.CenterOfMass
+    n_out_local  = _face_normal(exit_face)
+    n_out_local.normalize()
+
+    center_world = part_pl.multVec(center_local)
+    # Outward exit normal already points toward exit side; inward = same direction
+    # (exit face outward normal IS the travel direction for the exit)
+    inward_world = part_pl.Rotation.multVec(n_out_local)
+
+    # Try to extract major axis from ellipse edge
+    major_world = None
+    for edge in exit_face.Edges:
+        if isinstance(edge.Curve, Part.Ellipse):
+            x_local = edge.Curve.XAxis
+            major_world = part_pl.Rotation.multVec(x_local)
+            break
+
+    method = "face+ellipse" if major_world is not None else "face-only"
+    logger.info("Orig wafer %d exit: using %s", k, method)
+    return center_world, inward_world, major_world
+
+
+def _signed_angle_about_axis(v_from: App.Vector, v_to: App.Vector,
+                              axis: App.Vector) -> float:
+    """Return the signed angle (degrees) from v_from to v_to rotating about axis.
+
+    Both v_from and v_to are assumed to be unit vectors perpendicular to axis.
+    Positive = counterclockwise when looking from the tip of axis.
+    """
+    cross = v_from.cross(v_to)
+    dot   = max(-1.0, min(1.0, v_from.dot(v_to)))
+    angle = math.degrees(math.atan2(cross.dot(axis), dot))
+    return angle
+
+
+def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
+                                    rec_wafers: list) -> dict:
+    """Compare original vs reconstruction exit ellipse for wafer k after alignment.
+
+    Should be called after :func:`align_reconstruction_to_wafer` has been applied,
+    so the entry ellipse is already coincident and any remaining discrepancy at the
+    exit face reflects actual errors in the reconstruction of that specific cut.
+
+    Metrics
+    -------
+    centroid_distance : float
+        Total world-space distance between exit face centers (mm).
+    centroid_axial : float
+        Component of the centroid offset along the original exit face inward normal
+        (positive = rec center is further along the travel direction).
+        Corresponds to wafer length (L) or cumulative axial error.
+    centroid_lateral : float
+        Component of the centroid offset perpendicular to the face normal
+        (in-plane shift).  Corresponds to accumulated lateral drift.
+    centroid_delta : App.Vector
+        Full world-space offset vector (orig_exit_center − rec_exit_center).
+    normal_angle_deg : float
+        Angle between face inward normals (°).  Non-zero means the exit blade
+        angle (Blade°) or accumulated orientation is wrong.
+    spin_angle_deg : float
+        Signed angle from rec major axis to orig major axis, about the orig
+        exit face normal (°).  Non-zero means Rot° for this cut is wrong.
+        Positive = rec major axis needs to rotate CCW (from tip of normal)
+        to reach orig.
+    orig_blade_deg : float or None
+        Blade angle inferred from original exit face (° from face geometry).
+    rec_blade_deg : float or None
+        Blade angle inferred from reconstruction exit face geometry.
+
+    Returns the metrics dict and logs a formatted report.
+
+    Raises ValueError if required objects are not found.
+    """
+    k = wafer_index_1based - 1
+
+    # ── Reconstruction exit frame ─────────────────────────────────────────────
+    rec_wafer = next((w for w in rec_wafers if w.index == k), None)
+    if rec_wafer is None:
+        raise ValueError(
+            f"Reconstruction wafer {wafer_index_1based} not found in rec_wafers.")
+
+    # Current placement of the reconstruction Part (after any alignment)
+    rec_part_pl = _get_part_placement(doc, f"{seg_name}_Reconstructed")
+
+    rec_exit_center_local = rec_wafer.plane2['point']
+    rec_exit_inward_local = rec_wafer.plane2['normal']  # T_exit (inward) in rec local
+    rec_exit_major_local  = rec_wafer.geometry.get('exit_mark_dir')
+
+    rec_exit_center = rec_part_pl.multVec(rec_exit_center_local)
+    rec_exit_inward = rec_part_pl.Rotation.multVec(rec_exit_inward_local)
+    rec_exit_major  = (rec_part_pl.Rotation.multVec(rec_exit_major_local)
+                       if rec_exit_major_local is not None else None)
+
+    # ── Original exit frame ───────────────────────────────────────────────────
+    orig_exit_center, orig_exit_inward, orig_exit_major = _get_orig_exit_frame(
+        doc, seg_name, k)
+
+    # ── Centroid metrics ──────────────────────────────────────────────────────
+    delta = orig_exit_center - rec_exit_center           # world-space offset
+    dist  = delta.Length
+
+    # Axial component: projection of delta onto orig exit inward normal
+    n_ref = App.Vector(orig_exit_inward)
+    n_ref.normalize()
+    axial   = delta.dot(n_ref)
+
+    # Lateral component: in-plane magnitude
+    lateral_vec = delta - n_ref * axial
+    lateral = lateral_vec.Length
+
+    # ── Normal angle ──────────────────────────────────────────────────────────
+    dot_n = max(-1.0, min(1.0, orig_exit_inward.dot(rec_exit_inward)))
+    normal_angle_deg = math.degrees(math.acos(dot_n))
+
+    # ── Major-axis spin ───────────────────────────────────────────────────────
+    spin_angle_deg = None
+    if orig_exit_major is not None and rec_exit_major is not None:
+        # Project both major axes onto the plane perpendicular to the orig normal
+        def _proj_onto_plane(v, n):
+            return v - n * v.dot(n)
+
+        om_proj = _proj_onto_plane(orig_exit_major, n_ref)
+        rm_proj = _proj_onto_plane(rec_exit_major,  n_ref)
+        om_len = om_proj.Length
+        rm_len = rm_proj.Length
+        if om_len > 1e-9 and rm_len > 1e-9:
+            om_proj.normalize()
+            rm_proj.normalize()
+            spin_angle_deg = _signed_angle_about_axis(rm_proj, om_proj, n_ref)
+
+    # ── Blade angle from geometry ─────────────────────────────────────────────
+    def _blade_from_inward(inward):
+        """Blade angle = deviation of face from perpendicular to travel axis.
+        When face normal == travel direction, blade = 0. Otherwise blade > 0."""
+        # inward is not quite what we need; from T_exit in wafer local,
+        # blade = acos(T_exit · Z_wafer).  In rec local we don't know Z_wafer,
+        # so we estimate from the face's major/minor semi-axes via the ellipse
+        # edge if available, else return None.
+        return None   # caller fills via geometry dict
+
+    rec_blade_deg = rec_wafer.geometry.get('lift_angle_deg', 0.0) / 2.0
+    # For original, try to compute from LCS if major axis is available
+    # (major_radius = R/cos(θ), minor = R → θ = acos(R/major_r))
+    orig_blade_deg = None
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    if orig_objs:
+        orig_shape = getattr(orig_objs[0], 'Shape', None)
+        if orig_shape and not orig_shape.isNull():
+            planar = _find_planar_faces(orig_shape)
+            if planar:
+                # Get exit face
+                if len(planar) >= 2:
+                    fa, fb = planar[0], planar[1]
+                    chord = fb.CenterOfMass - fa.CenterOfMass
+                    if chord.Length > 1e-9:
+                        chord.normalize()
+                        n_a = _face_normal(fa)
+                        exit_face = fa if n_a.dot(chord) > 0 else fb
+                    else:
+                        exit_face = planar[0]
+                else:
+                    exit_face = planar[0]
+                for edge in exit_face.Edges:
+                    if isinstance(edge.Curve, Part.Ellipse):
+                        c = edge.Curve
+                        if c.MinorRadius > 1e-9:
+                            ratio = min(c.MinorRadius, c.MajorRadius) / max(c.MinorRadius, c.MajorRadius)
+                            ratio = max(-1.0, min(1.0, ratio))
+                            orig_blade_deg = math.degrees(math.acos(ratio))
+                        break
+                    if isinstance(edge.Curve, Part.Circle):
+                        orig_blade_deg = 0.0
+                        break
+
+    # ── Format and log ────────────────────────────────────────────────────────
+    hdr = (f"=== Exit ellipse discrepancy: {seg_name} wafer {wafer_index_1based} ===")
+    logger.info(hdr)
+    logger.info("  Centroid distance:  %.4f mm", dist)
+    logger.info("    Axial  (±normal): %+.4f mm  "
+                "(+ = rec exit too far along travel direction)", axial)
+    logger.info("    Lateral (in-plane): %.4f mm", lateral)
+    logger.info("    Delta vector: (%.4f, %.4f, %.4f)",
+                delta.x, delta.y, delta.z)
+    logger.info("  Normal angle: %.4f°  "
+                "(≈ exit Blade° mismatch or accumulated orientation error)",
+                normal_angle_deg)
+    if spin_angle_deg is not None:
+        logger.info("  Major-axis spin: %+.4f°  "
+                    "(positive = rec needs CCW rotation to match orig; "
+                    "≈ Rot° error for this cut)",
+                    spin_angle_deg)
+    else:
+        logger.info("  Major-axis spin: unavailable (no major axis direction found)")
+    if orig_blade_deg is not None:
+        logger.info("  Blade°  orig=%.3f°  rec=%.3f°  diff=%+.3f°",
+                    orig_blade_deg, rec_blade_deg, orig_blade_deg - rec_blade_deg)
+    logger.info("=" * len(hdr))
+
+    return {
+        'centroid_distance': dist,
+        'centroid_axial':    axial,
+        'centroid_lateral':  lateral,
+        'centroid_delta':    delta,
+        'normal_angle_deg':  normal_angle_deg,
+        'spin_angle_deg':    spin_angle_deg,
+        'orig_blade_deg':    orig_blade_deg,
+        'rec_blade_deg':     rec_blade_deg,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Top-level entry point (called from the task panel)
 # ---------------------------------------------------------------------------
 
@@ -953,6 +1420,12 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
     max_wafers : int or None
         Limit reconstruction to the first N wafers.  When set, debug plane
         markers are also added at the first wafer's entry/exit planes.
+
+    Returns
+    -------
+    dict
+        Mapping of ``{seg_name: wafer_list}`` for every segment reconstructed.
+        Useful for subsequent calls to :func:`align_reconstruction_to_wafer`.
     """
     doc = App.activeDocument()
     if doc is None:
@@ -962,6 +1435,7 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
     if not segments:
         raise ValueError(f"No segments found in: {filepath}")
 
+    result = {}
     for seg_data in segments:
         alignment = _find_original_alignment(doc, seg_data['name'])
         if alignment is None:
@@ -969,6 +1443,7 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
                         seg_data['name'])
 
         wafers = reconstruct_segment(seg_data, max_wafers=max_wafers)
+        result[seg_data['name']] = wafers
 
         rec_part = visualize_reconstruction(
             doc, seg_data['name'], wafers, alignment)
@@ -993,3 +1468,4 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
     doc.recompute()
     logger.info("Reconstruction complete: %d segment(s) from %s",
                 len(segments), filepath)
+    return result
