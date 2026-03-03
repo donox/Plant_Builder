@@ -44,6 +44,31 @@ class Wafer:
         return self.geometry['rotation_angle_deg']
 
 
+def _lcs_signed_angle(v_from, v_to, axis):
+    """Signed angle in degrees from v_from to v_to about axis (right-hand rule).
+
+    Projects both vectors onto the plane perpendicular to axis, then returns
+    the signed angle between them.  Returns 0.0 if either projection is near-zero.
+    """
+    proj_from = v_from.dot(axis)
+    proj_to   = v_to.dot(axis)
+    v_f = App.Vector(v_from.x - axis.x * proj_from,
+                     v_from.y - axis.y * proj_from,
+                     v_from.z - axis.z * proj_from)
+    v_t = App.Vector(v_to.x - axis.x * proj_to,
+                     v_to.y - axis.y * proj_to,
+                     v_to.z - axis.z * proj_to)
+    if v_f.Length < 1e-9 or v_t.Length < 1e-9:
+        return 0.0
+    v_f.normalize()
+    v_t.normalize()
+    cos_a = max(-1.0, min(1.0, v_f.dot(v_t)))
+    angle = math.acos(cos_a)
+    if v_f.cross(v_t).dot(axis) < 0:
+        angle = -angle
+    return math.degrees(angle)
+
+
 class LoftWaferGenerator:
     """Generate wafers by creating straight cylinders between cutting planes"""
 
@@ -762,17 +787,13 @@ class LoftWaferGenerator:
             chord_azimuth = math.degrees(math.atan2(chord_vec.x, chord_vec.y))
 
             if i == 0:
-                rotation_angle_deg = 0.0
                 collinearity_angle = 0.0
 
             elif i == 1:
                 if chord_0a is not None and chord_0b is not None:
-                    chord_0a_dir = App.Vector(chord_0a.x, chord_0a.y, chord_0a.z)
                     chord_0b_dir = App.Vector(chord_0b.x, chord_0b.y, chord_0b.z)
                     chord_1_dir = App.Vector(chord_vectors[1].x, chord_vectors[1].y, chord_vectors[1].z)
 
-                    if chord_0a_dir.Length > 1e-9:
-                        chord_0a_dir.normalize()
                     if chord_0b_dir.Length > 1e-9:
                         chord_0b_dir.normalize()
                     if chord_1_dir.Length > 1e-9:
@@ -782,34 +803,10 @@ class LoftWaferGenerator:
                     cos_collin = max(-1.0, min(1.0, cos_collin))
                     collinearity_angle = math.degrees(math.acos(cos_collin))
 
-                    plane_A_normal = chord_0a_dir.cross(chord_0b_dir)
-                    plane_B_normal = chord_0b_dir.cross(chord_1_dir)
-
-                    if plane_A_normal.Length < 1e-9 or plane_B_normal.Length < 1e-9:
-                        rotation_angle_deg = 0.0
-                    else:
-                        plane_A_normal.normalize()
-                        plane_B_normal.normalize()
-
-                        cos_angle = plane_A_normal.dot(plane_B_normal)
-                        cos_angle = max(-1.0, min(1.0, cos_angle))
-                        rotation_angle_rad = math.acos(cos_angle)
-
-                        cross = plane_A_normal.cross(plane_B_normal)
-                        if cross.dot(chord_0b_dir) < 0:
-                            rotation_angle_rad = -rotation_angle_rad
-
-                        rotation_angle_deg = math.degrees(rotation_angle_rad) * 2.0
-                else:
-                    rotation_angle_deg = 0.0
-
             else:
-                chord_im2_dir = App.Vector(chord_vectors[i - 2].x, chord_vectors[i - 2].y, chord_vectors[i - 2].z)
                 chord_im1_dir = App.Vector(chord_vectors[i - 1].x, chord_vectors[i - 1].y, chord_vectors[i - 1].z)
                 chord_i_dir = App.Vector(chord_vectors[i].x, chord_vectors[i].y, chord_vectors[i].z)
 
-                if chord_im2_dir.Length > 1e-9:
-                    chord_im2_dir.normalize()
                 if chord_im1_dir.Length > 1e-9:
                     chord_im1_dir.normalize()
                 if chord_i_dir.Length > 1e-9:
@@ -819,24 +816,26 @@ class LoftWaferGenerator:
                 cos_collin = max(-1.0, min(1.0, cos_collin))
                 collinearity_angle = math.degrees(math.acos(cos_collin))
 
-                plane_A_normal = chord_im2_dir.cross(chord_im1_dir)
-                plane_B_normal = chord_im1_dir.cross(chord_i_dir)
-
-                if plane_A_normal.Length < 1e-9 or plane_B_normal.Length < 1e-9:
-                    rotation_angle_deg = 0.0
-                else:
-                    plane_A_normal.normalize()
-                    plane_B_normal.normalize()
-
-                    cos_angle = plane_A_normal.dot(plane_B_normal)
-                    cos_angle = max(-1.0, min(1.0, cos_angle))
-                    rotation_angle_rad = math.acos(cos_angle)
-
-                    cross = plane_A_normal.cross(plane_B_normal)
-                    if cross.dot(chord_im1_dir) < 0:
-                        rotation_angle_rad = -rotation_angle_rad
-
-                    rotation_angle_deg = math.degrees(rotation_angle_rad)
+            # LCS-based exact Rot°: signed angle from entry to exit major axis about chord direction.
+            # Applies the same normal-flip convention as generate_wafers() so the sign is consistent.
+            _ellipse1 = wafer_data['geometry']['ellipse1']
+            _ellipse2 = wafer_data['geometry']['ellipse2']
+            _ma1 = App.Vector(_ellipse1['major_axis_vector'].x,
+                              _ellipse1['major_axis_vector'].y,
+                              _ellipse1['major_axis_vector'].z)
+            _ma2 = App.Vector(_ellipse2['major_axis_vector'].x,
+                              _ellipse2['major_axis_vector'].y,
+                              _ellipse2['major_axis_vector'].z)
+            _n1 = App.Vector(_ellipse1['normal'].x, _ellipse1['normal'].y, _ellipse1['normal'].z)
+            _n2 = App.Vector(_ellipse2['normal'].x, _ellipse2['normal'].y, _ellipse2['normal'].z)
+            _chord_unit = App.Vector(chord_vec.x, chord_vec.y, chord_vec.z)
+            if _chord_unit.Length > 1e-9:
+                _chord_unit.normalize()
+            if _n1.dot(_chord_unit) < 0:
+                _ma1 = -_ma1
+            if _n2.dot(_chord_unit) < 0:
+                _ma2 = -_ma2
+            rotation_angle_deg = _lcs_signed_angle(_ma1, _ma2, _chord_unit)
 
             wafer_data['geometry']['rotation_angle_rad'] = math.radians(rotation_angle_deg)
             wafer_data['geometry']['rotation_angle_deg'] = rotation_angle_deg
