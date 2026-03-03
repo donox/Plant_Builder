@@ -1409,18 +1409,15 @@ def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
         if orig_shape and not orig_shape.isNull():
             planar = _find_planar_faces(orig_shape)
             if planar:
-                # Get exit face
-                if len(planar) >= 2:
-                    fa, fb = planar[0], planar[1]
-                    chord = fb.CenterOfMass - fa.CenterOfMass
-                    if chord.Length > 1e-9:
-                        chord.normalize()
-                        n_a = _face_normal(fa)
-                        exit_face = fa if n_a.dot(chord) > 0 else fb
-                    else:
-                        exit_face = planar[0]
-                else:
-                    exit_face = planar[0]
+                # Get exit face: pick the planar face whose normal is most
+                # collinear with orig_exit_inward (already correct from LCS).
+                # This avoids the area-sorting pitfall where the exit face is
+                # larger than the entry face (θ_exit > θ_entry), which causes
+                # the chord-based dot-product heuristic to select the wrong face.
+                exit_face = max(
+                    planar,
+                    key=lambda f: abs(_face_normal(f).dot(orig_exit_inward))
+                )
                 for edge in exit_face.Edges:
                     if isinstance(edge.Curve, Part.Ellipse):
                         c = edge.Curve
