@@ -151,6 +151,34 @@ class PlantBuilderPanel:
         rebuild_row.addWidget(self.btn_rebuild)
         layout.addLayout(rebuild_row)
 
+        # --- Wafer visibility range ---
+        vis_row = QtWidgets.QHBoxLayout()
+        vis_row.addWidget(QtWidgets.QLabel("Wafers:"))
+        self.spin_wafer_from = QtWidgets.QSpinBox()
+        self.spin_wafer_from.setMinimum(1)
+        self.spin_wafer_from.setMaximum(9999)
+        self.spin_wafer_from.setValue(1)
+        self.spin_wafer_from.setFixedWidth(55)
+        self.spin_wafer_from.setToolTip("First wafer to show (1-based)")
+        vis_row.addWidget(self.spin_wafer_from)
+        vis_row.addWidget(QtWidgets.QLabel("\u2013"))
+        self.spin_wafer_to = QtWidgets.QSpinBox()
+        self.spin_wafer_to.setMinimum(1)
+        self.spin_wafer_to.setMaximum(9999)
+        self.spin_wafer_to.setValue(9999)
+        self.spin_wafer_to.setFixedWidth(55)
+        self.spin_wafer_to.setToolTip("Last wafer to show (1-based; 9999 = all)")
+        vis_row.addWidget(self.spin_wafer_to)
+        self.btn_apply_range = QtWidgets.QPushButton("Show Range")
+        self.btn_apply_range.setMinimumHeight(24)
+        self.btn_apply_range.setToolTip(
+            "Show only wafers in the specified range (both original and\n"
+            "reconstructed); hide all others in the active document.")
+        self.btn_apply_range.clicked.connect(self._on_apply_wafer_range)
+        vis_row.addWidget(self.btn_apply_range)
+        vis_row.addStretch()
+        layout.addLayout(vis_row)
+
         # --- Align Reconstruction to a specific wafer's entry ellipse ---
         align_row = QtWidgets.QHBoxLayout()
         align_lbl = QtWidgets.QLabel("Align wafer:")
@@ -174,6 +202,32 @@ class PlantBuilderPanel:
         align_row.addWidget(self.btn_align)
         align_row.addStretch()
         layout.addLayout(align_row)
+
+        # --- Build Variance ---
+        variance_row = QtWidgets.QHBoxLayout()
+        variance_row.addWidget(QtWidgets.QLabel("Blade \u03c3\u00b0:"))
+        self.dspin_sigma_blade = QtWidgets.QDoubleSpinBox()
+        self.dspin_sigma_blade.setRange(0.0, 10.0)
+        self.dspin_sigma_blade.setSingleStep(0.1)
+        self.dspin_sigma_blade.setValue(0.50)
+        self.dspin_sigma_blade.setDecimals(2)
+        self.dspin_sigma_blade.setFixedWidth(65)
+        self.dspin_sigma_blade.setToolTip(
+            "1\u03c3 blade tilt uncertainty per cut (degrees)")
+        variance_row.addWidget(self.dspin_sigma_blade)
+        variance_row.addSpacing(8)
+        variance_row.addWidget(QtWidgets.QLabel("Rot \u03c3\u00b0:"))
+        self.dspin_sigma_rot = QtWidgets.QDoubleSpinBox()
+        self.dspin_sigma_rot.setRange(0.0, 30.0)
+        self.dspin_sigma_rot.setSingleStep(0.5)
+        self.dspin_sigma_rot.setValue(2.0)
+        self.dspin_sigma_rot.setDecimals(1)
+        self.dspin_sigma_rot.setFixedWidth(65)
+        self.dspin_sigma_rot.setToolTip(
+            "1\u03c3 cylinder rotation uncertainty per cut (degrees)")
+        variance_row.addWidget(self.dspin_sigma_rot)
+        variance_row.addStretch()
+        layout.addLayout(variance_row)
 
         # --- Error Results Table (collapsible) ---
         results_hdr = QtWidgets.QHBoxLayout()
@@ -201,8 +255,21 @@ class PlantBuilderPanel:
         # Column headers: Wfr | Seg | Aln | Ctrd | Axl | Lat | Nrm° | Spin° | Bld°Δ
         _COLS = ["Wfr", "Seg", "Aln", "Ctrd\u200bmm", "Axl\u200bmm",
                  "Lat\u200bmm", "Nrm\u00b0", "Spin\u00b0", "Bld\u00b0\u0394"]
+        _COL_TIPS = [
+            "Wafer — alignment target wafer number (1-based)",
+            "Segment — segment name",
+            "Alignment method:\n  6DOF = LCS-exact (position + spin constrained)\n  5DOF = face-only (spin unconstrained)",
+            "Centroid distance — total distance between original and\nreconstructed exit face centers (mm)",
+            "Axial offset — component along original exit face normal (mm);\npositive = reconstruction exit is too far along travel direction",
+            "Lateral offset — in-plane component of centroid offset,\nperpendicular to face normal (mm)",
+            "Normal angle — angle between original and reconstructed exit\nface normals (\u00b0); non-zero = blade angle or orientation error",
+            "Major-axis spin — signed rotation from reconstructed to original\nmajor axis about face normal (\u00b0); non-zero = Rot\u00b0 error for this cut",
+            "Blade \u0394 — (orig \u2212 rec) exit blade angle inferred from face geometry (\u00b0)",
+        ]
         self._results_table = QtWidgets.QTableWidget(0, len(_COLS))
         self._results_table.setHorizontalHeaderLabels(_COLS)
+        for _ci, _tip in enumerate(_COL_TIPS):
+            self._results_table.horizontalHeaderItem(_ci).setToolTip(_tip)
         self._results_table.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers)
         self._results_table.setSelectionBehavior(
@@ -218,6 +285,15 @@ class PlantBuilderPanel:
         mono.setPointSize(8)
         self._results_table.setFont(mono)
         rp_layout.addWidget(self._results_table)
+
+        self._lbl_variance = QtWidgets.QLabel("")
+        self._lbl_variance.setWordWrap(True)
+        _vf = QtGui.QFont("Monospace")
+        _vf.setStyleHint(QtGui.QFont.TypeWriter)
+        _vf.setPointSize(8)
+        self._lbl_variance.setFont(_vf)
+        rp_layout.addWidget(self._lbl_variance)
+
         layout.addWidget(self._results_pane)
 
         # --- Status section ---
@@ -635,6 +711,51 @@ class PlantBuilderPanel:
     # Build from Cut List
     # ------------------------------------------------------------------
 
+    def _on_apply_wafer_range(self):
+        """Show only wafers in [from, to] (1-based); hide all others.
+
+        Matches any document object whose name follows the pattern
+        ``Wafer_*_<integer>`` — covers both original (``Wafer_{seg}_{i}``)
+        and reconstructed (``Wafer_{seg}_Rec_{i}``) objects.
+        """
+        import re
+        try:
+            import FreeCAD as App
+        except ImportError:
+            self._set_status("FreeCAD not available", error=True)
+            return
+
+        doc = App.activeDocument()
+        if doc is None:
+            self._set_status("No active document", error=True)
+            return
+
+        from_1 = self.spin_wafer_from.value()
+        to_1   = self.spin_wafer_to.value()
+        from_0 = from_1 - 1   # convert to 0-based index
+        to_0   = to_1   - 1
+
+        _pat = re.compile(r'^Wafer_.*?_(\d+)$')
+        changed = 0
+        for obj in doc.Objects:
+            m = _pat.match(obj.Name)
+            if m is None:
+                continue
+            wafer_idx = int(m.group(1))
+            visible = (from_0 <= wafer_idx <= to_0)
+            vo = getattr(obj, 'ViewObject', None)
+            if vo is not None:
+                try:
+                    vo.Visibility = visible
+                    changed += 1
+                except Exception:
+                    pass
+
+        doc.recompute()
+        self._set_status(
+            f"Showing wafers {from_1}\u2013{to_1} ({changed} objects updated)",
+            success=True)
+
     def _on_rebuild_from_cut_list(self):
         """Open a file dialog and reconstruct 3D geometry from a cut list."""
         start_dir = (
@@ -715,6 +836,9 @@ class PlantBuilderPanel:
         self._set_status(f"Aligning reconstruction to wafer {wafer_index}\u2026")
         QtWidgets.QApplication.processEvents()
 
+        sigma_blade = self.dspin_sigma_blade.value()
+        sigma_rot   = self.dspin_sigma_rot.value()
+
         errors = []
         successes = []
         try:
@@ -733,9 +857,17 @@ class PlantBuilderPanel:
                     # Report exit-ellipse discrepancy for the same wafer
                     try:
                         metrics = report_exit_ellipse_discrepancy(
-                            doc, seg_name, wafer_index, rec_wafers)
+                            doc, seg_name, wafer_index, rec_wafers,
+                            sigma_blade_deg=sigma_blade, sigma_rot_deg=sigma_rot)
                         self._add_result_row(
                             seg_name, wafer_index, method, metrics)
+                        build_s = metrics.get('build_sigma', {})
+                        if build_s:
+                            self._update_variance_label(
+                                build_s.get('n_wafers', 0),
+                                build_s.get('sigma_blade_deg', sigma_blade),
+                                build_s.get('sigma_rot_deg', sigma_rot),
+                                build_s.get('_radius_in', 1.0))
                     except Exception as rep_exc:
                         logger.warning("Exit report failed for '%s': %s",
                                        seg_name, rep_exc)
@@ -776,6 +908,24 @@ class PlantBuilderPanel:
     def _clear_results_table(self):
         self._results_table.setRowCount(0)
         self._result_rows.clear()
+        self._lbl_variance.setText("")
+
+    def _update_variance_label(self, n_wafers: int, sigma_blade: float,
+                               sigma_rot: float, radius_in: float):
+        """Update the build variance impact label shown below the results table."""
+        import math
+        if n_wafers <= 0 or sigma_blade <= 0.0 and sigma_rot <= 0.0:
+            self._lbl_variance.setText("")
+            return
+        sigma_b_rad    = math.radians(sigma_blade)
+        sigma_normal   = sigma_blade * math.sqrt(n_wafers)
+        sigma_spin     = sigma_rot   * math.sqrt(n_wafers)
+        sigma_lat      = radius_in * 25.4 * math.sin(sigma_b_rad) * math.sqrt(n_wafers)
+        self._lbl_variance.setText(
+            f"Build \u03c3 (1\u03c3, N={n_wafers}):  "
+            f"Normal \u00b1{sigma_normal:.1f}\u00b0  "
+            f"Spin \u00b1{sigma_spin:.1f}\u00b0  "
+            f"Lateral \u00b1{sigma_lat:.2f}\u202fmm")
 
     def _add_result_row(self, seg_name: str, wafer_index: int,
                         align_method: str, metrics: dict):

@@ -40,9 +40,9 @@ workflow:
       radius: 20.0
       points: ${knot_points}
       plane: xy
-    segment:
-      start_fraction: 0.27
-      end_fraction: 0.702
+#    segment:
+#      start_fraction: 0.27
+#      end_fraction: 0.702
     transformations:
     - operation: rotate
       axis: x

@@ -91,6 +91,10 @@ def parse_cut_list(filepath: str) -> list:
                 'curve_type': '',
                 'closed': True,          # default: closed curve
                 'initial_blade_deg': None,  # entry blade of wafer 0 (closed only)
+                'sigma_blade_deg': None,    # build variance: 1σ blade tilt
+                'sigma_rot_deg': None,      # build variance: 1σ cylinder rotation
+                '_has_mm_col': False,       # whether mm column is present in data rows
+                '_has_entry_exit_blade': False,  # whether EntryBlade°/ExitBlade° columns present
                 'rows': [],
             }
             in_wafer_settings = False
@@ -128,6 +132,22 @@ def parse_cut_list(filepath: str) -> list:
                 pass
             continue
 
+        # ── Build variance header lines ─────────────────────────────────
+        if 'Blade' in stripped and 'variance' in stripped and '±' in stripped:
+            try:
+                val = stripped.split('±', 1)[1].rstrip('°').strip()
+                current_seg['sigma_blade_deg'] = float(val)
+            except (ValueError, IndexError):
+                pass
+            continue
+        if 'Rot' in stripped and 'variance' in stripped and '±' in stripped:
+            try:
+                val = stripped.split('±', 1)[1].rstrip('°').strip()
+                current_seg['sigma_rot_deg'] = float(val)
+            except (ValueError, IndexError):
+                pass
+            continue
+
         # ── Wafer settings block ────────────────────────────────────────
         if stripped == 'Wafer settings:':
             in_wafer_settings = True
@@ -158,6 +178,8 @@ def parse_cut_list(filepath: str) -> list:
         # ── Header row → start collecting data ─────────────────────────
         if (stripped.startswith('Cut') and 'Length' in stripped
                 and 'Blade' in stripped):
+            current_seg['_has_mm_col'] = 'mm' in stripped.split()
+            current_seg['_has_entry_exit_blade'] = 'EntryBlade' in stripped
             in_data_rows = True
             continue
 
@@ -196,27 +218,66 @@ def parse_cut_list(filepath: str) -> list:
             continue
 
         length_str = ' '.join(length_parts)
-        length = _parse_fractional_inches(length_str)
 
-        if idx + 2 >= len(tokens):
+        # Optional mm column: appears right after the fractional length.
+        # When present, use the mm value as the authoritative length (higher precision).
+        has_mm = current_seg.get('_has_mm_col', False)
+        if has_mm and idx < len(tokens):
+            try:
+                mm_val = float(tokens[idx])
+                length = mm_val / 25.4
+                idx += 1
+            except ValueError:
+                length = _parse_fractional_inches(length_str)
+        else:
+            length = _parse_fractional_inches(length_str)
+
+        if idx >= len(tokens):
             logger.warning("Row %d: not enough tokens after length, skipping", cut_num)
             continue
 
         try:
-            blade_deg    = float(tokens[idx])
-            rot_deg      = float(tokens[idx + 1])
-            cylinder_deg = float(tokens[idx + 2])
+            blade_deg = float(tokens[idx])
+            idx += 1
         except ValueError:
-            logger.warning("Row %d: could not parse numeric columns, skipping", cut_num)
+            logger.warning("Row %d: could not parse blade_deg, skipping", cut_num)
             continue
 
-        current_seg['rows'].append({
+        # Optional EntryBlade° and ExitBlade° columns
+        has_entry_exit = current_seg.get('_has_entry_exit_blade', False)
+        theta_entry_deg = None
+        theta_exit_deg  = None
+        if has_entry_exit and idx + 1 < len(tokens):
+            try:
+                theta_entry_deg = float(tokens[idx])
+                theta_exit_deg  = float(tokens[idx + 1])
+                idx += 2
+            except ValueError:
+                pass
+
+        if idx + 1 >= len(tokens):
+            logger.warning("Row %d: not enough tokens for rot/cylinder, skipping", cut_num)
+            continue
+
+        try:
+            rot_deg      = float(tokens[idx])
+            cylinder_deg = float(tokens[idx + 1])
+        except ValueError:
+            logger.warning("Row %d: could not parse rot/cylinder columns, skipping", cut_num)
+            continue
+
+        row_dict = {
             'cut':          cut_num,
             'length':       length,
             'blade_deg':    blade_deg,
             'rot_deg':      rot_deg,
             'cylinder_deg': cylinder_deg,
-        })
+        }
+        if theta_entry_deg is not None:
+            row_dict['theta_entry_deg'] = theta_entry_deg
+        if theta_exit_deg is not None:
+            row_dict['theta_exit_deg'] = theta_exit_deg
+        current_seg['rows'].append(row_dict)
 
     if current_seg is not None:
         segments.append(current_seg)
@@ -423,7 +484,10 @@ def reconstruct_segment(segment_data: dict, max_wafers=None) -> list:
         logger.info("reconstruct_segment: limiting to first %d wafer(s)", max_wafers)
 
     for i, row in enumerate(rows):
-        theta_exit_deg = row['blade_deg']
+        # Use per-row EntryBlade°/ExitBlade° if present; fall back to symmetric Blade°.
+        if 'theta_entry_deg' in row:
+            theta_entry_deg = row['theta_entry_deg']
+        theta_exit_deg = row.get('theta_exit_deg', row['blade_deg'])
         rot_deg        = row['rot_deg']
         L              = row['length']
 
@@ -510,6 +574,8 @@ def reconstruct_segment(segment_data: dict, max_wafers=None) -> list:
                 # Exit mark direction in reconstruction local frame.
                 # Used by report_exit_ellipse_discrepancy.
                 'exit_mark_dir': exit_mark_dir_rec,
+                # Cylinder radius (inches) — used by build variance calculation.
+                'cylinder_radius_in': radius,
             }
             wafers.append(Wafer(solid_rec, i, plane1_rec, plane2_rec, geom))
             logger.info("  Wafer %d OK: volume=%.4f", i, solid_rec.Volume)
@@ -1227,7 +1293,9 @@ def _signed_angle_about_axis(v_from: App.Vector, v_to: App.Vector,
 
 
 def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
-                                    rec_wafers: list) -> dict:
+                                    rec_wafers: list,
+                                    sigma_blade_deg: float = 0.5,
+                                    sigma_rot_deg: float = 2.0) -> dict:
     """Compare original vs reconstruction exit ellipse for wafer k after alignment.
 
     Should be called after :func:`align_reconstruction_to_wafer` has been applied,
@@ -1389,6 +1457,25 @@ def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
                     orig_blade_deg, rec_blade_deg, orig_blade_deg - rec_blade_deg)
     logger.info("=" * len(hdr))
 
+    # ── Build variance statistics ──────────────────────────────────────────────
+    n = len(rec_wafers)
+    R_in = (rec_wafers[0].geometry.get('cylinder_radius_in', 1.0)
+            if rec_wafers else 1.0)
+    sigma_b_rad = math.radians(sigma_blade_deg)
+    build_sigma = {
+        'sigma_blade_deg':        sigma_blade_deg,
+        'sigma_rot_deg':          sigma_rot_deg,
+        'n_wafers':               n,
+        '_radius_in':             R_in,
+        'sigma_normal_cumul_deg': sigma_blade_deg * math.sqrt(n),
+        'sigma_spin_cumul_deg':   sigma_rot_deg   * math.sqrt(n),
+        'sigma_lateral_cumul_mm': R_in * 25.4 * math.sin(sigma_b_rad) * math.sqrt(n),
+    }
+    logger.info("  Build variance (1σ, N=%d): normal ±%.2f°  spin ±%.2f°  lateral ±%.3f mm",
+                n, build_sigma['sigma_normal_cumul_deg'],
+                build_sigma['sigma_spin_cumul_deg'],
+                build_sigma['sigma_lateral_cumul_mm'])
+
     return {
         'centroid_distance': dist,
         'centroid_axial':    axial,
@@ -1398,6 +1485,7 @@ def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
         'spin_angle_deg':    spin_angle_deg,
         'orig_blade_deg':    orig_blade_deg,
         'rec_blade_deg':     rec_blade_deg,
+        'build_sigma':       build_sigma,
     }
 
 

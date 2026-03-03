@@ -379,10 +379,11 @@ class LoftSegment:
                 reference_group.addObject(spine_obj)  # Only add to group
                 # logger.debug("Added spine")
 
-        # Create LCS group if needed
+        # Create LCS group if needed (hidden by default — toggle in model tree)
         lcs_group = None
         if self.segment_settings.get('show_lcs', False):
             lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
+            lcs_group.ViewObject.Visibility = False
             # logger.debug("Created LCS group")
 
         # Add wafers to wafer_group ONLY

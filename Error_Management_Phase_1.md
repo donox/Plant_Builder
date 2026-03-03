@@ -341,18 +341,111 @@ Replace the chord-polygon torsion approximation with a direct LCS-based computat
 
 Based on expected impact for a typical trefoil:
 
-| Rank | Candidate | Likely Impact | Effort |
-|------|-----------|---------------|--------|
-| 1 | B — Mark direction sign | ±180° spin on all wafers | Low |
-| 2 | C — Inflection encoding | Large step error at S-curves | Medium |
-| 3 | J — Rot° approximation | Small growing spin error | Medium |
-| 4 | A — Length rounding | ±0.8 mm axial per wafer | Low |
-| 5 | E — Chord vs. axial length | Systematic axial offset | Low |
-| 6 | D — Convention B mismatch | Small normal error at curves | High |
-| 7 | F — Closed-curve initialization | Large error if triggered | Low |
-| 8 | I — OCC sign randomness | Random ±180° (fallback only) | Low |
-| 9 | G — LCS numerical accuracy | Sub-0.01° (negligible) | Low |
-| 10 | H — Floating-point accumulation | Sub-nanometer (negligible) | None |
+| Rank | Candidate | Likely Impact | Effort | Status |
+|------|-----------|---------------|--------|--------|
+| 1 | B — Mark direction sign | ±180° spin on all wafers | Low | REQUIRES TESTING |
+| 2 | C — Inflection encoding | Large step error at S-curves | Medium | NOT A BUG (see §7) |
+| 3 | J — Rot° approximation | Small growing spin error | Medium | REQUIRES TESTING |
+| 4 | A — Length rounding | ±0.8 mm axial per wafer | Low | CONFIRMED — FIXED (mm col) |
+| 5 | E — Chord vs. axial length | Systematic axial offset | Low | NOT A BUG (see §7) |
+| 6 | D — Convention B mismatch | Small normal error at curves | High | CONFIRMED — FIXED (EntryBlade°/ExitBlade°) |
+| 7 | F — Closed-curve initialization | Large error if triggered | Low | REQUIRES TESTING |
+| 8 | I — OCC sign randomness | Random ±180° (fallback only) | Low | REQUIRES TESTING |
+| 9 | G — LCS numerical accuracy | Sub-0.01° (negligible) | Low | REQUIRES TESTING |
+| 10 | H — Floating-point accumulation | Sub-nanometer (negligible) | None | NOT A BUG (see §7) |
+
+---
+
+## 7. Confirmed Code Behaviors (2026-03-03 Audit)
+
+Code inspection (as of this date) establishes the following status for each candidate.
+
+---
+
+### A — CONFIRMED: Length rounds to 1/16"
+
+`src/driver.py` `_format_fractional_inches()`: `sixteenths = round(frac * 16)` → maximum rounding error ±(1/32)" = ±0.794 mm per wafer.
+
+**Fix implemented:** A `mm` column is now written alongside the fractional column (e.g., `35.05`). The parser reads the `mm` column when present and uses it (converted to inches) as `row['length']`, falling back to fractional parse when absent. No change to the fractional format (preserves human readability).
+
+---
+
+### D-partial — CONFIRMED: Single symmetric Blade° per wafer
+
+`src/driver.py` `_write_lofted_segment_block()`: `blade_angle = lift_angle_deg / 2.0`.
+
+`lift_angle_deg` is the dihedral angle between the two cutting-plane normals. Dividing by 2 assumes entry tilt = exit tilt, which holds exactly only for a symmetric wafer on a uniform curve. For a curved path with Convention B bisectors, the plane normal at a junction makes a different angle with each adjacent chord direction: `theta_entry ≠ theta_exit` in general.
+
+**Fix implemented:**
+- `src/wafer_loft.py` `generate_all_wafers_by_slicing()`: after each geometry dict is built, computes `theta_entry_deg` and `theta_exit_deg` from `acos(|plane_normal · chord_dir_unit|)` and stores them in the geometry dict.
+- `src/driver.py` `_write_lofted_segment_block()`: writes `EntryBlade°` and `ExitBlade°` columns alongside the existing `Blade°` (retained for backward compat).
+- `src/cut_list_reconstruction.py` `parse_cut_list()`: reads `EntryBlade°`/`ExitBlade°` columns if present and stores them as `row['theta_entry_deg']`/`row['theta_exit_deg']`. `reconstruct_segment()` uses them directly when available, instead of the symmetric approximation.
+
+---
+
+### C — NOT A BUG: Planar S-curve inflection gives Rot° = 0°
+
+For a planar forward-traveling S-curve, consecutive chord triplets at the inflection point remain coplanar. Both cross-product plane normals point in the same direction, so `rotation_angle_deg ≈ 0°`. This is **geometrically correct**: the M-axis does not need to flip for a smooth planar S-curve; curvature reversal without a chord hairpin does not require a 180° encoding. The 180° branch is only triggered when `acos(plane_A · plane_B) ≈ 180°`, which occurs for a true hairpin (chord physically reverses). Candidate C is dismissed as a code bug for typical planar sinusoidal use cases.
+
+---
+
+### E — NOT A BUG: chord_length IS the axial L
+
+`chord_length = |plane2['point'] − plane1['point']|` is the Euclidean distance between the two cutting-plane center points. In the reconstruction's local coordinate frame, the cylinder Z-axis IS the chord direction (axis from entry center to exit center). Therefore `L = chord_length` exactly. No axial projection correction is needed.
+
+---
+
+### H — NOT A BUG: Floating-point accumulation negligible
+
+At double precision, accumulated error over 100 wafers is bounded by ~3 × 10⁻¹³ mm — far below any measurable threshold. No action required.
+
+---
+
+### B, F, G, I, J — REQUIRES RUNTIME TESTING
+
+These candidates cannot be confirmed or dismissed from code inspection alone. They require the alignment + report tool to produce data on actual builds. See Section 3 for the diagnostic procedure.
+
+---
+
+## 8. Physical Build Variance
+
+### Statistical model
+
+Physical woodworking introduces per-cut independent errors that accumulate as a random walk over N cuts. Assuming independent Gaussian errors with 1σ = one standard deviation:
+
+| Error source | Per-cut 1σ | Cumulative at N cuts | Physical unit |
+|-------------|-----------|---------------------|--------------|
+| Blade tilt | σ_b | σ_b × √N | degrees normal-angle |
+| Blade tilt (lateral) | R × sin(σ_b_rad) | R × sin(σ_b_rad) × √N | mm lateral shift |
+| Rot spin | σ_r | σ_r × √N | degrees spin |
+
+Typical woodworking tolerances: `σ_b = 0.5°`, `σ_r = 2.0°`.
+
+For a 2" diameter (1" radius) cylinder and N = 20 wafers:
+- Normal: ±0.5° × √20 ≈ **±2.2°**
+- Spin: ±2.0° × √20 ≈ **±8.9°**
+- Lateral: 25.4 mm × sin(0.5°) × √20 ≈ **±0.99 mm**
+
+### Implementation
+
+**`src/driver.py`** writes variance defaults in the cut list header:
+```
+  Blade° variance (1σ): ±0.500°
+  Rot° variance (1σ): ±2.000°
+```
+
+**`src/cut_list_reconstruction.py`** `parse_cut_list()` reads these lines into `segment_data['sigma_blade_deg']` and `segment_data['sigma_rot_deg']`.
+
+**`src/cut_list_reconstruction.py`** `report_exit_ellipse_discrepancy()` now accepts `sigma_blade_deg` and `sigma_rot_deg` parameters (default 0.5° and 2.0°) and includes a `build_sigma` key in its return dict with cumulative 1σ bounds.
+
+**`src/gui/task_panel.py`** adds a "Build Variance" section with "Blade σ°" and "Rot σ°" spin boxes. After each align+report call, the variance impact label below the results table is updated:
+```
+Build σ (1σ, N=20):  Normal ±2.2°  Spin ±8.9°  Lateral ±0.99 mm
+```
+
+### Interpretation
+
+The variance bounds should be read as: _if every reconstruction error is within the code's computed bounds, and physical build variance is within these 1σ values, the expected cumulative positional error at the end of the assembly is dominated by physical build variance, not code errors._ The results table columns (`Nrm°`, `Spin°`, `Ctrd mm`) are directly comparable to these bounds. Values within ±1σ are consistent with expected physical variation; values beyond ±3σ indicate genuine code errors.
 
 ---
 

@@ -843,6 +843,18 @@ class LoftWaferGenerator:
             wafer_data['geometry']['collinearity_angle_deg'] = collinearity_angle
             wafer_data['geometry']['chord_azimuth_deg'] = chord_azimuth
 
+            # Per-face blade angles (θ_entry and θ_exit from plane normals vs. chord)
+            _chord_cv = chord_vectors[i]
+            if _chord_cv.Length > 1e-9:
+                _chord_dir = App.Vector(_chord_cv.x, _chord_cv.y, _chord_cv.z)
+                _chord_dir.normalize()
+                _p1_n = wafer_data['plane1']['normal']
+                _p2_n = wafer_data['plane2']['normal']
+                _cos_e = max(-1.0, min(1.0, abs(_p1_n.dot(_chord_dir))))
+                _cos_x = max(-1.0, min(1.0, abs(_p2_n.dot(_chord_dir))))
+                wafer_data['geometry']['theta_entry_deg'] = math.degrees(math.acos(_cos_e))
+                wafer_data['geometry']['theta_exit_deg']  = math.degrees(math.acos(_cos_x))
+
             logger.coord(f"Wafer {i}: rotation = {rotation_angle_deg:.2f}°, "
                          f"collinearity = {collinearity_angle:.4f}°, azimuth = {chord_azimuth:.2f}°")
 

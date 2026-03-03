@@ -1021,11 +1021,14 @@ class Driver:
         f.write(f"  Cylinder° initial offset: {initial_offset:.1f}°\n")
         if closed and initial_blade_deg is not None:
             f.write(f"  Initial blade: {initial_blade_deg:.3f}°\n")
+        f.write("  Blade° variance (1σ): ±0.500°\n")
+        f.write("  Rot° variance (1σ): ±2.000°\n")
         f.write("  Cumulative = Total cylinder length used (mark and cut)\n\n")
 
-        f.write(f"{'Cut':<4} {'Length':<10} {'Blade°':<8} {'Rot°':<9} {'Cylinder°':<10} ")
+        f.write(f"{'Cut':<4} {'Length':<10} {'mm':<8} {'Blade°':<8} "
+                f"{'EntryBlade°':<12} {'ExitBlade°':<11} {'Rot°':<9} {'Cylinder°':<10} ")
         f.write(f"{'Collin°':<10} {'Azimuth°':<10} {'Cumulative':<12} {'Done':<6}\n")
-        f.write("-" * 90 + "\n")
+        f.write("-" * 121 + "\n")
 
         cumulative_length = 0.0
         cumulative_rotation = 0.0
@@ -1057,13 +1060,17 @@ class Driver:
 
             length_str = self._format_fractional_inches(chord_length)
             cumul_str = self._format_fractional_inches(cumulative_length)
+            chord_mm    = chord_length * 25.4
+            theta_entry = float(geom.get("theta_entry_deg", blade_angle))
+            theta_exit  = float(geom.get("theta_exit_deg",  blade_angle))
 
             f.write(
-                f"{i + 1:<4} {length_str:<10} {blade_angle:<8.3f} {rotation:<9.3f} {cylinder_angle:<10.0f} "
+                f"{i + 1:<4} {length_str:<10} {chord_mm:<8.2f} {blade_angle:<8.3f} "
+                f"{theta_entry:<12.3f} {theta_exit:<11.3f} {rotation:<9.3f} {cylinder_angle:<10.0f} "
                 f"{collinearity:<10.4f} {azimuth:<10.2f} {cumul_str:<12} {'[ ]':<6}\n"
             )
 
-        f.write("\n" + "-" * 90 + "\n")
+        f.write("\n" + "-" * 121 + "\n")
         f.write(f"Total cylinder length required: {self._format_fractional_inches(cumulative_length)}\n")
         f.write(f"  ({cumulative_length:.3f} inches = {cumulative_length * 25.4:.1f} mm)\n\n")
 
@@ -1105,8 +1112,13 @@ class Driver:
         cuts_file.write("Cut:        Wafer number in sequence\n\n")
         cuts_file.write("Length:     Length of wafer measured along the chord (longest outside edge)\n")
         cuts_file.write("            This is the distance to mark on the cylinder for cutting\n\n")
-        cuts_file.write("Blade°:     Blade tilt angle from vertical (half of lift angle)\n")
-        cuts_file.write("            Set your saw blade to this angle for the cut\n\n")
+        cuts_file.write("mm:         Same length in millimetres (higher precision, parser prefers this)\n\n")
+        cuts_file.write("Blade°:     Blade tilt angle from vertical (half of dihedral lift angle)\n")
+        cuts_file.write("            Symmetric approximation; prefer EntryBlade°/ExitBlade° for accuracy\n\n")
+        cuts_file.write("EntryBlade°: Actual blade tilt at the entry (plane1) face of this wafer\n")
+        cuts_file.write("             Computed from angle between plane1 normal and chord direction\n\n")
+        cuts_file.write("ExitBlade°: Actual blade tilt at the exit (plane2) face of this wafer\n")
+        cuts_file.write("            Computed from angle between plane2 normal and chord direction\n\n")
         cuts_file.write("Rot°:       Rotation angle - the incremental twist of the curve at this wafer\n")
         cuts_file.write("            This controls the Z-rise and torsion of the structure\n\n")
         cuts_file.write("Cylinder°:  Absolute rotational position of cylinder for this cut\n")
