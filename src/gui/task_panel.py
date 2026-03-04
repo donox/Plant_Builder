@@ -149,6 +149,14 @@ class PlantBuilderPanel:
         )
         self.btn_rebuild.clicked.connect(self._on_rebuild_from_cut_list)
         rebuild_row.addWidget(self.btn_rebuild)
+        self.btn_correction_analysis = QtWidgets.QPushButton("Correction Analysis")
+        self.btn_correction_analysis.setMinimumHeight(32)
+        self.btn_correction_analysis.setToolTip(
+            "Analyse the loaded cut list to find optimal wafers to split\n"
+            "as rotation-correction points during the physical build."
+        )
+        self.btn_correction_analysis.clicked.connect(self._on_correction_analysis)
+        rebuild_row.addWidget(self.btn_correction_analysis)
         layout.addLayout(rebuild_row)
 
         # --- Wafer visibility range ---
@@ -209,7 +217,7 @@ class PlantBuilderPanel:
         self.dspin_sigma_blade = QtWidgets.QDoubleSpinBox()
         self.dspin_sigma_blade.setRange(0.0, 10.0)
         self.dspin_sigma_blade.setSingleStep(0.1)
-        self.dspin_sigma_blade.setValue(0.50)
+        self.dspin_sigma_blade.setValue(0.06)
         self.dspin_sigma_blade.setDecimals(2)
         self.dspin_sigma_blade.setFixedWidth(65)
         self.dspin_sigma_blade.setToolTip(
@@ -220,8 +228,8 @@ class PlantBuilderPanel:
         self.dspin_sigma_rot = QtWidgets.QDoubleSpinBox()
         self.dspin_sigma_rot.setRange(0.0, 30.0)
         self.dspin_sigma_rot.setSingleStep(0.5)
-        self.dspin_sigma_rot.setValue(2.0)
-        self.dspin_sigma_rot.setDecimals(1)
+        self.dspin_sigma_rot.setValue(1.15)
+        self.dspin_sigma_rot.setDecimals(2)
         self.dspin_sigma_rot.setFixedWidth(65)
         self.dspin_sigma_rot.setToolTip(
             "1\u03c3 cylinder rotation uncertainty per cut (degrees)")
@@ -771,6 +779,8 @@ class PlantBuilderPanel:
         if not path:
             return
 
+        self._last_cuts_file = path
+
         import FreeCAD as App
         import FreeCADGui as Gui
 
@@ -798,6 +808,50 @@ class PlantBuilderPanel:
             QtWidgets.QMessageBox.critical(
                 self.form, "Reconstruction Error", str(exc)
             )
+
+    # ------------------------------------------------------------------
+    # Correction Point Analysis
+    # ------------------------------------------------------------------
+
+    def _on_correction_analysis(self):
+        """Analyse the last loaded cut list for optimal correction point wafers."""
+        if not self._last_cuts_file or not os.path.isfile(self._last_cuts_file):
+            QtWidgets.QMessageBox.warning(
+                self.form,
+                "No Cut List",
+                "No cut list loaded.\nRun 'Build from Cut List' first.",
+            )
+            return
+
+        sigma_rot = self.dspin_sigma_rot.value()
+
+        try:
+            from cut_list_reconstruction import parse_cut_list
+            from analyzer.correction_analysis import (
+                analyse_correction_points, format_correction_report)
+
+            segments = parse_cut_list(self._last_cuts_file)
+            if not segments:
+                self._set_status("Correction analysis: no segments found.", error=True)
+                return
+
+            self.btn_toggle_log.setChecked(True)
+            self._toggle_log_pane(True)
+
+            for seg in segments:
+                result = analyse_correction_points(
+                    seg['rows'], sigma_rot_deg=sigma_rot)
+                report = format_correction_report(seg['name'], result)
+                for line in report.splitlines():
+                    import logging
+                    logging.getLogger('PlantBuilder').info("%s", line)
+
+            self._set_status("Correction analysis complete.", success=True)
+
+        except Exception as exc:
+            self._set_status(f"Correction analysis failed: {exc}", error=True)
+            QtWidgets.QMessageBox.critical(
+                self.form, "Correction Analysis Error", str(exc))
 
     # ------------------------------------------------------------------
     # Align Reconstruction

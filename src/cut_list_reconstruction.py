@@ -1294,8 +1294,8 @@ def _signed_angle_about_axis(v_from: App.Vector, v_to: App.Vector,
 
 def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
                                     rec_wafers: list,
-                                    sigma_blade_deg: float = 0.5,
-                                    sigma_rot_deg: float = 2.0) -> dict:
+                                    sigma_blade_deg: float = 0.06,
+                                    sigma_rot_deg: float = 1.15) -> dict:
     """Compare original vs reconstruction exit ellipse for wafer k after alignment.
 
     Should be called after :func:`align_reconstruction_to_wafer` has been applied,

@@ -2,12 +2,12 @@
 
 ## 1. Current State
 
-The tooling as of 2026-03-03 provides:
+The tooling as of 2026-03-04 provides:
 
 **Reconstruction pipeline (`cut_list_reconstruction.py`):**
 - `reconstruct_and_visualize()` parses a cut list `.txt` file, builds each wafer in its local frame (`Z = cylinder axis, M = X = (1,0,0)`), and assembles by the mark-alignment rule from `Wafer Reconstruction.txt`. Returns `{seg_name: wafer_list}`.
 - `align_reconstruction_to_wafer(doc, seg_name, wafer_index_1based, rec_wafers)` applies a 6DOF (or 5DOF) rigid placement to the reconstruction Part so that a specified wafer's entry ellipse coincides with the original's. When LCS objects are present, the alignment is exact including M-axis spin. Without LCS, only the face normal (5DOF) is constrained.
-- `report_exit_ellipse_discrepancy(doc, seg_name, wafer_index_1based, rec_wafers)` computes, for the same wafer after alignment: centroid distance (total/axial/lateral), normal angle, major-axis spin, and Blade° comparison.
+- `report_exit_ellipse_discrepancy(doc, seg_name, wafer_index_1based, rec_wafers)` computes, for the same wafer after alignment: centroid distance (total/axial/lateral), normal angle, major-axis spin, and Blade° comparison. **Note**: `Nrm°` uses the LCS normal (reliable); `Bld°Δ` now uses the same LCS normal to select the correct exit face for `orig_blade_deg` extraction (face selection bug fixed 2026-03-04 — previously always returned the smaller-area face, giving θ_entry instead of θ_exit when θ_exit > θ_entry).
 
 **Results table (`task_panel.py`, `_results_table`):**
 - Columns: `Wfr | Seg | Aln | Ctrd mm | Axl mm | Lat mm | Nrm° | Spin° | Bld°Δ`
@@ -18,8 +18,8 @@ The tooling as of 2026-03-03 provides:
 **Original builder (`wafer_loft.py`, `driver.py`, `loft_segment.py`):**
 - Convention B chord-bisector cutting planes at interior junctions; spine-tangent planes at endpoints.
 - LCS objects `LCS_{seg}_{i}_1` (entry) and `LCS_{seg}_{i}_2` (exit) per wafer: `Z = chord direction` (inward), `X = major axis of the ellipse` (flipped so `normal.dot(chord) > 0`).
-- Blade° written to cut list = `lift_angle_deg / 2.0` where `lift_angle_deg = acos(n1 · n2)`. Length written as fractional inches rounded to nearest 1/16".
-- Rot° computed from three consecutive chord vectors (cross-product polygon torsion).
+- Blade° written to cut list = `lift_angle_deg / 2.0` (symmetric average), plus separate `EntryBlade°` and `ExitBlade°` per face from `acos(|plane_normal · chord_dir_unit|)`. Length written as fractional inches plus exact `mm` column.
+- Rot° computed exactly from `_lcs_signed_angle(major_axis_entry, major_axis_exit, chord_direction)` using the LCS major-axis vectors (LCS-based exact computation, replaces chord-polygon torsion approximation — candidate J fixed 2026-03-03).
 
 ---
 
@@ -345,7 +345,7 @@ Based on expected impact for a typical trefoil:
 |------|-----------|---------------|--------|--------|
 | 1 | B — Mark direction sign | ±180° spin on all wafers | Low | REQUIRES TESTING |
 | 2 | C — Inflection encoding | Large step error at S-curves | Medium | NOT A BUG (see §7) |
-| 3 | J — Rot° approximation | Small growing spin error | Medium | REQUIRES TESTING |
+| 3 | J — Rot° approximation | Small growing spin error | Medium | CONFIRMED — FIXED (LCS exact) |
 | 4 | A — Length rounding | ±0.8 mm axial per wafer | Low | CONFIRMED — FIXED (mm col) |
 | 5 | E — Chord vs. axial length | Systematic axial offset | Low | NOT A BUG (see §7) |
 | 6 | D — Convention B mismatch | Small normal error at curves | High | CONFIRMED — FIXED (EntryBlade°/ExitBlade°) |
@@ -401,7 +401,21 @@ At double precision, accumulated error over 100 wafers is bounded by ~3 × 10⁻
 
 ---
 
-### B, F, G, I, J — REQUIRES RUNTIME TESTING
+### J — CONFIRMED AND FIXED: Rot° chord-polygon torsion approximation (2026-03-03)
+
+The chord-polygon torsion approximation was replaced with an exact LCS-based computation in `generate_all_wafers_by_slicing()`. The rotation angle is now computed as `_lcs_signed_angle(major_axis_entry, major_axis_exit, chord_direction)` using the major-axis vectors stored in the geometry dict. The same normal-flip applied in `generate_wafers()` (`if normal.dot(chord_unit) < 0: major_axis = -major_axis`) is applied before the call.
+
+---
+
+### Bld°Δ face selection bug — FIXED (2026-03-04)
+
+`orig_blade_deg` in `report_exit_ellipse_discrepancy` used `_find_planar_faces` (area-sorted, largest first) plus a chord dot-product test to select the exit face. The dot product is always negative regardless of ordering (face outward normals always oppose the chord to the other face), so the code always picked `fb` — the smaller-area face. When θ_exit > θ_entry the exit face is larger (= `fa`), so `fb` = entry face was incorrectly returned. Symptom: `Nrm° = 0.00` (LCS-based, correct) but `Bld°Δ = θ_entry − θ_exit < 0`.
+
+**Fix**: replaced the area-sort/dot-product selection with `exit_face = max(planar, key=lambda f: abs(_face_normal(f).dot(orig_exit_inward)))`, using the already-correct LCS-based `orig_exit_inward` vector as the reference.
+
+---
+
+### B, F, G, I — REQUIRES RUNTIME TESTING
 
 These candidates cannot be confirmed or dismissed from code inspection alone. They require the alignment + report tool to produce data on actual builds. See Section 3 for the diagnostic procedure.
 
@@ -419,12 +433,16 @@ Physical woodworking introduces per-cut independent errors that accumulate as a 
 | Blade tilt (lateral) | R × sin(σ_b_rad) | R × sin(σ_b_rad) × √N | mm lateral shift |
 | Rot spin | σ_r | σ_r × √N | degrees spin |
 
-Typical woodworking tolerances: `σ_b = 0.5°`, `σ_r = 2.0°`.
+Measured tool precision (2026-03-04):
+- Blade angle set with a digital angle ruler accurate to ±0.1°: uniform error ±0.1° → **σ_b = 0.1°/√3 ≈ 0.06°**
+- Rotation set with a simple protractor accurate to ±2°: uniform error ±2° → **σ_r = 2°/√3 ≈ 1.15°**
+
+Rotation error dominates blade error by ~20×; improving the protractor yields far greater benefit than improving blade angle setting.
 
 For a 2" diameter (1" radius) cylinder and N = 20 wafers:
-- Normal: ±0.5° × √20 ≈ **±2.2°**
-- Spin: ±2.0° × √20 ≈ **±8.9°**
-- Lateral: 25.4 mm × sin(0.5°) × √20 ≈ **±0.99 mm**
+- Normal: ±0.06° × √20 ≈ **±0.27°**
+- Spin: ±1.15° × √20 ≈ **±5.1°**
+- Lateral: 25.4 mm × sin(0.06°) × √20 ≈ **±0.12 mm**
 
 ### Implementation
 
@@ -436,16 +454,84 @@ For a 2" diameter (1" radius) cylinder and N = 20 wafers:
 
 **`src/cut_list_reconstruction.py`** `parse_cut_list()` reads these lines into `segment_data['sigma_blade_deg']` and `segment_data['sigma_rot_deg']`.
 
-**`src/cut_list_reconstruction.py`** `report_exit_ellipse_discrepancy()` now accepts `sigma_blade_deg` and `sigma_rot_deg` parameters (default 0.5° and 2.0°) and includes a `build_sigma` key in its return dict with cumulative 1σ bounds.
+**`src/cut_list_reconstruction.py`** `report_exit_ellipse_discrepancy()` accepts `sigma_blade_deg` and `sigma_rot_deg` parameters (defaults 0.06° and 1.15°) and includes a `build_sigma` key in its return dict with cumulative 1σ bounds.
 
-**`src/gui/task_panel.py`** adds a "Build Variance" section with "Blade σ°" and "Rot σ°" spin boxes. After each align+report call, the variance impact label below the results table is updated:
+**`src/gui/task_panel.py`** has a "Build Variance" section with "Blade σ°" and "Rot σ°" spin boxes (defaults 0.06°, 1.15°). After each align+report call, the variance impact label updates:
 ```
-Build σ (1σ, N=20):  Normal ±2.2°  Spin ±8.9°  Lateral ±0.99 mm
+Build σ (1σ, N=20):  Normal ±0.27°  Spin ±5.1°  Lateral ±0.12 mm
 ```
 
 ### Interpretation
 
 The variance bounds should be read as: _if every reconstruction error is within the code's computed bounds, and physical build variance is within these 1σ values, the expected cumulative positional error at the end of the assembly is dominated by physical build variance, not code errors._ The results table columns (`Nrm°`, `Spin°`, `Ctrd mm`) are directly comparable to these bounds. Values within ±1σ are consistent with expected physical variation; values beyond ±3σ indicate genuine code errors.
+
+---
+
+## 9. Correction Point Analysis (added 2026-03-04)
+
+### Concept
+
+Spin error accumulates as a random walk: after k cuts, the expected 1σ error is σ_r × √k. A **correction point** resets the walk to zero. It is created by splitting one wafer at its midpoint with a perpendicular (blade = 0°) cut, creating a flat circular joint. Because a flat circle is rotationally symmetric, the cylinder can be freely re-indexed at that joint during the physical build to absorb any accumulated spin error before proceeding.
+
+The split produces two modified rows in the cut list:
+
+| Original | Half A | Half B |
+|----------|--------|--------|
+| θ_entry, θ_exit, Rot°, L | θ_entry, 0°, 0°, L/2 | 0°, θ_exit, Rot°+ε, L/2 |
+
+where ε is the correction rotation measured at build time.
+
+### Correction Analysis Tool
+
+**`src/analyzer/correction_analysis.py`** — pure-numeric, no FreeCAD dependency.
+
+`analyse_correction_points(rows, sigma_rot_deg, top_n=5)` scores every possible split wafer and every possible split pair. Sorting is by `max_err_deg` (primary) and `max_blade_deg` (secondary tiebreaker).
+
+The "Correction Analysis" button in the task panel (next to "Build from Cut List") runs this analysis on the last loaded cut list using the current "Rot σ°" spinner value, and prints the report to the log pane.
+
+### Reading the Correction Analysis Report
+
+**Single correction table** — each row is a candidate wafer to split:
+
+| Column | Meaning |
+|--------|---------|
+| `Rank` | 1 = best |
+| `Cut` | Cut number from the cut list |
+| `SplitAt` | Effective correction position in wafer units (cut − 1 + 0.5) |
+| `Before` | Wafers in the section before the correction |
+| `After` | Wafers in the section after the correction |
+| `MaxErr` | σ_rot × √(longer section) — the 1σ spin error at the worst point |
+| `MaxBlade` | Larger of entry/exit blade angle — higher = Z-axis mark easier to read |
+| `entry / exit` | Individual blade angles of the two faces of the split wafer |
+
+**Two-correction table** — each row is a candidate pair of wafers to split:
+
+| Column | Meaning |
+|--------|---------|
+| `Cuts` | The two cut numbers (A, B) |
+| `Sec1/2/3` | The three section lengths in wafers |
+| `MaxErr` | σ_rot × max(√sec1, √sec2, √sec3) |
+| `Blades A/B` | MaxBlade for each of the two split wafers |
+
+**Ideal positions**: one correction at N/2 (±0° improvement); two corrections at N/3 and 2N/3. Deviations from ideal depend on which wafers have blade angles making them suitable candidates.
+
+**Example** (N=20, σ_r=1.15°): no corrections → max error 5.14°; best single correction (wafer 10) → 3.24°; best double correction (wafers 6+13) → 2.65°.
+
+### Measuring and Applying the Correction
+
+**Z-axis mark scheme** (recommended): before each cut, scribe a mark at the highest point of the cylinder in the saw jig. This records the rotation state at every cut using gravity as a free reference. At the correction point's flat face:
+
+1. Read the Cylinder° value for that cut from the cut list — this is the nominal mark angle from the build's reference vertical.
+2. Place a digital angle gauge against the most recent elliptical face (last face before the flat cut) and measure the actual major-axis angle from vertical.
+3. Correction ε = actual − nominal.
+4. Before making the next cut after the flat joint, rotate the cylinder by −ε from its current position.
+5. Update the second-half row's Rot° to Rot°_original + ε.
+
+**Distance measurement** (supplementary): three fixed reference points in the lab give 3D position, which quantifies accumulated position drift (blade/length errors). This is complementary to spin correction, not a substitute.
+
+### Relationship to the User Guide
+
+This section describes _what tools are available_ and _how to interpret their output_. The physical build procedure — how to use the saw jig, how to scribe marks, how to set up reference points, and the step-by-step correction workflow — belongs in a separate User Guide document.
 
 ---
 
@@ -458,6 +544,7 @@ The variance bounds should be read as: _if every reconstruction error is within 
 | `src/driver.py` | Cut list writer: Length formatting, Blade°/Rot° output, initial blade — source of A, E, F |
 | `src/gui/task_panel.py` | Results table and alignment UI: where diagnostic sweeps are run interactively |
 | `Wafer Reconstruction.txt` | Authoritative spec: sign conventions, mark definitions, assembly rule |
+| `src/analyzer/correction_analysis.py` | Correction point candidate selection — pure-numeric, no FreeCAD dependency |
 
 ---
 
