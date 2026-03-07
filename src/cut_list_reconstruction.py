@@ -15,6 +15,7 @@ Entry point: reconstruct_and_visualize(App, Gui, filepath, max_wafers=None)
 """
 
 import math
+import re
 
 import FreeCAD as App
 import Part
@@ -45,6 +46,102 @@ def _parse_fractional_inches(s: str) -> float:
         num, den = parts[1].split('/')
         return whole + int(num) / int(den)
     return float(whole)
+
+
+# ---------------------------------------------------------------------------
+# Assembly section parser (supplements minimal cut list format)
+# ---------------------------------------------------------------------------
+
+def _merge_assembly_data(lines: list, segments: list) -> None:
+    """Parse the ASSEMBLY / PLACEMENT LIST section and fill Length/EntryBlade°/
+    ExitBlade°/Rot° into rows of segments that used the minimal cut list format."""
+    if not any(s.get('_minimal_cut_list') for s in segments):
+        return
+
+    in_assy      = False
+    in_assy_data = False
+    seg_idx      = -1        # index into segments (matches assembly section order)
+    row_pos      = 0         # row within current segment
+
+    assy_hdr_pat = re.compile(r'^\s*Wafer\s+Length\s+mm\s', re.IGNORECASE)
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+
+        if 'ASSEMBLY / PLACEMENT LIST' in stripped:
+            in_assy      = True
+            in_assy_data = False
+            seg_idx      = -1
+            continue
+
+        if not in_assy:
+            continue
+
+        # All-dash lines (column header separator) — must check BEFORE '---' pattern
+        if stripped and all(c == '-' for c in stripped):
+            continue
+
+        # Segment block separator: --- Name ---
+        if stripped.startswith('---') and stripped.endswith('---'):
+            seg_idx     += 1
+            in_assy_data = False
+            row_pos      = 0
+            continue
+
+        # Column header line
+        if assy_hdr_pat.match(stripped):
+            in_assy_data = True
+            continue
+
+        if not in_assy_data or not stripped:
+            continue
+
+        if seg_idx < 0 or seg_idx >= len(segments):
+            continue
+        seg = segments[seg_idx]
+        if not seg.get('_minimal_cut_list') or row_pos >= len(seg['rows']):
+            row_pos += 1
+            continue
+
+        tokens = stripped.split()
+        if not tokens:
+            continue
+
+        # idx starts at 1 (skip wafer label)
+        idx = 1
+
+        # Fractional-inch length (1 or 2 tokens ending with '"')
+        while idx < len(tokens) and not tokens[idx].endswith('"'):
+            idx += 1
+        frac_str = ' '.join(tokens[1:idx + 1]) if idx < len(tokens) else ''
+        if idx < len(tokens):
+            idx += 1   # advance past the closing '"' token
+
+        # mm value — prefer for precision
+        mm_val = None
+        if idx < len(tokens):
+            try:
+                mm_val = float(tokens[idx]); idx += 1
+            except ValueError:
+                pass
+
+        length = (mm_val / 25.4) if mm_val is not None else _parse_fractional_inches(frac_str)
+
+        # EntryBlade°, ExitBlade°, Rot°
+        try:
+            theta_entry = float(tokens[idx]);     idx += 1
+            theta_exit  = float(tokens[idx]);     idx += 1
+            rot         = float(tokens[idx]);     idx += 1
+        except (ValueError, IndexError):
+            row_pos += 1
+            continue
+
+        row = seg['rows'][row_pos]
+        row['length']          = length
+        row['theta_entry_deg'] = theta_entry
+        row['theta_exit_deg']  = theta_exit
+        row['rot_deg']         = rot
+        row_pos += 1
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +190,10 @@ def parse_cut_list(filepath: str) -> list:
                 'initial_blade_deg': None,  # entry blade of wafer 0 (closed only)
                 'sigma_blade_deg': None,    # build variance: 1σ blade tilt
                 'sigma_rot_deg': None,      # build variance: 1σ cylinder rotation
-                '_has_mm_col': False,       # whether mm column is present in data rows
-                '_has_set_len_col': False,  # whether SetLen/SetMM columns are present
-                '_has_entry_exit_blade': False,  # whether EntryBlade°/ExitBlade° columns present
+                '_has_mm_col': False,
+                '_has_set_len_col': False,
+                '_has_entry_exit_blade': False,
+                '_minimal_cut_list': False,  # True = no Length/Rot° in cut list; read from assembly
                 'rows': [],
             }
             in_wafer_settings = False
@@ -177,14 +275,17 @@ def parse_cut_list(filepath: str) -> list:
             continue
 
         # ── Header row → start collecting data ─────────────────────────
-        if (stripped.startswith('Cut') and 'Length' in stripped
+        if (stripped.startswith('Cut')
+                and ('Length' in stripped or 'SetLen' in stripped)
                 and 'Blade' in stripped):
+            has_length = 'Length' in stripped
             current_seg['_has_mm_col'] = 'mm' in stripped.split()
             current_seg['_has_set_len_col'] = 'SetLen' in stripped
             current_seg['_has_entry_exit_blade'] = 'EntryBlade' in stripped
-            # New column order: SetLen appears before Length in the header.
+            current_seg['_minimal_cut_list'] = not has_length
+            # New column order: SetLen appears before Length in header.
             current_seg['_new_col_order'] = (
-                'SetLen' in stripped
+                'SetLen' in stripped and has_length
                 and stripped.index('SetLen') < stripped.index('Length')
             )
             in_data_rows = True
@@ -253,10 +354,13 @@ def parse_cut_list(filepath: str) -> list:
                     if idx < len(tokens) and tokens[idx] == ']':
                         idx += 1
 
-        if new_order:
+        minimal = current_seg.get('_minimal_cut_list', False)
+
+        if new_order or minimal:
             # ── New column order ─────────────────────────────────────────
             # Cut | SetLen | SetMM | Blade° | Cylinder° | Done |
-            # Length | mm | EntryBlade° | ExitBlade° | Rot° | ...
+            # [Length | mm | EntryBlade° | ExitBlade° | Rot°] | Cumulative
+            # (minimal format omits everything after Done)
 
             if has_set_len:
                 _skip_frac_and_mm()     # skip SetLen + SetMM
@@ -274,33 +378,40 @@ def parse_cut_list(filepath: str) -> list:
 
             _skip_done()
 
-            length_str = _read_frac("length")
-            if not length_str:
-                logger.warning("Row %d: no length token found, skipping", cut_num)
-                continue
-
-            if has_mm and idx < len(tokens):
-                try:
-                    length = float(tokens[idx]) / 25.4; idx += 1
-                except ValueError:
-                    length = _parse_fractional_inches(length_str)
+            if minimal:
+                # Length/Rot°/EntryBlade°/ExitBlade° will come from assembly section
+                length          = 0.0
+                theta_entry_deg = None
+                theta_exit_deg  = None
+                rot_deg         = 0.0
             else:
-                length = _parse_fractional_inches(length_str)
+                length_str = _read_frac("length")
+                if not length_str:
+                    logger.warning("Row %d: no length token found, skipping", cut_num)
+                    continue
 
-            theta_entry_deg = theta_exit_deg = None
-            if has_entry_exit and idx + 1 < len(tokens):
+                if has_mm and idx < len(tokens):
+                    try:
+                        length = float(tokens[idx]) / 25.4; idx += 1
+                    except ValueError:
+                        length = _parse_fractional_inches(length_str)
+                else:
+                    length = _parse_fractional_inches(length_str)
+
+                theta_entry_deg = theta_exit_deg = None
+                if has_entry_exit and idx + 1 < len(tokens):
+                    try:
+                        theta_entry_deg = float(tokens[idx])
+                        theta_exit_deg  = float(tokens[idx + 1])
+                        idx += 2
+                    except ValueError:
+                        pass
+
                 try:
-                    theta_entry_deg = float(tokens[idx])
-                    theta_exit_deg  = float(tokens[idx + 1])
-                    idx += 2
-                except ValueError:
-                    pass
-
-            try:
-                rot_deg = float(tokens[idx]); idx += 1
-            except (ValueError, IndexError):
-                logger.warning("Row %d: could not parse rot_deg, skipping", cut_num)
-                continue
+                    rot_deg = float(tokens[idx]); idx += 1
+                except (ValueError, IndexError):
+                    logger.warning("Row %d: could not parse rot_deg, skipping", cut_num)
+                    continue
 
         else:
             # ── Old column order (backward-compatible) ───────────────────
@@ -368,6 +479,10 @@ def parse_cut_list(filepath: str) -> list:
 
     if current_seg is not None:
         segments.append(current_seg)
+
+    # For minimal-format cut lists, fill in Length/Rot°/EntryBlade°/ExitBlade°
+    # from the ASSEMBLY / PLACEMENT LIST section of the same file.
+    _merge_assembly_data(lines, segments)
 
     logger.info("Parsed %d segment(s) from %s", len(segments), filepath)
     for seg in segments:
