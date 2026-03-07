@@ -94,6 +94,7 @@ def parse_cut_list(filepath: str) -> list:
                 'sigma_blade_deg': None,    # build variance: 1σ blade tilt
                 'sigma_rot_deg': None,      # build variance: 1σ cylinder rotation
                 '_has_mm_col': False,       # whether mm column is present in data rows
+                '_has_set_len_col': False,  # whether SetLen/SetMM columns are present
                 '_has_entry_exit_blade': False,  # whether EntryBlade°/ExitBlade° columns present
                 'rows': [],
             }
@@ -179,7 +180,13 @@ def parse_cut_list(filepath: str) -> list:
         if (stripped.startswith('Cut') and 'Length' in stripped
                 and 'Blade' in stripped):
             current_seg['_has_mm_col'] = 'mm' in stripped.split()
+            current_seg['_has_set_len_col'] = 'SetLen' in stripped
             current_seg['_has_entry_exit_blade'] = 'EntryBlade' in stripped
+            # New column order: SetLen appears before Length in the header.
+            current_seg['_new_col_order'] = (
+                'SetLen' in stripped
+                and stripped.index('SetLen') < stripped.index('Length')
+            )
             in_data_rows = True
             continue
 
@@ -204,67 +211,147 @@ def parse_cut_list(filepath: str) -> list:
         except ValueError:
             continue
 
-        # Length may span two tokens for mixed numbers like "1 3/8""
         idx = 1
-        length_parts = []
-        while idx < len(tokens):
-            length_parts.append(tokens[idx])
-            idx += 1
-            if length_parts[-1].endswith('"'):
-                break
+        has_mm        = current_seg.get('_has_mm_col', False)
+        has_set_len   = current_seg.get('_has_set_len_col', False)
+        has_entry_exit= current_seg.get('_has_entry_exit_blade', False)
+        new_order     = current_seg.get('_new_col_order', False)
 
-        if not length_parts:
-            logger.warning("Row %d: no length token found, skipping", cut_num)
-            continue
-
-        length_str = ' '.join(length_parts)
-
-        # Optional mm column: appears right after the fractional length.
-        # When present, use the mm value as the authoritative length (higher precision).
-        has_mm = current_seg.get('_has_mm_col', False)
-        if has_mm and idx < len(tokens):
-            try:
-                mm_val = float(tokens[idx])
-                length = mm_val / 25.4
+        def _skip_frac_and_mm():
+            """Skip a fractional-inch token (1-2 tokens ending '"') plus optional float."""
+            nonlocal idx
+            while idx < len(tokens) and not tokens[idx].endswith('"'):
                 idx += 1
-            except ValueError:
-                length = _parse_fractional_inches(length_str)
-        else:
-            length = _parse_fractional_inches(length_str)
+            if idx < len(tokens):
+                idx += 1        # past the closing '"'
+            if idx < len(tokens):
+                try:
+                    float(tokens[idx])
+                    idx += 1    # the companion mm/float column
+                except ValueError:
+                    pass
 
-        if idx >= len(tokens):
-            logger.warning("Row %d: not enough tokens after length, skipping", cut_num)
-            continue
+        def _read_frac(label):
+            """Read a fractional-inch value (1-2 tokens). Returns (length_str, raw_str)."""
+            nonlocal idx
+            parts = []
+            while idx < len(tokens):
+                parts.append(tokens[idx])
+                idx += 1
+                if parts[-1].endswith('"'):
+                    break
+            return ' '.join(parts)
 
-        try:
-            blade_deg = float(tokens[idx])
-            idx += 1
-        except ValueError:
-            logger.warning("Row %d: could not parse blade_deg, skipping", cut_num)
-            continue
+        def _skip_done():
+            """Skip the Done checkbox token(s): '[ ]' → two tokens '[' ']'; '[x]' → one."""
+            nonlocal idx
+            if idx < len(tokens) and tokens[idx].startswith('['):
+                if tokens[idx].endswith(']'):
+                    idx += 1    # single token e.g. '[x]'
+                else:
+                    idx += 1    # '[' token
+                    if idx < len(tokens) and tokens[idx] == ']':
+                        idx += 1
 
-        # Optional EntryBlade° and ExitBlade° columns
-        has_entry_exit = current_seg.get('_has_entry_exit_blade', False)
-        theta_entry_deg = None
-        theta_exit_deg  = None
-        if has_entry_exit and idx + 1 < len(tokens):
+        if new_order:
+            # ── New column order ─────────────────────────────────────────
+            # Cut | SetLen | SetMM | Blade° | Cylinder° | Done |
+            # Length | mm | EntryBlade° | ExitBlade° | Rot° | ...
+
+            if has_set_len:
+                _skip_frac_and_mm()     # skip SetLen + SetMM
+
             try:
-                theta_entry_deg = float(tokens[idx])
-                theta_exit_deg  = float(tokens[idx + 1])
-                idx += 2
+                blade_deg = float(tokens[idx]); idx += 1
+            except (ValueError, IndexError):
+                logger.warning("Row %d: could not parse blade_deg, skipping", cut_num)
+                continue
+
+            try:
+                cylinder_deg = float(tokens[idx]); idx += 1
+            except (ValueError, IndexError):
+                cylinder_deg = 0.0
+
+            _skip_done()
+
+            length_str = _read_frac("length")
+            if not length_str:
+                logger.warning("Row %d: no length token found, skipping", cut_num)
+                continue
+
+            if has_mm and idx < len(tokens):
+                try:
+                    length = float(tokens[idx]) / 25.4; idx += 1
+                except ValueError:
+                    length = _parse_fractional_inches(length_str)
+            else:
+                length = _parse_fractional_inches(length_str)
+
+            theta_entry_deg = theta_exit_deg = None
+            if has_entry_exit and idx + 1 < len(tokens):
+                try:
+                    theta_entry_deg = float(tokens[idx])
+                    theta_exit_deg  = float(tokens[idx + 1])
+                    idx += 2
+                except ValueError:
+                    pass
+
+            try:
+                rot_deg = float(tokens[idx]); idx += 1
+            except (ValueError, IndexError):
+                logger.warning("Row %d: could not parse rot_deg, skipping", cut_num)
+                continue
+
+        else:
+            # ── Old column order (backward-compatible) ───────────────────
+            # Cut | Length | mm | [SetLen | SetMM] | Blade° |
+            # [EntryBlade° | ExitBlade°] | Rot° | Cylinder° | ...
+
+            length_str = _read_frac("length")
+            if not length_str:
+                logger.warning("Row %d: no length token found, skipping", cut_num)
+                continue
+
+            if has_mm and idx < len(tokens):
+                try:
+                    length = float(tokens[idx]) / 25.4; idx += 1
+                except ValueError:
+                    length = _parse_fractional_inches(length_str)
+            else:
+                length = _parse_fractional_inches(length_str)
+
+            if has_set_len:
+                _skip_frac_and_mm()     # skip SetLen + SetMM
+
+            if idx >= len(tokens):
+                logger.warning("Row %d: not enough tokens after length, skipping", cut_num)
+                continue
+
+            try:
+                blade_deg = float(tokens[idx]); idx += 1
             except ValueError:
-                pass
+                logger.warning("Row %d: could not parse blade_deg, skipping", cut_num)
+                continue
 
-        if idx + 1 >= len(tokens):
-            logger.warning("Row %d: not enough tokens for rot/cylinder, skipping", cut_num)
-            continue
+            theta_entry_deg = theta_exit_deg = None
+            if has_entry_exit and idx + 1 < len(tokens):
+                try:
+                    theta_entry_deg = float(tokens[idx])
+                    theta_exit_deg  = float(tokens[idx + 1])
+                    idx += 2
+                except ValueError:
+                    pass
 
-        try:
-            rot_deg      = float(tokens[idx])
-            cylinder_deg = float(tokens[idx + 1])
-        except ValueError:
-            logger.warning("Row %d: could not parse rot/cylinder columns, skipping", cut_num)
-            continue
+            if idx + 1 >= len(tokens):
+                logger.warning("Row %d: not enough tokens for rot/cylinder, skipping", cut_num)
+                continue
+
+            try:
+                rot_deg      = float(tokens[idx])
+                cylinder_deg = float(tokens[idx + 1])
+            except ValueError:
+                logger.warning("Row %d: could not parse rot/cylinder columns, skipping", cut_num)
+                continue
 
         row_dict = {
             'cut':          cut_num,
