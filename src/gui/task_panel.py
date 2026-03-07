@@ -22,6 +22,76 @@ _EXAMPLES_DIR = os.path.join(_SRC_DIR, "yaml_files", "examples")
 _YAML_BASE_DIR = os.path.join(_SRC_DIR, "yaml_files", "base")
 
 
+class _CorrectionChoiceDialog(QtWidgets.QDialog):
+    """Dialog for selecting a correction plan after running correction analysis."""
+
+    def __init__(self, result: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Apply Correction Plan")
+        self.setMinimumWidth(480)
+        self._button_data = [None]   # index 0 = "no correction"
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel(
+            "Select a correction plan to write into a new cut list.\n"
+            "Split wafers will appear as two half-wafer rows with a 'Corr' column."
+        ))
+        layout.addSpacing(6)
+
+        self._radio_group = QtWidgets.QButtonGroup(self)
+
+        rb_none = QtWidgets.QRadioButton("No correction  (write unchanged cut list)")
+        rb_none.setChecked(True)
+        self._radio_group.addButton(rb_none, 0)
+        layout.addWidget(rb_none)
+        layout.addSpacing(4)
+
+        singles = result.get('single', [])
+        doubles = result.get('double', [])
+        baseline = result.get('baseline_max_err_deg', 0.0)
+
+        if singles:
+            layout.addWidget(QtWidgets.QLabel("<b>── Single correction point ──</b>"))
+        for i, c in enumerate(singles[:3], 1):
+            pct = 100.0 * (1.0 - c.max_err_deg / baseline) if baseline > 0 else 0.0
+            rb = QtWidgets.QRadioButton(
+                f"[1] Cut {c.cut_number}  — max 1σ error: {c.max_err_deg:.2f}°"
+                f"  ({pct:.0f}% reduction)  blade {c.max_blade_deg:.2f}°"
+            )
+            self._radio_group.addButton(rb, i)
+            layout.addWidget(rb)
+            self._button_data.append((1, [c.wafer_index]))
+
+        if doubles:
+            layout.addSpacing(4)
+            layout.addWidget(QtWidgets.QLabel("<b>── Two correction points ──</b>"))
+        offset = len(singles[:3]) + 1
+        for j, c in enumerate(doubles[:3], offset):
+            pct = 100.0 * (1.0 - c.max_err_deg / baseline) if baseline > 0 else 0.0
+            rb = QtWidgets.QRadioButton(
+                f"[2] Cuts {c.cut_a},{c.cut_b}  — max 1σ error: {c.max_err_deg:.2f}°"
+                f"  ({pct:.0f}% reduction)"
+            )
+            self._radio_group.addButton(rb, j)
+            layout.addWidget(rb)
+            self._button_data.append((2, [c.wafer_a, c.wafer_b]))
+
+        layout.addSpacing(8)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_plan(self):
+        """Return (regime_n, [wafer_0indices]) or None if 'No correction'."""
+        idx = self._radio_group.checkedId()
+        if idx <= 0 or idx >= len(self._button_data):
+            return None
+        return self._button_data[idx]
+
+
 class PlantBuilderPanel:
     """FreeCAD Task Panel for PlantBuilder."""
 
@@ -828,7 +898,8 @@ class PlantBuilderPanel:
         try:
             from cut_list_reconstruction import parse_cut_list
             from analyzer.correction_analysis import (
-                analyse_correction_points, format_correction_report)
+                analyse_correction_points, format_correction_report,
+                write_corrected_cut_list)
 
             segments = parse_cut_list(self._last_cuts_file)
             if not segments:
@@ -838,15 +909,38 @@ class PlantBuilderPanel:
             self.btn_toggle_log.setChecked(True)
             self._toggle_log_pane(True)
 
+            # Use the first segment for candidate selection (multi-segment files
+            # are uncommon; each segment is independent anyway).
+            first_result = None
             for seg in segments:
                 result = analyse_correction_points(
                     seg['rows'], sigma_rot_deg=sigma_rot)
+                if first_result is None:
+                    first_result = result
                 report = format_correction_report(seg['name'], result)
                 for line in report.splitlines():
-                    import logging
                     logging.getLogger('PlantBuilder').info("%s", line)
 
             self._set_status("Correction analysis complete.", success=True)
+
+            # Offer to write a corrected cut list.
+            if first_result:
+                dlg = _CorrectionChoiceDialog(first_result, parent=self.form)
+                if dlg.exec_() == QtWidgets.QDialog.Accepted:
+                    plan = dlg.selected_plan()
+                    if plan is not None:
+                        regime_n, split_indices = plan
+                        out_path = write_corrected_cut_list(
+                            self._last_cuts_file,
+                            split_wafer_0indices=split_indices,
+                            regime_n=regime_n,
+                        )
+                        self._set_status(
+                            f"Corrected cut list written: {os.path.basename(out_path)}",
+                            success=True,
+                        )
+                        logging.getLogger('PlantBuilder').info(
+                            "Corrected cut list written to: %s", out_path)
 
         except Exception as exc:
             self._set_status(f"Correction analysis failed: {exc}", error=True)
