@@ -392,7 +392,7 @@ class LoftSegment:
             if wafer_data.wafer is None:
                 continue
 
-            wafer_obj = doc.addObject("Part::Feature", f"Wafer_{self.name}_{i}")
+            wafer_obj = doc.addObject("Part::Feature", f"Wafer_{self.name}_{i+1}")
             wafer_obj.Shape = wafer_data.wafer
 
             if i % 2 == 0:
@@ -407,12 +407,12 @@ class LoftSegment:
             # Add LCS to lcs_group ONLY
             if lcs_group is not None:
                 if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
-                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i}_1")
+                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_1")
                     lcs_obj.Placement = wafer_data.lcs1
                     lcs_group.addObject(lcs_obj)  # Only add to group
 
                 if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
-                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i}_2")
+                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_2")
                     lcs_obj.Placement = wafer_data.lcs2
                     lcs_group.addObject(lcs_obj)  # Only add to group
 

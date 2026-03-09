@@ -605,8 +605,8 @@ class Driver:
 
         if wafer_objects:
             for i, wafer_obj in enumerate(wafer_objects):
-                lcs1_name = f"LCS_{segment_name}_{i}_1"
-                lcs2_name = f"LCS_{segment_name}_{i}_2"
+                lcs1_name = f"LCS_{segment_name}_{i+1}_1"
+                lcs2_name = f"LCS_{segment_name}_{i+1}_2"
 
                 lcs1_obj = self.doc.getObject(lcs1_name)
                 lcs2_obj = self.doc.getObject(lcs2_name)

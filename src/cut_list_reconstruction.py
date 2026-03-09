@@ -849,11 +849,11 @@ def _find_original_alignment(doc, seg_name: str):
     Returns App.Placement on success, or None if the original is not found.
 
     Strategy (priority order):
-    1. LCS objects (LCS_{seg}_0_1): exact position and full rotation.
-    2. Adjacent-wafer adjacency: exit face of wafer 0 is shared with wafer 1.
-    3. Dot-product fallback when wafer 1 is absent.
+    1. LCS objects (LCS_{seg}_1_1): exact position and full rotation.
+    2. Adjacent-wafer adjacency: exit face of wafer 1 is shared with wafer 2.
+    3. Dot-product fallback when wafer 2 is absent.
     """
-    candidates = doc.getObjectsByLabel(f"Wafer_{seg_name}_0")
+    candidates = doc.getObjectsByLabel(f"Wafer_{seg_name}_1")
     if not candidates:
         return None
 
@@ -868,7 +868,7 @@ def _find_original_alignment(doc, seg_name: str):
         part_placement = part_candidates[0].Placement
 
     # ── Priority 1: LCS (exact, full rotation) ───────────────────────────────
-    lcs_candidates = doc.getObjectsByLabel(f"LCS_{seg_name}_0_1")
+    lcs_candidates = doc.getObjectsByLabel(f"LCS_{seg_name}_1_1")
     if lcs_candidates and hasattr(lcs_candidates[0], 'Placement'):
         lcs_pl = lcs_candidates[0].Placement
         t_start = lcs_pl.Rotation.multVec(App.Vector(0, 0, 1))
@@ -879,7 +879,7 @@ def _find_original_alignment(doc, seg_name: str):
     # ── Fallback: face detection ──────────────────────────────────────────────
     planar = _find_planar_faces(shape)
     if len(planar) < 2:
-        logger.warning("Could not find 2 planar faces in 'Wafer_%s_0'; "
+        logger.warning("Could not find 2 planar faces in 'Wafer_%s_1'; "
                        "skipping auto-align", seg_name)
         return None
 
@@ -887,7 +887,7 @@ def _find_original_alignment(doc, seg_name: str):
     c_a, c_b = fa.CenterOfMass, fb.CenterOfMass
 
     entry_face = None
-    wafer1_cands = doc.getObjectsByLabel(f"Wafer_{seg_name}_1")
+    wafer1_cands = doc.getObjectsByLabel(f"Wafer_{seg_name}_2")
     if wafer1_cands:
         shape1 = getattr(wafer1_cands[0], 'Shape', None)
         if shape1 and not shape1.isNull():
@@ -1009,8 +1009,8 @@ def compare_reconstruction(doc, seg_name: str, rows: list = None,
 
     i = 0
     while True:
-        orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{i}")
-        rec_objs  = doc.getObjectsByLabel(f"Wafer_{seg_name}_Rec_{i}")
+        orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{i+1}")
+        rec_objs  = doc.getObjectsByLabel(f"Wafer_{seg_name}_Rec_{i+1}")
         has_rec   = bool(rec_objs) or (i in rec_wafer_dict)
 
         if not orig_objs and not has_rec:
@@ -1025,7 +1025,7 @@ def compare_reconstruction(doc, seg_name: str, rows: list = None,
                 orig_params = _extract_wafer_params(shp, orig_placement)
 
         if orig_params is not None:
-            lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{i}_1")
+            lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{i+1}_1")
             if lcs_cands and hasattr(lcs_cands[0], 'Placement'):
                 orig_params['entry_world'] = lcs_cands[0].Placement.Base
 
@@ -1090,8 +1090,8 @@ def visualize_reconstruction(doc, seg_name: str, wafers: list,
 
         {seg_name}_Reconstructed    (App::Part)
         └── {seg_name}_Rec_Wafers   (App::DocumentObjectGroup)
-            ├── Wafer_{seg_name}_Rec_0  (Part::Feature)  ← orange
-            ├── Wafer_{seg_name}_Rec_1                   ← amber
+            ├── Wafer_{seg_name}_Rec_1  (Part::Feature)  ← orange
+            ├── Wafer_{seg_name}_Rec_2                   ← amber
             └── ...
 
     placement: if the original is found, the Part is placed to overlay it
@@ -1114,7 +1114,7 @@ def visualize_reconstruction(doc, seg_name: str, wafers: list,
         if wafer_obj.wafer is None:
             continue
 
-        obj_name = f"Wafer_{seg_name}_Rec_{wafer_obj.index}"
+        obj_name = f"Wafer_{seg_name}_Rec_{wafer_obj.index+1}"
         feat = doc.addObject("Part::Feature", obj_name)
         feat.Shape = wafer_obj.wafer
 
@@ -1192,7 +1192,7 @@ def _add_debug_planes(doc, seg_name: str, cylinder_radius: float,
 
     group = doc.addObject("App::DocumentObjectGroup", f"{seg_name}_DebugPlanes")
 
-    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_0")
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_1")
     if orig_objs:
         shp = getattr(orig_objs[0], 'Shape', None)
         if shp and not shp.isNull():
@@ -1203,10 +1203,10 @@ def _add_debug_planes(doc, seg_name: str, cylinder_radius: float,
                 f2 = _make_disc(x_c, x_n, (0.6, 0.0, 0.0), f"{seg_name}_Orig_Exit")
                 if f1: group.addObject(f1)
                 if f2: group.addObject(f2)
-                logger.info("Orig wafer 0 entry: center=%s  n=%s", e_c, e_n)
-                logger.info("Orig wafer 0 exit:  center=%s  n=%s", x_c, x_n)
+                logger.info("Orig wafer 1 entry: center=%s  n=%s", e_c, e_n)
+                logger.info("Orig wafer 1 exit:  center=%s  n=%s", x_c, x_n)
 
-    rec_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_Rec_0")
+    rec_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_Rec_1")
     if rec_objs:
         shp = getattr(rec_objs[0], 'Shape', None)
         if shp and not shp.isNull():
@@ -1217,8 +1217,8 @@ def _add_debug_planes(doc, seg_name: str, cylinder_radius: float,
                 f2 = _make_disc(x_c, x_n, (0.0, 0.6, 0.0), f"{seg_name}_Rec_Exit")
                 if f1: group.addObject(f1)
                 if f2: group.addObject(f2)
-                logger.info("Rec  wafer 0 entry: center=%s  n=%s", e_c, e_n)
-                logger.info("Rec  wafer 0 exit:  center=%s  n=%s", x_c, x_n)
+                logger.info("Rec  wafer 1 entry: center=%s  n=%s", e_c, e_n)
+                logger.info("Rec  wafer 1 exit:  center=%s  n=%s", x_c, x_n)
 
     doc.recompute()
     logger.info("Debug planes added to '%s_DebugPlanes'", seg_name)
@@ -1240,37 +1240,37 @@ def _get_orig_entry_frame(doc, seg_name: str, k: int):
     part_pl = _get_part_placement(doc, f"{seg_name}_Part")
 
     # ── Priority 1: LCS ──────────────────────────────────────────────────────
-    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k}_1")
+    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k+1}_1")
     if lcs_cands and hasattr(lcs_cands[0], 'Placement'):
         lcs_pl = lcs_cands[0].Placement
         center  = lcs_pl.Base
         inward  = lcs_pl.Rotation.multVec(App.Vector(0, 0, 1))
         major   = lcs_pl.Rotation.multVec(App.Vector(1, 0, 0))
-        logger.info("Orig wafer %d entry: using LCS_%s_%d_1", k, seg_name, k)
+        logger.info("Orig wafer %d entry: using LCS_%s_%d_1", k+1, seg_name, k+1)
         return center, inward, major
 
     # ── Fallback: face analysis ───────────────────────────────────────────────
-    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k+1}")
     if not orig_objs:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}' not found in document "
-            f"and no LCS 'LCS_{seg_name}_{k}_1' is available.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}' not found in document "
+            f"and no LCS 'LCS_{seg_name}_{k+1}_1' is available.")
 
     shape = getattr(orig_objs[0], 'Shape', None)
     if shape is None or shape.isNull():
-        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k}' has no valid shape.")
+        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k+1}' has no valid shape.")
 
     planar = _find_planar_faces(shape)
     if len(planar) < 2:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}': fewer than 2 planar faces found.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}': fewer than 2 planar faces found.")
 
     fa, fb = planar[0], planar[1]
     c_a, c_b = fa.CenterOfMass, fb.CenterOfMass
     chord = c_b - c_a
     if chord.Length < 1e-9:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}': degenerate chord between faces.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}': degenerate chord between faces.")
     chord_norm = App.Vector(chord)
     chord_norm.normalize()
 
@@ -1422,36 +1422,36 @@ def _get_orig_exit_frame(doc, seg_name: str, k: int):
     part_pl = _get_part_placement(doc, f"{seg_name}_Part")
 
     # ── Priority 1: LCS ──────────────────────────────────────────────────────
-    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k}_2")
+    lcs_cands = doc.getObjectsByLabel(f"LCS_{seg_name}_{k+1}_2")
     if lcs_cands and hasattr(lcs_cands[0], 'Placement'):
         lcs_pl = lcs_cands[0].Placement
         center = lcs_pl.Base
         inward = lcs_pl.Rotation.multVec(App.Vector(0, 0, 1))
         major  = lcs_pl.Rotation.multVec(App.Vector(1, 0, 0))
-        logger.info("Orig wafer %d exit: using LCS_%s_%d_2", k, seg_name, k)
+        logger.info("Orig wafer %d exit: using LCS_%s_%d_2", k+1, seg_name, k+1)
         return center, inward, major
 
     # ── Fallback: face analysis ───────────────────────────────────────────────
-    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k+1}")
     if not orig_objs:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}' not found and no LCS available.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}' not found and no LCS available.")
 
     shape = getattr(orig_objs[0], 'Shape', None)
     if shape is None or shape.isNull():
-        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k}' has no valid shape.")
+        raise ValueError(f"Original wafer 'Wafer_{seg_name}_{k+1}' has no valid shape.")
 
     planar = _find_planar_faces(shape)
     if len(planar) < 2:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}': fewer than 2 planar faces found.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}': fewer than 2 planar faces found.")
 
     fa, fb = planar[0], planar[1]
     c_a, c_b = fa.CenterOfMass, fb.CenterOfMass
     chord = c_b - c_a
     if chord.Length < 1e-9:
         raise ValueError(
-            f"Original wafer 'Wafer_{seg_name}_{k}': degenerate chord between faces.")
+            f"Original wafer 'Wafer_{seg_name}_{k+1}': degenerate chord between faces.")
     chord_norm = App.Vector(chord)
     chord_norm.normalize()
 
@@ -1605,7 +1605,7 @@ def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
     # For original, try to compute from LCS if major axis is available
     # (major_radius = R/cos(θ), minor = R → θ = acos(R/major_r))
     orig_blade_deg = None
-    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k}")
+    orig_objs = doc.getObjectsByLabel(f"Wafer_{seg_name}_{k+1}")
     if orig_objs:
         orig_shape = getattr(orig_objs[0], 'Shape', None)
         if orig_shape and not orig_shape.isNull():
