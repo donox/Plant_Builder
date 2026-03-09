@@ -1045,9 +1045,8 @@ class Driver:
             geom = wafer.geometry or {}
 
             chord_length = float(geom.get("chord_length", 0.0))
-            lift_angle = float(geom.get("lift_angle_deg", 0.0))
-            blade_angle = lift_angle / 2.0
-            rotation = float(geom.get("rotation_angle_deg", 0.0))
+            lift_angle   = float(geom.get("lift_angle_deg", 0.0))
+            rotation     = float(geom.get("rotation_angle_deg", 0.0))
 
             if i == 0:
                 cylinder_angle = 0.0
@@ -1062,7 +1061,9 @@ class Driver:
             cumulative_length += chord_length
 
             cumul_str   = self._format_fractional_inches(cumulative_length)
-            theta_entry = float(geom.get("theta_entry_deg", blade_angle))
+            sym_blade   = lift_angle / 2.0          # fallback when per-face angles absent
+            theta_entry = float(geom.get("theta_entry_deg", sym_blade))
+            blade_angle = float(geom.get("theta_exit_deg",  sym_blade))  # this cut sets exit face
 
             # Physical jig stop distance: chord length + R·tan(θ_entry)
             set_len     = chord_length + radius_in * math.tan(math.radians(theta_entry))
@@ -1179,8 +1180,9 @@ class Driver:
         cuts_file.write("            The prior cut's ellipse dips back by R·tan(θ) on its far side;\n")
         cuts_file.write("            measuring to that low point gives SetLen > Length.\n\n")
         cuts_file.write("SetMM:      Same jig stop distance in millimetres (higher precision).\n\n")
-        cuts_file.write("Blade°:     Blade tilt angle from vertical (half of dihedral lift angle)\n")
-        cuts_file.write("            Symmetric approximation for saw setting\n\n")
+        cuts_file.write("Blade°:     Blade tilt angle (= ExitBlade° in Assembly section)\n")
+        cuts_file.write("            Each cut creates the exit face of this wafer; set saw to this angle.\n")
+        cuts_file.write("            Also equals EntryBlade° of the NEXT wafer in the Assembly section.\n\n")
         cuts_file.write("Cylinder°:  Absolute rotational position of cylinder for this cut\n")
         cuts_file.write("            Saw-table coords: 0°=top (12 o'clock), CW looking toward blade\n")
         cuts_file.write("            Includes 180° flip between wafers plus accumulated rotation\n")
