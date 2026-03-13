@@ -1737,12 +1737,15 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None,
                         seg_data['name'])
 
         wafers = reconstruct_segment(seg_data, max_wafers=max_wafers)
-        _sfx      = f"_{label}" if label else ""
-        part_name = f"{seg_data['name']}_Reconstructed{_sfx}"
-        result[part_name] = {'seg_name': seg_data['name'], 'wafers': wafers}
 
         rec_part = visualize_reconstruction(
             doc, seg_data['name'], wafers, alignment, label=label)
+
+        # Use the actual FreeCAD-assigned label (may differ from the intended
+        # name if FreeCAD appended 001/002 to avoid a duplicate label).
+        actual_key = rec_part.Label if rec_part is not None else (
+            f"{seg_data['name']}_Reconstructed" + (f"_{label}" if label else ""))
+        result[actual_key] = {'seg_name': seg_data['name'], 'wafers': wafers}
 
         if max_wafers is not None and max_wafers <= 5:
             radius = seg_data['cylinder_diameter'] / 2.0
