@@ -622,8 +622,22 @@ def write_corrected_cut_list(source_path: str,
     # Assemble the new file
     out_lines = []
 
-    # Lines before data header (preserve exactly)
-    out_lines.extend(original_lines[:header_line_idx])
+    # Count corrected-list pieces so we can annotate the Wafer count line.
+    all_rows_flat = [r for seg in new_segments_rows for r in seg]
+    n_pieces = len(all_rows_flat)
+    n_splits = sum(1 for r in all_rows_flat if r.get('_split_half') == 'A')
+    _wafer_count_re = re.compile(r'^(Wafer count:\s*)(\d+)', re.IGNORECASE)
+
+    # Lines before data header (preserve, but annotate "Wafer count:" line)
+    for line in original_lines[:header_line_idx]:
+        m = _wafer_count_re.match(line)
+        if m and n_splits:
+            out_lines.append(
+                f"{m.group(1)}{m.group(2)} (original; {n_pieces} physical pieces"
+                f" after {n_splits} correction split{'s' if n_splits != 1 else ''})\n"
+            )
+        else:
+            out_lines.append(line)
 
     # Note for builder about Cylinder° reference when using corrected list.
     neg_offset = (-initial_offset) % 360.0
