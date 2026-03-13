@@ -1083,22 +1083,27 @@ def compare_reconstruction(doc, seg_name: str, rows: list = None,
 # ---------------------------------------------------------------------------
 
 def visualize_reconstruction(doc, seg_name: str, wafers: list,
-                             placement=None):
+                             placement=None, label: str = ''):
     """Create FreeCAD visualization of reconstructed wafers.
+
+    An optional *label* string is appended to all object names
+    (e.g. label='A' → 'Trefoil_Reconstructed_A') so multiple
+    reconstructions can coexist in the same document.
 
     Tree structure::
 
-        {seg_name}_Reconstructed    (App::Part)
-        └── {seg_name}_Rec_Wafers   (App::DocumentObjectGroup)
-            ├── Wafer_{seg_name}_Rec_1  (Part::Feature)  ← orange
-            ├── Wafer_{seg_name}_Rec_2                   ← amber
+        {seg_name}_Reconstructed[_{label}]    (App::Part)
+        └── {seg_name}_Rec_Wafers[_{label}]   (App::DocumentObjectGroup)
+            ├── Wafer_{seg_name}_Rec[_{label}]_1  (Part::Feature)  ← orange
+            ├── Wafer_{seg_name}_Rec[_{label}]_2                   ← amber
             └── ...
 
     placement: if the original is found, the Part is placed to overlay it
                (50% transparent); otherwise offset +200mm in X.
     """
-    part_name  = f"{seg_name}_Reconstructed"
-    group_name = f"{seg_name}_Rec_Wafers"
+    _sfx       = f"_{label}" if label else ""
+    part_name  = f"{seg_name}_Reconstructed{_sfx}"
+    group_name = f"{seg_name}_Rec_Wafers{_sfx}"
 
     seg_part = doc.addObject("App::Part", part_name)
     aligned = placement is not None
@@ -1114,7 +1119,7 @@ def visualize_reconstruction(doc, seg_name: str, wafers: list,
         if wafer_obj.wafer is None:
             continue
 
-        obj_name = f"Wafer_{seg_name}_Rec_{wafer_obj.index+1}"
+        obj_name = f"Wafer_{seg_name}_Rec{_sfx}_{wafer_obj.index+1}"
         feat = doc.addObject("Part::Feature", obj_name)
         feat.Shape = wafer_obj.wafer
 
@@ -1299,7 +1304,7 @@ def _get_orig_entry_frame(doc, seg_name: str, k: int):
 
 
 def align_reconstruction_to_wafer(doc, seg_name: str, wafer_index_1based: int,
-                                   rec_wafers: list):
+                                   rec_wafers: list, rec_part_name: str = None):
     """Apply a new placement to the reconstruction Part so that the entry ellipse of
     the specified wafer coincides with the corresponding original wafer's entry ellipse.
 
@@ -1392,16 +1397,17 @@ def align_reconstruction_to_wafer(doc, seg_name: str, wafer_index_1based: int,
             f"(should be ~0). This may indicate a numerical issue.")
 
     # ── Apply ─────────────────────────────────────────────────────────────────
-    rec_part_objs = doc.getObjectsByLabel(f"{seg_name}_Reconstructed")
+    _target = rec_part_name if rec_part_name else f"{seg_name}_Reconstructed"
+    rec_part_objs = doc.getObjectsByLabel(_target)
     if not rec_part_objs:
         raise ValueError(
-            f"Reconstruction part '{seg_name}_Reconstructed' not found in document. "
+            f"Reconstruction part '{_target}' not found in document. "
             f"Run 'Build from Cut List' first.")
     rec_part_objs[0].Placement = new_placement
     doc.recompute()
 
-    logger.info("Aligned '%s_Reconstructed' to wafer %d (%s)",
-                seg_name, wafer_index_1based, method)
+    logger.info("Aligned '%s' to wafer %d (%s)",
+                _target, wafer_index_1based, method)
     logger.info("  New placement base: %s", new_placement.Base)
     return new_placement, method
 
@@ -1692,7 +1698,8 @@ def report_exit_ellipse_discrepancy(doc, seg_name: str, wafer_index_1based: int,
 # Top-level entry point (called from the task panel)
 # ---------------------------------------------------------------------------
 
-def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
+def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None,
+                              label: str = ''):
     """Parse a cut list file and reconstruct all segments in the active doc.
 
     Reconstruction follows 'Wafer Reconstruction.txt': each wafer is built
@@ -1722,23 +1729,6 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
     if not segments:
         raise ValueError(f"No segments found in: {filepath}")
 
-    # Remove any previous reconstruction objects so stale geometry never
-    # interferes with comparisons or the visual overlay.
-    _prefixes_to_purge = []
-    for seg_data in segments:
-        n = seg_data['name']
-        _prefixes_to_purge += [
-            f"{n}_Reconstructed", f"{n}_Rec_Wafers", f"{n}_DebugPlanes",
-        ]
-    for obj in list(doc.Objects):
-        lbl = obj.Label
-        if any(lbl == p or lbl.startswith(p)
-               for p in _prefixes_to_purge):
-            try:
-                doc.removeObject(obj.Name)
-            except Exception:
-                pass
-
     result = {}
     for seg_data in segments:
         alignment = _find_original_alignment(doc, seg_data['name'])
@@ -1747,10 +1737,12 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
                         seg_data['name'])
 
         wafers = reconstruct_segment(seg_data, max_wafers=max_wafers)
-        result[seg_data['name']] = wafers
+        _sfx      = f"_{label}" if label else ""
+        part_name = f"{seg_data['name']}_Reconstructed{_sfx}"
+        result[part_name] = {'seg_name': seg_data['name'], 'wafers': wafers}
 
         rec_part = visualize_reconstruction(
-            doc, seg_data['name'], wafers, alignment)
+            doc, seg_data['name'], wafers, alignment, label=label)
 
         if max_wafers is not None and max_wafers <= 5:
             radius = seg_data['cylinder_diameter'] / 2.0

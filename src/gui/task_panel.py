@@ -101,8 +101,8 @@ class PlantBuilderPanel:
         self.selected_path: str | None = None
         self._log_handler = None
         self._last_cuts_file = None
-        # Maps seg_name → wafer list from the most recent "Build from Cut List" run.
-        # Used by "Align Reconstruction" so it can access entry_mark_dir per wafer.
+        # Maps part_name → {'seg_name': str, 'wafers': list} for every
+        # reconstruction built in this session.  Used by "Align Reconstruction".
         self._last_rec_wafers: dict = {}
         # Accumulated rows for the error results table.
         self._result_rows: list = []
@@ -219,6 +219,16 @@ class PlantBuilderPanel:
         )
         self.btn_rebuild.clicked.connect(self._on_rebuild_from_cut_list)
         rebuild_row.addWidget(self.btn_rebuild)
+        rebuild_row.addWidget(QtWidgets.QLabel("Label:"))
+        self.edit_rec_label = QtWidgets.QLineEdit()
+        self.edit_rec_label.setPlaceholderText("optional…")
+        self.edit_rec_label.setFixedWidth(80)
+        self.edit_rec_label.setToolTip(
+            "Optional label appended to reconstruction object names\n"
+            "(e.g. 'A' → Trefoil_Reconstructed_A).\n"
+            "Leave blank to use the default name."
+        )
+        rebuild_row.addWidget(self.edit_rec_label)
         self.btn_correction_analysis = QtWidgets.QPushButton("Correction Analysis")
         self.btn_correction_analysis.setMinimumHeight(32)
         self.btn_correction_analysis.setToolTip(
@@ -259,8 +269,7 @@ class PlantBuilderPanel:
 
         # --- Align Reconstruction to a specific wafer's entry ellipse ---
         align_row = QtWidgets.QHBoxLayout()
-        align_lbl = QtWidgets.QLabel("Align wafer:")
-        align_row.addWidget(align_lbl)
+        align_row.addWidget(QtWidgets.QLabel("Align wafer:"))
         self.spin_align_wafer = QtWidgets.QSpinBox()
         self.spin_align_wafer.setMinimum(1)
         self.spin_align_wafer.setMaximum(9999)
@@ -270,11 +279,24 @@ class PlantBuilderPanel:
             "Wafer number (1-based) whose entry ellipse will be used for alignment"
         )
         align_row.addWidget(self.spin_align_wafer)
-        self.btn_align = QtWidgets.QPushButton("Align Reconstruction")
+        align_row.addWidget(QtWidgets.QLabel("Reconstruction:"))
+        self.combo_rec_select = QtWidgets.QComboBox()
+        self.combo_rec_select.setMinimumWidth(160)
+        self.combo_rec_select.setToolTip(
+            "Select which reconstruction to align.\n"
+            "Use ⟳ to refresh the list from the active document."
+        )
+        align_row.addWidget(self.combo_rec_select)
+        btn_refresh_combo = QtWidgets.QPushButton("⟳")
+        btn_refresh_combo.setFixedWidth(28)
+        btn_refresh_combo.setToolTip("Refresh reconstruction list from active document")
+        btn_refresh_combo.clicked.connect(self._refresh_rec_combo)
+        align_row.addWidget(btn_refresh_combo)
+        self.btn_align = QtWidgets.QPushButton("Align")
         self.btn_align.setMinimumHeight(28)
         self.btn_align.setToolTip(
-            "Move the reconstructed part so that the specified wafer's entry ellipse "
-            "coincides with the original's. Run 'Build from Cut List' first."
+            "Move the selected reconstruction so that the specified wafer's "
+            "entry ellipse coincides with the original's."
         )
         self.btn_align.clicked.connect(self._on_align_reconstruction)
         align_row.addWidget(self.btn_align)
@@ -861,10 +883,18 @@ class PlantBuilderPanel:
 
         try:
             from cut_list_reconstruction import reconstruct_and_visualize
-            rec_result = reconstruct_and_visualize(App, Gui, path)
-            # Store wafers per segment for subsequent "Align Reconstruction" use.
+            label = self.edit_rec_label.text().strip()
+            rec_result = reconstruct_and_visualize(App, Gui, path, label=label)
+            # Merge results into the session store; populate dropdown.
             if isinstance(rec_result, dict):
-                self._last_rec_wafers = rec_result
+                self._last_rec_wafers.update(rec_result)
+                self._refresh_rec_combo()
+                # Pre-select the most recently built entry
+                if rec_result:
+                    last_key = list(rec_result)[-1]
+                    idx = self.combo_rec_select.findText(last_key)
+                    if idx >= 0:
+                        self.combo_rec_select.setCurrentIndex(idx)
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self._set_status(
@@ -951,6 +981,26 @@ class PlantBuilderPanel:
     # Align Reconstruction
     # ------------------------------------------------------------------
 
+    def _refresh_rec_combo(self):
+        """Populate combo_rec_select from in-memory store + active document."""
+        import FreeCAD as App
+        current = self.combo_rec_select.currentText()
+        self.combo_rec_select.clear()
+        # In-memory store items first
+        for part_name in self._last_rec_wafers:
+            self.combo_rec_select.addItem(part_name)
+        # Also scan document for *_Reconstructed* objects not already listed
+        doc = App.activeDocument()
+        if doc:
+            known = set(self._last_rec_wafers.keys())
+            for obj in doc.Objects:
+                if '_Reconstructed' in obj.Label and obj.Label not in known:
+                    self.combo_rec_select.addItem(obj.Label)
+        # Restore previous selection if still present
+        idx = self.combo_rec_select.findText(current)
+        if idx >= 0:
+            self.combo_rec_select.setCurrentIndex(idx)
+
     def _on_align_reconstruction(self):
         """Align the reconstructed part to a specified wafer's entry ellipse."""
         import FreeCAD as App
@@ -961,23 +1011,31 @@ class PlantBuilderPanel:
                 self.form, "No Document", "No active FreeCAD document found.")
             return
 
-        if not self._last_rec_wafers:
+        wafer_index = self.spin_align_wafer.value()
+
+        selected_part = self.combo_rec_select.currentText().strip()
+        if not selected_part:
             QtWidgets.QMessageBox.warning(
                 self.form,
-                "No Reconstruction",
-                "No reconstruction data available.\n"
-                "Please run 'Build from Cut List' first.",
+                "No Reconstruction Selected",
+                "Select a reconstruction from the dropdown\n"
+                "(or click ⟳ to refresh the list from the document).",
             )
             return
 
-        wafer_index = self.spin_align_wafer.value()
-
-        # Discover which segments are available
-        seg_names = list(self._last_rec_wafers.keys())
-        if not seg_names:
+        rec_info = self._last_rec_wafers.get(selected_part)
+        if rec_info is None:
             QtWidgets.QMessageBox.warning(
-                self.form, "No Segments", "No reconstructed segments found.")
+                self.form,
+                "No In-Memory Data",
+                f"'{selected_part}' is in the document but was not built in this\n"
+                "session — in-memory wafer data is unavailable.\n"
+                "Please rebuild it with 'Build from Cut List'.",
+            )
             return
+
+        seg_name  = rec_info['seg_name']
+        rec_wafers = rec_info['wafers']
 
         self.btn_toggle_log.setChecked(True)
         self._toggle_log_pane(True)
@@ -994,34 +1052,33 @@ class PlantBuilderPanel:
                 align_reconstruction_to_wafer,
                 report_exit_ellipse_discrepancy,
             )
-            for seg_name in seg_names:
-                rec_wafers = self._last_rec_wafers[seg_name]
+            try:
+                new_pl, method = align_reconstruction_to_wafer(
+                    doc, seg_name, wafer_index, rec_wafers,
+                    rec_part_name=selected_part)
+                successes.append(
+                    f"'{selected_part}': aligned wafer {wafer_index} [{method}]")
+                logger.info("Align OK: %s wafer %d — %s", selected_part, wafer_index, method)
+                # Report exit-ellipse discrepancy for the same wafer
                 try:
-                    new_pl, method = align_reconstruction_to_wafer(
-                        doc, seg_name, wafer_index, rec_wafers)
-                    successes.append(
-                        f"'{seg_name}': aligned wafer {wafer_index} [{method}]")
-                    logger.info("Align OK: %s wafer %d — %s", seg_name, wafer_index, method)
-                    # Report exit-ellipse discrepancy for the same wafer
-                    try:
-                        metrics = report_exit_ellipse_discrepancy(
-                            doc, seg_name, wafer_index, rec_wafers,
-                            sigma_blade_deg=sigma_blade, sigma_rot_deg=sigma_rot)
-                        self._add_result_row(
-                            seg_name, wafer_index, method, metrics)
-                        build_s = metrics.get('build_sigma', {})
-                        if build_s:
-                            self._update_variance_label(
-                                build_s.get('n_wafers', 0),
-                                build_s.get('sigma_blade_deg', sigma_blade),
-                                build_s.get('sigma_rot_deg', sigma_rot),
-                                build_s.get('_radius_in', 1.0))
-                    except Exception as rep_exc:
-                        logger.warning("Exit report failed for '%s': %s",
-                                       seg_name, rep_exc)
-                except ValueError as exc:
-                    errors.append(f"'{seg_name}': {exc}")
-                    logger.error("Align failed for '%s': %s", seg_name, exc)
+                    metrics = report_exit_ellipse_discrepancy(
+                        doc, seg_name, wafer_index, rec_wafers,
+                        sigma_blade_deg=sigma_blade, sigma_rot_deg=sigma_rot)
+                    self._add_result_row(
+                        seg_name, wafer_index, method, metrics)
+                    build_s = metrics.get('build_sigma', {})
+                    if build_s:
+                        self._update_variance_label(
+                            build_s.get('n_wafers', 0),
+                            build_s.get('sigma_blade_deg', sigma_blade),
+                            build_s.get('sigma_rot_deg', sigma_rot),
+                            build_s.get('_radius_in', 1.0))
+                except Exception as rep_exc:
+                    logger.warning("Exit report failed for '%s': %s",
+                                   seg_name, rep_exc)
+            except ValueError as exc:
+                errors.append(f"'{selected_part}': {exc}")
+                logger.error("Align failed for '%s': %s", selected_part, exc)
         except Exception as exc:
             self._set_status(f"Alignment error: {exc}", error=True)
             QtWidgets.QMessageBox.critical(
