@@ -1722,6 +1722,23 @@ def reconstruct_and_visualize(App, Gui, filepath: str, max_wafers: int = None):
     if not segments:
         raise ValueError(f"No segments found in: {filepath}")
 
+    # Remove any previous reconstruction objects so stale geometry never
+    # interferes with comparisons or the visual overlay.
+    _prefixes_to_purge = []
+    for seg_data in segments:
+        n = seg_data['name']
+        _prefixes_to_purge += [
+            f"{n}_Reconstructed", f"{n}_Rec_Wafers", f"{n}_DebugPlanes",
+        ]
+    for obj in list(doc.Objects):
+        lbl = obj.Label
+        if any(lbl == p or lbl.startswith(p)
+               for p in _prefixes_to_purge):
+            try:
+                doc.removeObject(obj.Name)
+            except Exception:
+                pass
+
     result = {}
     for seg_data in segments:
         alignment = _find_original_alignment(doc, seg_data['name'])
