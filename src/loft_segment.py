@@ -379,12 +379,11 @@ class LoftSegment:
                 reference_group.addObject(spine_obj)  # Only add to group
                 # logger.debug("Added spine")
 
-        # Create LCS group if needed (hidden by default — toggle in model tree)
-        lcs_group = None
-        if self.segment_settings.get('show_lcs', False):
-            lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
-            lcs_group.ViewObject.Visibility = False
-            # logger.debug("Created LCS group")
+        # LCS group is always created (needed for cut-list reconstruction alignment).
+        # show_lcs controls visibility only — not existence.
+        show_lcs = self.segment_settings.get('show_lcs', False)
+        lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
+        lcs_group.ViewObject.Visibility = show_lcs
 
         # Add wafers to wafer_group ONLY
         wafer_count = 0
@@ -404,25 +403,23 @@ class LoftSegment:
             wafer_group.addObject(wafer_obj)  # Only add to group
             wafer_count += 1
 
-            # Add LCS to lcs_group ONLY
-            if lcs_group is not None:
-                if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
-                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_1")
-                    lcs_obj.Placement = wafer_data.lcs1
-                    lcs_group.addObject(lcs_obj)  # Only add to group
+            # Always add LCS — required for reconstruction alignment
+            if hasattr(wafer_data, 'lcs1') and wafer_data.lcs1:
+                lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_1")
+                lcs_obj.Placement = wafer_data.lcs1
+                lcs_group.addObject(lcs_obj)
 
-                if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
-                    lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_2")
-                    lcs_obj.Placement = wafer_data.lcs2
-                    lcs_group.addObject(lcs_obj)  # Only add to group
+            if hasattr(wafer_data, 'lcs2') and wafer_data.lcs2:
+                lcs_obj = doc.addObject("PartDesign::CoordinateSystem", f"LCS_{self.name}_{i+1}_2")
+                lcs_obj.Placement = wafer_data.lcs2
+                lcs_group.addObject(lcs_obj)
 
         # logger.debug(f"Added {wafer_count} wafers")
 
         # NOW add the groups to the Part (only once, at the end)
         segment_part.addObject(wafer_group)
         segment_part.addObject(reference_group)
-        if lcs_group is not None:
-            segment_part.addObject(lcs_group)
+        segment_part.addObject(lcs_group)
 
         doc.recompute()
         logger.info(f"Visualization complete for '{self.name}'")
