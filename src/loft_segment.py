@@ -6,7 +6,10 @@ A segment is a collection of wafers that can be positioned, transformed,
 and concatenated with other segments.
 """
 
+import math
+
 import FreeCAD as App
+import Part
 
 from curve_follower_loft import CurveFollowerLoft
 from curve_io import get_wire_from_label, sample_points_on_wire, transform_world_to_local
@@ -385,6 +388,13 @@ class LoftSegment:
         lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
         lcs_group.ViewObject.Visibility = show_lcs
 
+        # Marks group: vertices at the 0° and 180° cylinder-angle positions on each face.
+        # These show exactly where the scribe mark (major-axis tip) lands on each wafer face.
+        marks_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Marks")
+        marks_group.ViewObject.Visibility = False  # hidden by default; toggle in model tree
+
+        cylinder_radius = self.segment_settings.get('cylinder_diameter', 2.0) / 2.0
+
         # Add wafers to wafer_group ONLY
         wafer_count = 0
         for i, wafer_data in enumerate(self.wafer_list):
@@ -414,12 +424,39 @@ class LoftSegment:
                 lcs_obj.Placement = wafer_data.lcs2
                 lcs_group.addObject(lcs_obj)
 
+            # Mark vertices: 0° and 180° cylinder-angle positions on entry and exit faces.
+            # The mark (major-axis tip) is at distance R/cos(θ) from the ellipse centre along
+            # the LCS X-axis (= M direction).  The opposite (180°) tip is in -X.
+            if (hasattr(wafer_data, 'lcs1') and wafer_data.lcs1 and
+                    hasattr(wafer_data, 'lcs2') and wafer_data.lcs2):
+                geom = wafer_data.geometry
+                theta_e = math.radians(geom.get('theta_entry_deg', 0.0))
+                theta_x = math.radians(geom.get('theta_exit_deg',  0.0))
+                cos_e = math.cos(theta_e)
+                cos_x = math.cos(theta_x)
+                sm_e = cylinder_radius / cos_e if abs(cos_e) > 1e-9 else cylinder_radius
+                sm_x = cylinder_radius / cos_x if abs(cos_x) > 1e-9 else cylinder_radius
+
+                mark_verts = []
+                for sign in (1.0, -1.0):
+                    p_e = wafer_data.lcs1.multVec(App.Vector(sign * sm_e, 0.0, 0.0))
+                    p_x = wafer_data.lcs2.multVec(App.Vector(sign * sm_x, 0.0, 0.0))
+                    mark_verts.append(Part.Vertex(p_e.x, p_e.y, p_e.z))
+                    mark_verts.append(Part.Vertex(p_x.x, p_x.y, p_x.z))
+
+                mark_obj = doc.addObject("Part::Feature", f"Marks_{self.name}_{i+1}")
+                mark_obj.Shape = Part.makeCompound(mark_verts)
+                mark_obj.ViewObject.PointColor = (1.0, 0.2, 0.2)  # red
+                mark_obj.ViewObject.PointSize = 5.0
+                marks_group.addObject(mark_obj)
+
         # logger.debug(f"Added {wafer_count} wafers")
 
         # NOW add the groups to the Part (only once, at the end)
         segment_part.addObject(wafer_group)
         segment_part.addObject(reference_group)
         segment_part.addObject(lcs_group)
+        segment_part.addObject(marks_group)
 
         doc.recompute()
         logger.info(f"Visualization complete for '{self.name}'")
