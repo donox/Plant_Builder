@@ -424,31 +424,51 @@ class LoftSegment:
                 lcs_obj.Placement = wafer_data.lcs2
                 lcs_group.addObject(lcs_obj)
 
-            # Mark vertices: 0° and 180° cylinder-angle positions on entry and exit faces.
-            # The mark (major-axis tip) is at distance R/cos(θ) from the ellipse centre along
-            # the LCS X-axis (= M direction).  The opposite (180°) tip is in -X.
-            if (hasattr(wafer_data, 'lcs1') and wafer_data.lcs1 and
-                    hasattr(wafer_data, 'lcs2') and wafer_data.lcs2):
-                geom = wafer_data.geometry
-                theta_e = math.radians(geom.get('theta_entry_deg', 0.0))
-                theta_x = math.radians(geom.get('theta_exit_deg',  0.0))
-                cos_e = math.cos(theta_e)
-                cos_x = math.cos(theta_x)
-                sm_e = cylinder_radius / cos_e if abs(cos_e) > 1e-9 else cylinder_radius
-                sm_x = cylinder_radius / cos_x if abs(cos_x) > 1e-9 else cylinder_radius
+            # Mark vertices: where the 0° and 180° scribe marks on the raw cylinder
+            # intersect each cut face.  The 0° direction is world +Z projected onto
+            # the cross-section plane (⊥ chord) — the jig's 12-o'clock reference,
+            # matching the Cylinder° convention in driver.py.
+            geom = wafer_data.geometry
+            chord_raw = geom.get('chord_vector')
+            if chord_raw is not None:
+                chord_v = App.Vector(chord_raw.x, chord_raw.y, chord_raw.z)
+                chord_v.normalize()
+
+                # up_proj = world +Z projected onto cross-section plane (same as driver.py)
+                z_up = App.Vector(0.0, 0.0, 1.0)
+                up_proj = z_up - chord_v * z_up.dot(chord_v)
+                if up_proj.Length < 1e-6:   # chord near-vertical — fall back to +X
+                    x_r = App.Vector(1.0, 0.0, 0.0)
+                    up_proj = x_r - chord_v * x_r.dot(chord_v)
+                up_proj.normalize()
+
+                P0_e = wafer_data.plane1['point']
+                N_e  = wafer_data.plane1['normal']
+                P0_x = wafer_data.plane2['point']
+                N_x  = wafer_data.plane2['normal']
+
+                def _face_mark(face_pt, face_n, mark_dir):
+                    """Intersect mark line M(t)=P0_e + t·chord + R·mark_dir with plane."""
+                    denom = face_n.dot(chord_v)
+                    if abs(denom) < 1e-9:
+                        return None
+                    t = face_n.dot(face_pt - P0_e - mark_dir * cylinder_radius) / denom
+                    return P0_e + chord_v * t + mark_dir * cylinder_radius
 
                 mark_verts = []
                 for sign in (1.0, -1.0):
-                    p_e = wafer_data.lcs1.multVec(App.Vector(sign * sm_e, 0.0, 0.0))
-                    p_x = wafer_data.lcs2.multVec(App.Vector(sign * sm_x, 0.0, 0.0))
-                    mark_verts.append(Part.Vertex(p_e.x, p_e.y, p_e.z))
-                    mark_verts.append(Part.Vertex(p_x.x, p_x.y, p_x.z))
+                    mark_dir = up_proj * sign
+                    for face_pt, face_n in ((P0_e, N_e), (P0_x, N_x)):
+                        pos = _face_mark(face_pt, face_n, mark_dir)
+                        if pos is not None:
+                            mark_verts.append(Part.Vertex(pos.x, pos.y, pos.z))
 
-                mark_obj = doc.addObject("Part::Feature", f"Marks_{self.name}_{i+1}")
-                mark_obj.Shape = Part.makeCompound(mark_verts)
-                mark_obj.ViewObject.PointColor = (1.0, 0.2, 0.2)  # red
-                mark_obj.ViewObject.PointSize = 5.0
-                marks_group.addObject(mark_obj)
+                if mark_verts:
+                    mark_obj = doc.addObject("Part::Feature", f"Marks_{self.name}_{i+1}")
+                    mark_obj.Shape = Part.makeCompound(mark_verts)
+                    mark_obj.ViewObject.PointColor = (1.0, 0.2, 0.2)  # red
+                    mark_obj.ViewObject.PointSize = 5.0
+                    marks_group.addObject(mark_obj)
 
         # logger.debug(f"Added {wafer_count} wafers")
 
