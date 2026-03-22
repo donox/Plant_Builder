@@ -393,7 +393,7 @@ class LoftSegment:
         marks_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_Marks")
         marks_group.ViewObject.Visibility = False  # hidden by default; toggle in model tree
 
-        cylinder_radius = self.segment_settings.get('cylinder_diameter', 2.0) / 2.0
+        cylinder_radius = self.wafer_settings.cylinder_radius
 
         # Add wafers to wafer_group ONLY
         wafer_count = 0

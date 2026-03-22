@@ -2,16 +2,16 @@ include:
 - base/defaults.yml
 params:
   out_dir: /home/don/Documents/Temp/FreeCAD/
-  cuts_file: trefoil_cutting_list.txt
+  cuts_file: trefoil_small_cutting_list.txt
   trace_file: build_trace.log
-  project_name: Demonstrate Trefoil
+  project_name: Minimal Trefoil
   version: '1.0'
-  created: '2025-12-13'
+  created: '2026-03-14'
   description: Trefoil example
-  cylinder_diameter: 2.25
+  cylinder_diameter: 1.25
   profile_density: 0.5
   min_height: 1.0
-  max_chord: 2.5
+  max_chord: 1.5
   min_inner_chord: 0.15
 metadata:
   project_name: ${project_name}
@@ -35,8 +35,8 @@ workflow:
   curve_spec:
     type: trefoil
     parameters:
-      major_radius: 4.0
-      tube_radius: 2.125
+      major_radius: 2.0
+      tube_radius: 1.125
       p: 2
       q: 3
       points: 300
@@ -53,7 +53,7 @@ workflow:
     max_wafer_count: 50
     max_wafers: 2
   segment_settings:
-    show_lcs: true
+    show_lcs: false
     build_segment: true
     rotate_segment: 0.0
     add_curve_vertices: false
