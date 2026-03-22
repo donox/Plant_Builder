@@ -894,6 +894,7 @@ class Driver:
                 self._write_lofted_segment_block(f, seg)
 
             self._write_assembly_section(f)
+            self._write_mark_distance_tables(f)
 
             if include_definitions:
                 self._write_cut_list_definitions(f)
@@ -1136,6 +1137,108 @@ class Driver:
                         f"{sigma_normal:<8.2f} {sigma_spin:<8.2f} {sigma_lateral:<9.2f}\n")
 
             f.write("\n")
+
+    @staticmethod
+    def _entry_mark_pos(wafer, radius, sign):
+        """Return the 3D App.Vector of the 0° (sign=+1) or 180° (sign=-1) entry-face
+        scribe mark for *wafer*.  Returns None if geometry is unavailable.
+
+        The mark line is M(t) = P0_e + t·chord_v + R·mark_dir, where mark_dir is
+        world +Z projected onto the cross-section plane ⊥ chord (matching the
+        Cylinder° convention).  We intersect M(t) with the entry cutting plane to
+        find the exact surface position on the entry ellipse.
+        """
+        geom = getattr(wafer, 'geometry', None) or {}
+        chord_raw = geom.get('chord_vector')
+        p1 = getattr(wafer, 'plane1', None)
+        if chord_raw is None or p1 is None:
+            return None
+
+        chord_v = App.Vector(chord_raw.x, chord_raw.y, chord_raw.z)
+        chord_v.normalize()
+
+        z_up = App.Vector(0.0, 0.0, 1.0)
+        up_proj = z_up - chord_v * z_up.dot(chord_v)
+        if up_proj.Length < 1e-6:
+            x_r = App.Vector(1.0, 0.0, 0.0)
+            up_proj = x_r - chord_v * x_r.dot(chord_v)
+        up_proj.normalize()
+
+        mark_dir = up_proj * sign
+        P0_e = p1['point']   # App.Vector — centre of entry ellipse on cylinder axis
+        N_e  = p1['normal']  # App.Vector — entry plane normal
+
+        denom = N_e.dot(chord_v)
+        if abs(denom) < 1e-9:
+            return None
+        # Intersect mark line with entry plane (face_pt == P0_e so terms cancel)
+        t = -radius * N_e.dot(mark_dir) / denom
+        return P0_e + chord_v * t + mark_dir * radius
+
+    def _write_mark_distance_tables(self, f):
+        """Write 0° and 180° assembly mark check distance tables.
+
+        Each table shows the straight-line distance (mm) from each wafer's
+        entry scribe mark to the corresponding mark on the next 4 wafers.
+        'Corresponding' means alternating 0°/180° along the assembly line,
+        matching the physical cylinder reference marks.
+        """
+        f.write("\f")
+        f.write("=" * 70 + "\n")
+        f.write("ASSEMBLY MARK CHECK DISTANCES\n")
+        f.write("=" * 70 + "\n\n")
+        f.write("  Measure the straight-line distance between entry scribe marks on\n")
+        f.write("  assembled wafers and compare with these values (mm) to verify\n")
+        f.write("  assembly accuracy before the glue sets.\n\n")
+        f.write("  0° line:   marks at 0°, 180°, 0°, 180°, ... (world +Z = jig top)\n")
+        f.write("  180° line: marks at 180°, 0°, 180°, 0°, ...\n")
+        f.write("  d+N = distance from this wafer's mark to the mark N wafers ahead.\n\n")
+
+        col_w = 9
+        hdr_cols = ["d+1", "d+2", "d+3", "d+4"]
+        hdr = f"{'Wafer':<6}" + "".join(f"  {c:>{col_w}}" for c in hdr_cols)
+        sep = "-" * len(hdr)
+
+        for seg in self.segment_list:
+            ws = getattr(seg, 'wafer_settings', None)
+            radius = (ws.cylinder_diameter / 2.0) if ws else 1.0
+            seg_name = getattr(seg, 'segment_name', 'Segment')
+
+            valid_wafers = [w for w in seg.wafer_list
+                            if getattr(w, 'wafer', None) is not None]
+            n = len(valid_wafers)
+            if n < 2:
+                continue
+
+            # Precompute (pos_0deg, pos_180deg) for each valid wafer's entry face
+            marks = [
+                (self._entry_mark_pos(w, radius, +1.0),
+                 self._entry_mark_pos(w, radius, -1.0))
+                for w in valid_wafers
+            ]
+
+            f.write(f"\n--- {seg_name} ---\n\n")
+
+            for start_sign, label in ((+1.0, "0° Line"), (-1.0, "180° Line")):
+                f.write(f"{label}\n{hdr}\n{sep}\n")
+                for i in range(n):
+                    sign_i = start_sign if i % 2 == 0 else -start_sign
+                    pi = marks[i][0 if sign_i > 0 else 1]
+                    row = f"{i + 1:<6}"
+                    for delta in range(1, 5):
+                        j = i + delta
+                        if j >= n:
+                            row += f"  {'---':>{col_w}}"
+                        else:
+                            sign_j = start_sign if j % 2 == 0 else -start_sign
+                            pj = marks[j][0 if sign_j > 0 else 1]
+                            if pi is None or pj is None:
+                                row += f"  {'?':>{col_w}}"
+                            else:
+                                dist_mm = (pj - pi).Length * 25.4
+                                row += f"  {dist_mm:>{col_w}.2f}"
+                    f.write(row + "\n")
+                f.write("\n")
 
     def _write_segment_parameters(self, f, segment):
         """Write curve and wafer parameter settings for a segment."""

@@ -386,7 +386,7 @@ class LoftSegment:
         # show_lcs controls visibility only — not existence.
         show_lcs = self.segment_settings.get('show_lcs', False)
         lcs_group = doc.addObject("App::DocumentObjectGroup", f"{self.name}_LCS")
-        lcs_group.ViewObject.Visibility = show_lcs
+        lcs_group.ViewObject.Visibility = False
 
         # Marks group: vertices at the 0° and 180° cylinder-angle positions on each face.
         # These show exactly where the scribe mark (major-axis tip) lands on each wafer face.
