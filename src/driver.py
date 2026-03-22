@@ -1139,14 +1139,15 @@ class Driver:
             f.write("\n")
 
     @staticmethod
-    def _entry_mark_pos(wafer, radius, sign):
+    def _entry_mark_pos(wafer, radius, sign, prev_chord_v=None):
         """Return the 3D App.Vector of the 0° (sign=+1) or 180° (sign=-1) entry-face
         scribe mark for *wafer*.  Returns None if geometry is unavailable.
 
-        The mark line is M(t) = P0_e + t·chord_v + R·mark_dir, where mark_dir is
-        world +Z projected onto the cross-section plane ⊥ chord (matching the
-        Cylinder° convention).  We intersect M(t) with the entry cutting plane to
-        find the exact surface position on the entry ellipse.
+        The entry face of wafer j was created by cut j-1, which was made while the
+        cylinder was advancing along chord_v[j-1].  Passing prev_chord_v=chord_v[j-1]
+        ensures the mark uses the same reference as the exit mark on the prior wafer,
+        so both marks coincide at the shared cutting plane.  When prev_chord_v is None
+        (first wafer), the wafer's own chord is used as a fallback.
         """
         geom = getattr(wafer, 'geometry', None) or {}
         chord_raw = geom.get('chord_vector')
@@ -1157,23 +1158,25 @@ class Driver:
         chord_v = App.Vector(chord_raw.x, chord_raw.y, chord_raw.z)
         chord_v.normalize()
 
+        # Use previous wafer's chord for the reference direction (same cut, same cylinder axis)
+        chord_ref = prev_chord_v if prev_chord_v is not None else chord_v
+
         z_up = App.Vector(0.0, 0.0, 1.0)
-        up_proj = z_up - chord_v * z_up.dot(chord_v)
+        up_proj = z_up - chord_ref * z_up.dot(chord_ref)
         if up_proj.Length < 1e-6:
             x_r = App.Vector(1.0, 0.0, 0.0)
-            up_proj = x_r - chord_v * x_r.dot(chord_v)
+            up_proj = x_r - chord_ref * x_r.dot(chord_ref)
         up_proj.normalize()
 
         mark_dir = up_proj * sign
         P0_e = p1['point']   # App.Vector — centre of entry ellipse on cylinder axis
         N_e  = p1['normal']  # App.Vector — entry plane normal
 
-        denom = N_e.dot(chord_v)
+        denom = N_e.dot(chord_ref)
         if abs(denom) < 1e-9:
             return None
-        # Intersect mark line with entry plane (face_pt == P0_e so terms cancel)
         t = -radius * N_e.dot(mark_dir) / denom
-        return P0_e + chord_v * t + mark_dir * radius
+        return P0_e + chord_ref * t + mark_dir * radius
 
     def _write_mark_distance_tables(self, f):
         """Write 0° and 180° assembly mark check distance tables.
@@ -1210,12 +1213,22 @@ class Driver:
             if n < 2:
                 continue
 
-            # Precompute (pos_0deg, pos_180deg) for each valid wafer's entry face
-            marks = [
-                (self._entry_mark_pos(w, radius, +1.0),
-                 self._entry_mark_pos(w, radius, -1.0))
-                for w in valid_wafers
-            ]
+            # Precompute (pos_0deg, pos_180deg) for each valid wafer's entry face.
+            # Entry mark of wafer j uses the previous wafer's chord (same cut, same
+            # cylinder axis) so it coincides with wafer j-1's exit mark.
+            marks = []
+            prev_cv = None
+            for w in valid_wafers:
+                marks.append((
+                    self._entry_mark_pos(w, radius, +1.0, prev_cv),
+                    self._entry_mark_pos(w, radius, -1.0, prev_cv),
+                ))
+                geom_w = getattr(w, 'geometry', None) or {}
+                cr = geom_w.get('chord_vector')
+                if cr is not None:
+                    cv = App.Vector(cr.x, cr.y, cr.z)
+                    cv.normalize()
+                    prev_cv = cv
 
             f.write(f"\n--- {seg_name} ---\n\n")
 

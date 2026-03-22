@@ -395,8 +395,27 @@ class LoftSegment:
 
         cylinder_radius = self.wafer_settings.cylinder_radius
 
+        def _up_proj_for(cv):
+            """World +Z projected onto the cross-section plane ⊥ cv (falls back to +X)."""
+            z_up = App.Vector(0.0, 0.0, 1.0)
+            up = z_up - cv * z_up.dot(cv)
+            if up.Length < 1e-6:
+                x_r = App.Vector(1.0, 0.0, 0.0)
+                up = x_r - cv * x_r.dot(cv)
+            up.normalize()
+            return up
+
+        def _mark_pt(ref_start, face_pt, face_n, ref_chord, mark_dir, R):
+            """Intersect M(t)=ref_start + t·ref_chord + R·mark_dir with plane."""
+            denom = face_n.dot(ref_chord)
+            if abs(denom) < 1e-9:
+                return None
+            t = face_n.dot(face_pt - ref_start - mark_dir * R) / denom
+            return ref_start + ref_chord * t + mark_dir * R
+
         # Add wafers to wafer_group ONLY
         wafer_count = 0
+        prev_chord_v = None   # tracks previous valid wafer's chord (for entry-face marks)
         for i, wafer_data in enumerate(self.wafer_list):
             if wafer_data.wafer is None:
                 continue
@@ -428,40 +447,38 @@ class LoftSegment:
             # intersect each cut face.  The 0° direction is world +Z projected onto
             # the cross-section plane (⊥ chord) — the jig's 12-o'clock reference,
             # matching the Cylinder° convention in driver.py.
+            #
+            # Key convention: each CUT j was physically made while the cylinder was
+            # advancing along chord_v[j] (wafer j's chord).  That cut face (= wafer j's
+            # EXIT and wafer j+1's ENTRY) must use chord_v[j] for both marks so they
+            # coincide — matching the single physical scribe line crossing that cut face.
             geom = wafer_data.geometry
             chord_raw = geom.get('chord_vector')
             if chord_raw is not None:
                 chord_v = App.Vector(chord_raw.x, chord_raw.y, chord_raw.z)
                 chord_v.normalize()
 
-                # up_proj = world +Z projected onto cross-section plane (same as driver.py)
-                z_up = App.Vector(0.0, 0.0, 1.0)
-                up_proj = z_up - chord_v * z_up.dot(chord_v)
-                if up_proj.Length < 1e-6:   # chord near-vertical — fall back to +X
-                    x_r = App.Vector(1.0, 0.0, 0.0)
-                    up_proj = x_r - chord_v * x_r.dot(chord_v)
-                up_proj.normalize()
+                # Entry face: use PREVIOUS wafer's chord (that cut was made with chord_{j-1})
+                # Exit face: use THIS wafer's chord (this cut is made with chord_j)
+                chord_entry = prev_chord_v if prev_chord_v is not None else chord_v
+                up_entry = _up_proj_for(chord_entry)
+                up_exit  = _up_proj_for(chord_v)
 
                 P0_e = wafer_data.plane1['point']
                 N_e  = wafer_data.plane1['normal']
                 P0_x = wafer_data.plane2['point']
                 N_x  = wafer_data.plane2['normal']
 
-                def _face_mark(face_pt, face_n, mark_dir):
-                    """Intersect mark line M(t)=P0_e + t·chord + R·mark_dir with plane."""
-                    denom = face_n.dot(chord_v)
-                    if abs(denom) < 1e-9:
-                        return None
-                    t = face_n.dot(face_pt - P0_e - mark_dir * cylinder_radius) / denom
-                    return P0_e + chord_v * t + mark_dir * cylinder_radius
-
                 mark_verts = []
                 for sign in (1.0, -1.0):
-                    mark_dir = up_proj * sign
-                    for face_pt, face_n in ((P0_e, N_e), (P0_x, N_x)):
-                        pos = _face_mark(face_pt, face_n, mark_dir)
-                        if pos is not None:
-                            mark_verts.append(Part.Vertex(pos.x, pos.y, pos.z))
+                    # Entry face mark: mark line along chord_entry from P0_e
+                    pos_e = _mark_pt(P0_e, P0_e, N_e, chord_entry, up_entry * sign, cylinder_radius)
+                    if pos_e is not None:
+                        mark_verts.append(Part.Vertex(pos_e.x, pos_e.y, pos_e.z))
+                    # Exit face mark: mark line along chord_v from P0_e
+                    pos_x = _mark_pt(P0_e, P0_x, N_x, chord_v, up_exit * sign, cylinder_radius)
+                    if pos_x is not None:
+                        mark_verts.append(Part.Vertex(pos_x.x, pos_x.y, pos_x.z))
 
                 if mark_verts:
                     mark_obj = doc.addObject("Part::Feature", f"Marks_{self.name}_{i+1}")
@@ -469,6 +486,8 @@ class LoftSegment:
                     mark_obj.ViewObject.PointColor = (1.0, 0.2, 0.2)  # red
                     mark_obj.ViewObject.PointSize = 5.0
                     marks_group.addObject(mark_obj)
+
+                prev_chord_v = chord_v   # save for next wafer's entry-face mark
 
         # logger.debug(f"Added {wafer_count} wafers")
 

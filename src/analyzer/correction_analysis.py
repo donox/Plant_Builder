@@ -413,6 +413,54 @@ def _write_corrected_assembly_section(
         out_lines.append('\n')
 
 
+def _parse_original_tables(lines):
+    """Parse 0° Line and 180° Line distance tables from a cut-list file.
+
+    Returns a dict  {'0deg': {label: [d1,d2,d3,d4], ...},
+                     '180deg': {label: [d1,d2,d3,d4], ...}}
+    or None if no ASSEMBLY MARK CHECK DISTANCES section is found.
+    Values are floats in mm; entries that read '---' are stored as None.
+    """
+    in_section  = False
+    line_key    = None   # '0deg' or '180deg'
+    result      = {'0deg': {}, '180deg': {}}
+    deg_0_pat   = re.compile(r'0[°\u00b0]?\s*[Ll]ine')
+    deg_180_pat = re.compile(r'180[°\u00b0]?\s*[Ll]ine')
+
+    for raw in lines:
+        stripped = raw.strip()
+        if 'ASSEMBLY MARK CHECK DISTANCES' in stripped:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if deg_180_pat.search(stripped):
+            line_key = '180deg'
+            continue
+        if deg_0_pat.search(stripped):
+            line_key = '0deg'
+            continue
+        if line_key is None:
+            continue
+        if not stripped or stripped.startswith('Wafer') or stripped.startswith('-'):
+            continue
+        # Data row: first token = wafer label, rest = distance values
+        tokens = stripped.split()
+        if len(tokens) < 2:
+            continue
+        wafer_label = tokens[0]
+        values = []
+        for tok in tokens[1:5]:   # at most d+1..d+4
+            try:
+                values.append(float(tok))
+            except ValueError:
+                values.append(None)
+        if values:
+            result[line_key][wafer_label] = values
+
+    return result if (result['0deg'] or result['180deg']) else None
+
+
 def write_corrected_cut_list(source_path: str,
                              split_wafer_0indices: List[int],
                              regime_n: int,
@@ -441,6 +489,8 @@ def write_corrected_cut_list(source_path: str,
 
     with open(source_path, 'r') as fh:
         original_lines = fh.readlines()
+
+    original_tables = _parse_original_tables(original_lines)
 
     # Locate the data table: header line contains Cut/Length/Blade, data ends
     # at "Total cylinder length" or a blank section separator.
@@ -681,7 +731,209 @@ def write_corrected_cut_list(source_path: str,
         out_lines, new_segments_rows, sigma_blade_deg, sigma_rot_deg, cylinder_radius_in
     )
 
+    _write_corrected_mark_distance_tables(
+        out_lines, new_segments_rows, cylinder_radius_in, original_tables
+    )
+
     with open(output_path, 'w') as fh:
         fh.writelines(out_lines)
 
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# Pure-math mark-position reconstruction (no FreeCAD dependency)
+# ---------------------------------------------------------------------------
+
+def _compute_mark_positions(rows, radius_in):
+    """Reconstruct the 3D entry-face mark positions from cut-list row data.
+
+    Uses the same local-frame geometry as cut_list_reconstruction.py:
+      - Cylinder axis = local Z; entry mark direction = local +X initially.
+      - Each wafer's rotation matrix is built from its entry face alignment
+        vectors, then propagated to compute the exit mark for the next wafer.
+
+    Returns a list of (pos_0deg, pos_180deg) tuples, each a 3-tuple (x,y,z)
+    in inches.  pos_180deg = 2*joint - pos_0deg (diametrically opposite on
+    the cylinder cross-section).
+
+    The alternating-sign assignment (even wafer → pos_0deg, odd → pos_180deg)
+    is consistent within the list, matching the convention in
+    _write_corrected_mark_distance_tables.
+    """
+    def _cross3(a, b):
+        return (a[1]*b[2] - a[2]*b[1],
+                a[2]*b[0] - a[0]*b[2],
+                a[0]*b[1] - a[1]*b[0])
+
+    def _norm3(v):
+        n = math.sqrt(sum(x*x for x in v))
+        return tuple(x / n for x in v) if n > 1e-12 else tuple(v)
+
+    def _mat_vec(vkw_list, vkl_list, v):
+        """Apply R = Σ_k outer(v{k}_w, v{k}_l) to vector v."""
+        result = [0.0, 0.0, 0.0]
+        for vw, vl in zip(vkw_list, vkl_list):
+            dot = sum(vl[i] * v[i] for i in range(3))
+            for i in range(3):
+                result[i] += vw[i] * dot
+        return tuple(result)
+
+    # Initial state: flat-circle entry, M = +X  (same as cut_list_reconstruction.py)
+    joint = [0.0, 0.0, 0.0]
+    F_out = [0.0, 0.0, 1.0]        # outward normal of the "previous" exit face
+    mk    = [radius_in, 0.0, 0.0]  # 0° mark position at entry of the first wafer
+
+    results = []
+    for row in rows:
+        blade = row.get('blade_deg', 0.0)
+        th_e  = math.radians(float(row.get('theta_entry_deg', blade)))
+        th_x  = math.radians(float(row.get('theta_exit_deg',  blade)))
+        rot   = math.radians(float(row.get('rot_deg', 0.0)))
+        L     = float(row.get('length', 0.0))
+
+        # Record entry-face marks before advancing
+        pos0   = tuple(mk)
+        pos180 = tuple(2.0 * joint[i] - mk[i] for i in range(3))
+        results.append((pos0, pos180))
+
+        # Local frame vectors (spec convention: outward normals)
+        n_el  = (-math.sin(th_e),  0.0, -math.cos(th_e))   # entry outward normal
+        md_el = ( math.cos(th_e),  0.0, -math.sin(th_e))   # entry mark direction
+        n_xl  = (-math.sin(th_x) * math.cos(rot),
+                 -math.sin(th_x) * math.sin(rot),
+                  math.cos(th_x))                            # exit outward normal
+
+        # World-frame alignment
+        v1_l = n_el
+        v2_l = md_el
+        v1_w = tuple(-F_out[i] for i in range(3))           # inward world normal
+        v2_w = _norm3(tuple(mk[i] - joint[i] for i in range(3)))
+        v3_l = _cross3(v1_l, v2_l)
+        v3_w = _cross3(v1_w, v2_w)
+        vkw  = [v1_w, v2_w, v3_w]
+        vkl  = [v1_l, v2_l, v3_l]
+
+        # Propagate to exit face
+        chord_w    = _mat_vec(vkw, vkl, (0.0, 0.0, L))
+        next_joint = tuple(joint[i] + chord_w[i] for i in range(3))
+
+        # Exit mark in local = (R·cos(rot), R·sin(rot), R·tan(th_x))
+        cos_x = math.cos(th_x)
+        tan_x = (math.sin(th_x) / cos_x) if abs(cos_x) > 1e-9 else 0.0
+        mk_exit_l = (radius_in * math.cos(rot),
+                     radius_in * math.sin(rot),
+                     radius_in * tan_x)
+        mk_exit_w  = _mat_vec(vkw, vkl, mk_exit_l)
+        next_mk    = tuple(next_joint[i] + mk_exit_w[i] for i in range(3))
+        next_F_out = _mat_vec(vkw, vkl, n_xl)
+
+        joint = list(next_joint)
+        F_out = list(next_F_out)
+        mk    = list(next_mk)
+
+    return results
+
+
+def _write_corrected_mark_distance_tables(out_lines, new_segments_rows, radius_in,
+                                          original_tables=None):
+    """Append 0° and 180° assembly mark check distance tables to out_lines.
+
+    When *original_tables* (from _parse_original_tables) is provided, exact
+    values from the original driver.py-generated file are used for distances
+    between unchanged wafers.  Only distances involving correction-B faces are
+    recomputed via _compute_mark_positions (approximate).
+
+    Uses original-wafer-index parity for sign assignment so the convention
+    matches the original file: sign for row with _orig_cut=oc is determined
+    by (oc − 1) % 2 (B splits use oc % 2 = opposite of A).
+    """
+    col_w    = 9
+    hdr_cols = ["d+1", "d+2", "d+3", "d+4"]
+    hdr = f"{'Wafer':<6}" + "".join(f"  {c:>{col_w}}" for c in hdr_cols)
+    sep = "-" * len(hdr)
+
+    out_lines.append("\f")
+    out_lines.append("=" * 70 + "\n")
+    out_lines.append("ASSEMBLY MARK CHECK DISTANCES\n")
+    out_lines.append("=" * 70 + "\n\n")
+    out_lines.append("  Measure the straight-line distance between entry scribe marks on\n")
+    out_lines.append("  assembled wafers and compare with these values (mm) to verify\n")
+    out_lines.append("  assembly accuracy before the glue sets.\n\n")
+    out_lines.append("  0° line:   marks at 0°, 180°, 0°, 180°, ... (world +Z = jig top)\n")
+    out_lines.append("  180° line: marks at 180°, 0°, 180°, 0°, ...\n")
+    out_lines.append("  d+N = distance from this wafer's mark to the mark N wafers ahead.\n\n")
+
+    for seg_rows in new_segments_rows:
+        n = len(seg_rows)
+        if n < 2:
+            continue
+
+        # Fallback positions for B-split rows (sequential-parity, approx)
+        positions = _compute_mark_positions(seg_rows, radius_in)
+
+        # Display labels: "9A", "9B", "10", …
+        labels = [
+            f"{row.get('_orig_cut', row.get('cut', i+1))}{row.get('_split_half', '')}"
+            for i, row in enumerate(seg_rows)
+        ]
+
+        def _is_b(row):
+            return row.get('_split_half', '') == 'B'
+
+        def _orig_parity(row, seq_i):
+            """Return 0 (even) or 1 (odd) for sign assignment based on original index."""
+            oc = row.get('_orig_cut', row.get('cut', seq_i + 1))
+            if _is_b(row):
+                return oc % 2          # B gets opposite parity to A
+            return (oc - 1) % 2
+
+        out_lines.append("\n")
+        for start_sign, line_key, line_label in (
+            (+1.0, '0deg',   '0° Line'),
+            (-1.0, '180deg', '180° Line'),
+        ):
+            out_lines.append(f"{line_label}\n{hdr}\n{sep}\n")
+            for i in range(n):
+                row_i   = seg_rows[i]
+                oc_i    = row_i.get('_orig_cut', row_i.get('cut', i + 1))
+                parity_i = _orig_parity(row_i, i)
+                sign_i  = start_sign if parity_i == 0 else -start_sign
+
+                row_str = f"{labels[i]:<6}"
+                for delta in range(1, 5):
+                    j = i + delta
+                    if j >= n:
+                        row_str += f"  {'---':>{col_w}}"
+                        continue
+
+                    row_j  = seg_rows[j]
+                    oc_j   = row_j.get('_orig_cut', row_j.get('cut', j + 1))
+                    d_key  = oc_j - oc_i   # delta in original numbering
+
+                    # Attempt to carry forward the exact original value.
+                    orig_val = None
+                    if (original_tables is not None
+                            and not _is_b(row_i)
+                            and not _is_b(row_j)
+                            and 1 <= d_key <= 4):
+                        tbl = original_tables.get(line_key, {}).get(str(oc_i))
+                        if tbl is not None and d_key - 1 < len(tbl):
+                            orig_val = tbl[d_key - 1]   # may be None for '---'
+
+                    if orig_val is not None:
+                        row_str += f"  {orig_val:>{col_w}.2f}"
+                    else:
+                        # Fall back: approximate from pure-math positions.
+                        # Use sequential parity (consistent within the approx section).
+                        sign_i_fb = start_sign if i % 2 == 0 else -start_sign
+                        sign_j_fb = start_sign if j % 2 == 0 else -start_sign
+                        pi = positions[i][0 if sign_i_fb > 0 else 1]
+                        pj = positions[j][0 if sign_j_fb > 0 else 1]
+                        dist_mm = math.sqrt(
+                            sum((pj[k] - pi[k]) ** 2 for k in range(3))
+                        ) * 25.4
+                        row_str += f"  {dist_mm:>{col_w}.2f}"
+
+                out_lines.append(row_str + "\n")
+            out_lines.append("\n")
